@@ -1,0 +1,65 @@
+[project]
+name = "dmrv-platform-backend"
+version = "1.0.0"
+description = "Enterprise dMRV analytical platform - backend"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi==0.115.6",
+    "uvicorn[standard]==0.34.0",
+    "pydantic==2.10.4",
+    "pydantic-settings==2.7.0",
+    "psycopg[binary,pool]==3.2.3",
+    "bcrypt==4.2.1",
+    "pyjwt==2.10.1",
+    "python-multipart==0.0.20",
+    "numpy==2.2.1",
+    "scipy==1.14.1",
+    "rasterio==1.4.3",
+    "pillow==11.1.0",
+    "alembic==1.14.0",
+    "sqlalchemy==2.0.36",
+    "structlog==24.4.0",
+    "slowapi==0.1.9",
+    "arq==0.28.0",
+    "prometheus-client==0.25.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.4",
+    "pytest-cov==6.0.0",
+    "httpx==0.28.1",
+    "ruff==0.8.4",
+    "mypy==1.14.0",
+    "pip-audit==2.7.3",
+]
+s3 = ["boto3==1.35.90"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-ra -q"
+markers = [
+    "integration: tests that require a live PostGIS database (run in CI)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "C4", "SIM", "ASYNC", "S"]
+ignore = ["S101"]  # asserts are fine in tests / internal invariants
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "B", "E501", "C408"]
+"migrations/**" = ["S608", "E501"]
+# FastAPI's dependency-injection idiom REQUIRES call defaults like File(...)/Form(...).
+"app/api/v1/datasets.py" = ["B008"]
+"app/api/v1/auth.py" = ["B008"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_unused_ignores = false
+ignore_missing_imports = true
+disallow_untyped_defs = false

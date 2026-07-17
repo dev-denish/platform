@@ -1,0 +1,139 @@
+# Hardened local/staging stack.
+#
+# Existing implementation (MVP): compose hardcoded `POSTGRES_PASSWORD: dmrv_dev_pw`
+# and a default JWT secret in plaintext, ran the frontend dev server, and had no
+# migration step (it relied on CREATE TABLE IF NOT EXISTS at import).
+#
+# Enterprise solution: ALL secrets come from a git-ignored .env (see .env.example),
+# there are NO plaintext credential defaults in this file, the DB has a healthcheck
+# and the backend waits for it, a one-shot `migrate` service applies Alembic
+# migrations before the API serves traffic, and the frontend is the production
+# nginx image. This mirrors the eventual Kubernetes topology (initContainer migrate
+# + readiness-gated rollout).
+#
+# Phase 2 (async jobs): `redis` is the arq queue broker and `worker` runs arq off the
+# SAME backend image (separate deployment of the same image, not a new microservice) --
+# the first real service extraction per docs/ROADMAP.md. The API enqueues jobs at request
+# time; the worker consumes them. Postgres `jobs` rows remain the system of record.
+
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_USER: ${DMRV_DB_USER:?set DMRV_DB_USER in .env}
+      POSTGRES_PASSWORD: ${DMRV_DB_PASSWORD:?set DMRV_DB_PASSWORD in .env}
+      POSTGRES_DB: ${DMRV_DB_NAME:?set DMRV_DB_NAME in .env}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  migrate:
+    build:
+      context: ../backend
+    command: ["sh", "-c", "alembic upgrade head"]
+    environment:
+      DMRV_ENVIRONMENT: ${DMRV_ENVIRONMENT:-dev}
+      DMRV_DB_HOST: db
+      DMRV_DB_USER: ${DMRV_DB_USER}
+      DMRV_DB_PASSWORD: ${DMRV_DB_PASSWORD}
+      DMRV_DB_NAME: ${DMRV_DB_NAME}
+      DMRV_JWT_SECRET: ${DMRV_JWT_SECRET}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  backend:
+    build:
+      context: ../backend
+    environment:
+      DMRV_ENVIRONMENT: ${DMRV_ENVIRONMENT:-dev}
+      DMRV_DB_HOST: db
+      DMRV_DB_USER: ${DMRV_DB_USER}
+      DMRV_DB_PASSWORD: ${DMRV_DB_PASSWORD}
+      DMRV_DB_NAME: ${DMRV_DB_NAME}
+      DMRV_JWT_SECRET: ${DMRV_JWT_SECRET:?set DMRV_JWT_SECRET in .env (openssl rand -base64 48)}
+      DMRV_CORS_ALLOW_ORIGINS: ${DMRV_CORS_ALLOW_ORIGINS:-http://localhost:8080}
+      DMRV_STORAGE_BACKEND: ${DMRV_STORAGE_BACKEND:-local}
+      DMRV_LOCAL_DATA_DIR: /var/lib/dmrv/data
+      DMRV_REDIS_URL: redis://redis:6379/0
+      DMRV_TASK_RUNNER_BACKEND: ${DMRV_TASK_RUNNER_BACKEND:-arq}
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+    volumes:
+      - raster_data:/var/lib/dmrv/data
+      - upload_staging:/var/lib/dmrv/staging
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ../backend
+    command: ["sh", "-c", "arq app.workers.arq_worker.WorkerSettings"]
+    # The image's Dockerfile HEALTHCHECK probes /livez over HTTP - meaningful for
+    # the `backend` service, meaningless here (arq has no HTTP server), and would
+    # otherwise report this container as permanently "unhealthy". Nothing in this
+    # compose file gates on the worker's health today, but disable it so `docker ps`
+    # isn't misleading.
+    healthcheck:
+      disable: true
+    environment:
+      DMRV_ENVIRONMENT: ${DMRV_ENVIRONMENT:-dev}
+      DMRV_DB_HOST: db
+      DMRV_DB_USER: ${DMRV_DB_USER}
+      DMRV_DB_PASSWORD: ${DMRV_DB_PASSWORD}
+      DMRV_DB_NAME: ${DMRV_DB_NAME}
+      DMRV_JWT_SECRET: ${DMRV_JWT_SECRET:?set DMRV_JWT_SECRET in .env (openssl rand -base64 48)}
+      DMRV_STORAGE_BACKEND: ${DMRV_STORAGE_BACKEND:-local}
+      DMRV_LOCAL_DATA_DIR: /var/lib/dmrv/data
+      DMRV_REDIS_URL: redis://redis:6379/0
+      DMRV_TASK_RUNNER_BACKEND: ${DMRV_TASK_RUNNER_BACKEND:-arq}
+    volumes:
+      - raster_data:/var/lib/dmrv/data
+      - upload_staging:/var/lib/dmrv/staging
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ../frontend
+      args:
+        VITE_API_BASE: /api/v1
+    ports:
+      - "8080:8080"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  db_data:
+  raster_data:
+  redis_data:
+  upload_staging:
