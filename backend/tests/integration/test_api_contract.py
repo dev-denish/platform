@@ -4,7 +4,13 @@ handlers, pagination) with the service layer faked - so they exercise the HTTP
 contract end-to-end WITHOUT a database."""
 from __future__ import annotations
 
+from uuid import UUID
+
 from prometheus_client.parser import text_string_to_metric_families
+
+from app.api import deps
+from app.core.security import create_tile_token
+from tests.conftest import _LAYER_ID, FakeTileService
 
 AUTH = {"Authorization": "Bearer admin-token"}
 VIEWER = {"Authorization": "Bearer viewer-token"}
@@ -172,3 +178,109 @@ def test_job_not_found_or_not_owned_is_a_uniform_404(client):
     )
     assert r.status_code == 404
     assert r.json()["error"]["code"] == "not_found"
+
+
+def _tile_url(layer_id, z, x, y, token=None, ext="png"):
+    url = f"/api/v1/tiles/{layer_id}/{z}/{x}/{y}.{ext}"
+    return f"{url}?token={token}" if token else url
+
+
+def test_tile_authorized_request_returns_real_png(client, test_settings, real_cog):
+    client.app.dependency_overrides[deps.get_tile_service] = lambda: FakeTileService(
+        test_settings, real_cog.path
+    )
+    token = create_tile_token(test_settings, layer_id=str(_LAYER_ID))
+
+    r = client.get(_tile_url(_LAYER_ID, real_cog.z, real_cog.x, real_cog.y, token))
+
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/png"
+    assert r.content[:8] == b"\x89PNG\r\n\x1a\n"  # real render, not a stub
+    assert r.headers["cache-control"] == "public, max-age=86400, immutable"
+    assert "etag" in r.headers
+
+
+def test_tile_conditional_request_returns_304_without_rerendering(client, test_settings, real_cog):
+    client.app.dependency_overrides[deps.get_tile_service] = lambda: FakeTileService(
+        test_settings, real_cog.path
+    )
+    token = create_tile_token(test_settings, layer_id=str(_LAYER_ID))
+    url = _tile_url(_LAYER_ID, real_cog.z, real_cog.x, real_cog.y, token)
+
+    first = client.get(url)
+    etag = first.headers["etag"]
+    second = client.get(url, headers={"If-None-Match": etag})
+
+    assert second.status_code == 304
+    assert second.content == b""
+
+
+def test_tile_missing_token_is_422(client, test_settings, real_cog):
+    client.app.dependency_overrides[deps.get_tile_service] = lambda: FakeTileService(
+        test_settings, real_cog.path
+    )
+    r = client.get(_tile_url(_LAYER_ID, real_cog.z, real_cog.x, real_cog.y))
+    assert r.status_code == 422
+
+
+def test_tile_garbage_token_is_401(client, test_settings, real_cog):
+    client.app.dependency_overrides[deps.get_tile_service] = lambda: FakeTileService(
+        test_settings, real_cog.path
+    )
+    r = client.get(_tile_url(_LAYER_ID, real_cog.z, real_cog.x, real_cog.y, "not-a-real-token"))
+    assert r.status_code == 401
+    assert r.json()["error"]["code"] == "unauthorized"
+
+
+def test_tile_expired_token_is_401(client, test_settings, real_cog):
+    client.app.dependency_overrides[deps.get_tile_service] = lambda: FakeTileService(
+        test_settings, real_cog.path
+    )
+    expired_settings = test_settings.model_copy(update={"tile_token_ttl_seconds": -1})
+    token = create_tile_token(expired_settings, layer_id=str(_LAYER_ID))
+
+    r = client.get(_tile_url(_LAYER_ID, real_cog.z, real_cog.x, real_cog.y, token))
+    assert r.status_code == 401
+
+
+def test_tile_token_for_a_different_layer_is_401(client, test_settings, real_cog):
+    client.app.dependency_overrides[deps.get_tile_service] = lambda: FakeTileService(
+        test_settings, real_cog.path
+    )
+    other_layer = UUID("99999999-9999-9999-9999-999999999999")
+    token = create_tile_token(test_settings, layer_id=str(other_layer))  # wrong layer
+
+    r = client.get(_tile_url(_LAYER_ID, real_cog.z, real_cog.x, real_cog.y, token))
+    assert r.status_code == 401
+
+
+def test_tile_for_layer_with_no_cog_is_404(client, test_settings, real_cog):
+    unregistered_layer = UUID("88888888-8888-8888-8888-888888888888")
+    client.app.dependency_overrides[deps.get_tile_service] = lambda: FakeTileService(
+        test_settings, real_cog.path
+    )
+    token = create_tile_token(test_settings, layer_id=str(unregistered_layer))
+
+    r = client.get(_tile_url(unregistered_layer, real_cog.z, real_cog.x, real_cog.y, token))
+    assert r.status_code == 404
+    assert r.json()["error"]["code"] == "not_found"
+
+
+def test_tile_unsupported_extension_is_422(client, test_settings, real_cog):
+    client.app.dependency_overrides[deps.get_tile_service] = lambda: FakeTileService(
+        test_settings, real_cog.path
+    )
+    token = create_tile_token(test_settings, layer_id=str(_LAYER_ID))
+    r = client.get(_tile_url(_LAYER_ID, real_cog.z, real_cog.x, real_cog.y, token, ext="jpg"))
+    assert r.status_code == 422
+
+
+def test_tile_outside_raster_bounds_is_404(client, test_settings, real_cog):
+    client.app.dependency_overrides[deps.get_tile_service] = lambda: FakeTileService(
+        test_settings, real_cog.path
+    )
+    token = create_tile_token(test_settings, layer_id=str(_LAYER_ID))
+    z, x, y = real_cog.out_of_bounds
+
+    r = client.get(_tile_url(_LAYER_ID, z, x, y, token))
+    assert r.status_code == 404

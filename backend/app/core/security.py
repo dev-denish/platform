@@ -32,7 +32,7 @@ import jwt
 from app.core.config import Settings
 from app.core.errors import AuthError
 
-TokenType = Literal["access", "refresh"]
+TokenType = Literal["access", "refresh", "tile"]
 
 
 def hash_password(plain: str) -> str:
@@ -78,6 +78,32 @@ def create_refresh_token(settings: Settings, *, user_id: str) -> str:
         {"sub": user_id},
         timedelta(days=settings.refresh_token_ttl_days),
         "refresh",
+    )
+
+
+def create_tile_token(settings: Settings, *, layer_id: str) -> str:
+    """A short-lived, per-layer capability for map-tile requests.
+
+    Standard Bearer auth doesn't work for <img>-tag/tile-library requests (a
+    browser can't attach an Authorization header to those) - so this reuses the
+    SAME signing mechanism as access/refresh tokens (same secret, same
+    exp/iss/aud/typ machinery in `_encode`/`decode_token`) with `typ: "tile"` and
+    `sub` scoped to one layer, issued when the authenticated caller fetches layer
+    metadata (`ProjectService.get_layers`) and embedded in the tile URL query
+    string so it travels with plain `<img src=...>` requests.
+
+    Known limitation (this is a capability URL, not a revocable per-user grant):
+    anyone holding a valid, unexpired token for a layer can fetch its tiles until
+    it expires - there's no binding to the issuing user or their session, and
+    Phase 1's revocation table only covers refresh tokens, not this type. That
+    mirrors how S3 presigned URLs work and is an accepted, standard tradeoff for
+    this class of problem - it is NOT equivalent to per-request Bearer auth.
+    """
+    return _encode(
+        settings,
+        {"sub": str(layer_id)},
+        timedelta(seconds=settings.tile_token_ttl_seconds),
+        "tile",
     )
 
 

@@ -66,7 +66,7 @@ class LayerRepository:
             """
             SELECT sl.layer_id, sl.crs, sl.bbox_minx, sl.bbox_miny,
                    sl.bbox_maxx, sl.bbox_maxy, sl.pixel_size_m, sl.preview_key,
-                   d.type, d.date_processed
+                   sl.cog_key, d.type, d.date_processed
             FROM spatial_layer sl
             JOIN dataset d ON d.dataset_id = sl.dataset_id
             WHERE d.project_id = %s AND d.deleted_at IS NULL
@@ -75,6 +75,31 @@ class LayerRepository:
             (str(project_id),),
         )
         return list(self.cur.fetchall())
+
+    def get_for_dataset(self, dataset_id: UUID | str) -> dict[str, Any] | None:
+        """Phase 3: the ingest job needs the layer it just created (for its
+        file_key, to convert to a COG) after `IngestionService.ingest()` has
+        already returned - it only hands back an `IngestResult` (project/dataset
+        ids + stats), not the layer row, so this is the lookup back to it."""
+        self.cur.execute(
+            "SELECT layer_id, file_key, cog_key FROM spatial_layer "
+            "WHERE dataset_id = %s",
+            (str(dataset_id),),
+        )
+        return self.cur.fetchone()
+
+    def get(self, layer_id: UUID | str) -> dict[str, Any] | None:
+        self.cur.execute(
+            "SELECT layer_id, dataset_id, cog_key FROM spatial_layer WHERE layer_id = %s",
+            (str(layer_id),),
+        )
+        return self.cur.fetchone()
+
+    def set_cog_key(self, layer_id: UUID | str, cog_key: str) -> None:
+        self.cur.execute(
+            "UPDATE spatial_layer SET cog_key = %s WHERE layer_id = %s",
+            (cog_key, str(layer_id)),
+        )
 
 
 class KpiRepository:

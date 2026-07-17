@@ -9,6 +9,7 @@ from uuid import UUID
 from app.core.config import Settings
 from app.core.db import Database
 from app.core.errors import NotFoundError
+from app.core.security import create_tile_token
 from app.domain.dtos import (
     CurrentUser,
     DatasetOut,
@@ -75,10 +76,21 @@ class ProjectService:
                 pixel_size_m=float(r["pixel_size_m"]),
                 preview_url=self.storage.url_for(r["preview_key"]),
                 date_processed=str(r["date_processed"]) if r["date_processed"] else None,
+                tile_url_template=self._tile_url_template(r["layer_id"], r["cog_key"]),
             )
             for r in rows
         ]
         return ProjectLayers(project_id=project_id, layers=layers)
+
+    def _tile_url_template(self, layer_id: UUID, cog_key: str | None) -> str | None:
+        """None when there's no COG to tile from yet (conversion pending/failed -
+        see workers/jobs.py); otherwise a signed, short-lived per-layer token
+        (app/core/security.create_tile_token) embedded in a {z}/{x}/{y} template a
+        map library's tileLayer() consumes directly."""
+        if not cog_key:
+            return None
+        token = create_tile_token(self.settings, layer_id=str(layer_id))
+        return f"{self.settings.api_v1_prefix}/tiles/{layer_id}/{{z}}/{{x}}/{{y}}.png?token={token}"
 
     def portfolio_summary(self) -> dict:
         with self.db.connection() as conn, conn.cursor() as cur:

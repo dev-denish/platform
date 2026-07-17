@@ -99,6 +99,11 @@ class LayerOut(BaseModel):
     pixel_size_m: float
     preview_url: str
     date_processed: str | None
+    # Phase 3: a {z}/{x}/{y} URL template (Leaflet/MapLibre-ready) carrying a
+    # short-lived signed tile token in its query string - see
+    # app/core/security.py's create_tile_token. None if this layer has no COG yet
+    # (conversion pending/failed) - there is nothing to tile from.
+    tile_url_template: str | None = None
 
 
 class ProjectLayers(BaseModel):

@@ -9,8 +9,12 @@ retry/dead-letter rules can't drift between the two call paths.
 """
 from __future__ import annotations
 
+import contextlib
+import os
+import tempfile
 import time
 from typing import Any
+from uuid import UUID
 
 from arq.worker import Retry
 
@@ -19,10 +23,55 @@ from app.core.errors import UnprocessableError, ValidationError
 from app.core.logging import get_logger
 from app.core.metrics import job_duration_seconds, jobs_completed_total
 from app.domain.dtos import CurrentUser, IngestMetadata
+from app.repositories.datasets import LayerRepository
 from app.repositories.jobs import JobRepository
+from app.services.ingestion.cog import convert_to_cog
 from app.services.ingestion.service import IngestionService
+from app.services.ingestion.storage import Storage
 
 _KIND = "ingest_dataset"
+
+
+def _try_convert_to_cog(
+    db: Database, storage: Storage, dataset_id: UUID, log: Any
+) -> tuple[str | None, str | None]:
+    """Best-effort Phase 3 Wave A step, run AFTER the ingest transaction above has
+    already committed. Returns (cog_key, error) - never raises. A COG is a
+    derived, secondary artifact for map tiling; the ingest itself (the thing the
+    user is actually waiting on - their data, area, KPIs) already succeeded and
+    is durably in the database, so a COG failure must not undo or relabel that.
+    It especially must never propagate as an exception: that would hit the
+    `except Exception` below and trigger arq's Retry, which re-runs this ENTIRE
+    function from the top - re-doing `svc.ingest()` again and creating a SECOND,
+    duplicate dataset for the same upload, since ingestion is not idempotent
+    across a full re-run. A null cog_key is the signal instead: the tile
+    endpoint 404s cleanly for a layer with no COG, no new job status needed."""
+    with db.connection() as conn, conn.cursor() as cur:
+        layer = LayerRepository(cur).get_for_dataset(dataset_id)
+    if not layer:
+        log.error("cog.layer_missing", dataset_id=str(dataset_id))
+        return None, "layer row not found for this dataset"
+
+    work_dir = tempfile.mkdtemp(prefix="dmrv_cog_")
+    cog_tmp = os.path.join(work_dir, f"{dataset_id}.tif")
+    try:
+        src_path = storage.local_path_for_processing(layer["file_key"])
+        convert_to_cog(src_path, cog_tmp)
+        cog_key = f"cogs/{dataset_id}.tif"
+        storage.save(cog_key, cog_tmp)
+        with db.transaction() as cur:
+            LayerRepository(cur).set_cog_key(layer["layer_id"], cog_key)
+        log.info("cog.converted", layer_id=str(layer["layer_id"]), cog_key=cog_key)
+        return cog_key, None
+    except Exception as e:  # noqa: BLE001 - best-effort; must never propagate
+        log.error("cog.conversion_failed", dataset_id=str(dataset_id), error=str(e))
+        return None, str(e)
+    finally:
+        with contextlib.suppress(OSError):
+            if os.path.exists(cog_tmp):
+                os.unlink(cog_tmp)
+        with contextlib.suppress(OSError):
+            os.rmdir(work_dir)
 
 
 def _backoff_seconds(job_try: int) -> float:
@@ -101,8 +150,20 @@ async def run_ingest_job(
         # awaiting a manual/administrative retry (see that class's ponytail note).
         raise Retry(defer=_backoff_seconds(job_try)) from e
 
+    # Phase 3 Wave A: convert the just-ingested layer to a COG for map tiling.
+    # Best-effort (see _try_convert_to_cog's docstring for why it can never raise
+    # or affect this job's status) - so this always runs before mark_succeeded,
+    # keeping "succeeded" an honest, atomic signal that the ingest AND its tiles
+    # (if convertible at all) are both ready, with no third "ingested but tiles
+    # pending" state for callers to handle.
+    cog_key, cog_error = _try_convert_to_cog(db, storage, result.dataset_id, log)
+    result_payload = result.model_dump(mode="json")
+    result_payload["cog_key"] = cog_key
+    if cog_error:
+        result_payload["cog_error"] = cog_error
+
     with db.transaction() as cur:
-        JobRepository(cur).mark_succeeded(job_id, result.model_dump(mode="json"))
+        JobRepository(cur).mark_succeeded(job_id, result_payload)
     jobs_completed_total.labels(kind=_KIND, status="succeeded").inc()
     job_duration_seconds.labels(kind=_KIND).observe(time.perf_counter() - start)
-    log.info("job.succeeded", dataset_id=str(result.dataset_id))
+    log.info("job.succeeded", dataset_id=str(result.dataset_id), cog_key=cog_key)

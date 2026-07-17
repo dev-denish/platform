@@ -112,6 +112,16 @@ class Settings(BaseSettings):
     job_idempotency_window_hours: int = 24
     job_max_retries: int = Field(default=5, ge=1)
 
+    # --- Tiles (Phase 3 Wave A) ---
+    # How long a signed tile token (issued alongside GET /projects/{id}/layers,
+    # see app/core/security.py's "tile" token type) stays valid. No new secret -
+    # tile tokens are signed with the same jwt_secret, matching access/refresh.
+    # No lower-bound constraint - matching access_token_ttl_minutes/
+    # refresh_token_ttl_days above, which are also unconstrained so tests can
+    # construct an already-expired token with a negative TTL (see
+    # test_expired_token_is_rejected in tests/unit/test_security.py).
+    tile_token_ttl_seconds: int = 3600
+
     @field_validator("cors_allow_origins", mode="before")
     @classmethod
     def _split_csv(cls, v: object) -> object:

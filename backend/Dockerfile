@@ -34,6 +34,7 @@ RUN pip install \
       "python-multipart==0.0.20" "numpy==2.2.1" "rasterio==1.4.3" "pillow==11.1.0" "scipy==1.18.0" \
       "alembic==1.14.0" "sqlalchemy==2.0.36" "structlog==24.4.0" "slowapi==0.1.9" \
       "arq==0.28.0" "prometheus-client==0.25.0" \
+      "rio-cogeo==7.0.2" "rio-tiler==9.4.0" \
       "boto3==1.35.90"
 
 # ---------- runtime ----------

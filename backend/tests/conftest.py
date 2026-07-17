@@ -15,7 +15,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
+import morecantile
+import numpy as np
 import pytest
+import rasterio
+from rasterio.transform import from_origin
 
 # Make the `app` package importable when pytest is invoked from anywhere.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -36,10 +40,12 @@ from app.domain.dtos import (  # noqa: E402
     ProjectSummary,
 )
 from app.domain.enums import DatasetType, ProjectStatus, Role  # noqa: E402
+from app.services.ingestion.cog import convert_to_cog  # noqa: E402
 
 _ADMIN_ID = UUID("11111111-1111-1111-1111-111111111111")
 _VIEWER_ID = UUID("22222222-2222-2222-2222-222222222222")
 _PROJECT_ID = UUID("33333333-3333-3333-3333-333333333333")
+_LAYER_ID = UUID("55555555-5555-5555-5555-555555555555")  # matches FakeProjectService's layer
 
 
 @pytest.fixture
@@ -53,6 +59,41 @@ def test_settings() -> Settings:
         local_data_dir="/tmp/dmrv-test-data",
         upload_staging_dir="/tmp/dmrv-test-staging",
     )
+
+
+class RealCog:
+    """A genuine COG on disk (built via the real rio-cogeo code path, not mocked
+    tile data) plus a z/x/y known to intersect it and one known NOT to, for the
+    API-contract tile tests."""
+
+    def __init__(self, path: str, z: int, x: int, y: int) -> None:
+        self.path = path
+        self.z, self.x, self.y = z, x, y
+        self.out_of_bounds = (z, x + 1000, y + 1000)
+
+
+@pytest.fixture
+def real_cog(tmp_path) -> RealCog:
+    h = w = 512
+    arr = np.zeros((h, w), dtype="uint8")
+    arr[: h // 2, :] = 1
+    arr[h // 2 :, :] = 2
+    src = tmp_path / "src.tif"
+    profile = dict(
+        driver="GTiff", height=h, width=w, count=1, dtype="uint8",
+        crs="EPSG:4326", transform=from_origin(76.29, 13.07, 0.0002, 0.0002), nodata=0,
+    )
+    with rasterio.open(src, "w", **profile) as d:
+        d.write(arr, 1)
+    dst = tmp_path / "cog.tif"
+    convert_to_cog(str(src), str(dst))
+
+    with rasterio.open(dst) as d:
+        bounds = d.bounds
+    cx, cy = (bounds.left + bounds.right) / 2, (bounds.bottom + bounds.top) / 2
+    tms = morecantile.tms.get("WebMercatorQuad")
+    t = tms.tile(cx, cy, 14)
+    return RealCog(str(dst), t.z, t.x, t.y)
 
 
 # --------------------------------------------------------------- fakes
@@ -112,7 +153,7 @@ class FakeProjectService:
             project_id=_PROJECT_ID,
             layers=[
                 LayerOut(
-                    layer_id=UUID("55555555-5555-5555-5555-555555555555"),
+                    layer_id=_LAYER_ID,
                     type=DatasetType.LULC, crs="EPSG:4326",
                     bounds=[[13.02, 76.29], [13.07, 76.34]], pixel_size_m=10.0,
                     preview_url="/previews/x.png", date_processed="2026-01-01",
@@ -205,6 +246,43 @@ class FakeTaskRunner:
         return res
 
     def shutdown(self) -> None: ...
+
+
+class FakeTileService:
+    """API-contract tier, no Postgres - so the layer/cog_key lookup is faked -
+    but token verification and rendering are the REAL code
+    (app.core.security.decode_token, app.services.tile_renderer.render_tile
+    against a genuine COG from the `real_cog` fixture), so this actually proves
+    the auth-gate and the rendered bytes, not just routing."""
+
+    def __init__(self, settings: Settings, cog_path: str, layer_id: UUID = _LAYER_ID) -> None:
+        self._settings = settings
+        self._cog_path = cog_path
+        self._layer_id = layer_id
+
+    def verify_token(self, layer_id: UUID, token: str) -> None:
+        from app.core.security import decode_token
+
+        payload = decode_token(self._settings, token, expected_type="tile")
+        if payload.get("sub") != str(layer_id):
+            raise AuthError("This tile token is not valid for this layer.")
+
+    def get_cog_key(self, layer_id: UUID) -> str:
+        if layer_id != self._layer_id:
+            raise NotFoundError("No tiles available for this layer.")
+        return "cogs/fake.tif"
+
+    def render(self, cog_key: str, z: int, x: int, y: int) -> bytes:
+        from rio_tiler.errors import TileOutsideBounds
+
+        from app.services.tile_renderer import render_tile
+
+        try:
+            return render_tile(self._cog_path, z, x, y)
+        except TileOutsideBounds as e:
+            # Same translation TileService.render does - a fake that skipped
+            # this would let a real bug in that translation slip past this test.
+            raise NotFoundError("No data at this tile.") from e
 
 
 @pytest.fixture

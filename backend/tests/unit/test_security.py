@@ -9,6 +9,7 @@ from app.core.errors import AuthError
 from app.core.security import (
     create_access_token,
     create_refresh_token,
+    create_tile_token,
     decode_token,
     hash_password,
     verify_password,
@@ -69,3 +70,25 @@ def test_expired_token_is_rejected():
     tok = create_access_token(s, user_id="u1", username="a", role="Viewer")
     with pytest.raises(AuthError):
         decode_token(s, tok, expected_type="access")
+
+
+def test_tile_token_roundtrip():
+    s = _settings()
+    tok = create_tile_token(s, layer_id="55555555-5555-5555-5555-555555555555")
+    claims = decode_token(s, tok, expected_type="tile")
+    assert claims["sub"] == "55555555-5555-5555-5555-555555555555"
+    assert claims["typ"] == "tile"
+
+
+def test_tile_token_rejected_when_access_expected():
+    s = _settings()
+    tile = create_tile_token(s, layer_id="l1")
+    with pytest.raises(AuthError):
+        decode_token(s, tile, expected_type="access")
+
+
+def test_expired_tile_token_is_rejected():
+    s = _settings(tile_token_ttl_seconds=-1)  # already expired on creation
+    tok = create_tile_token(s, layer_id="l1")
+    with pytest.raises(AuthError):
+        decode_token(s, tok, expected_type="tile")

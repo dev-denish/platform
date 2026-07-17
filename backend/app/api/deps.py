@@ -27,6 +27,7 @@ from app.services.ingestion.service import IngestionService
 from app.services.ingestion.storage import Storage
 from app.services.jobs_service import JobService
 from app.services.project_service import ProjectService
+from app.services.tile_service import TileService
 from app.workers.queue import TaskRunner
 
 
@@ -74,6 +75,14 @@ def get_job_service(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> JobService:
     return JobService(db, settings)
+
+
+def get_tile_service(
+    db: Annotated[Database, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    storage: Annotated[Storage, Depends(get_storage)],
+) -> TileService:
+    return TileService(db, settings, storage)
 
 
 def get_current_user(

@@ -22,6 +22,8 @@ dependencies = [
     "slowapi==0.1.9",
     "arq==0.28.0",
     "prometheus-client==0.25.0",
+    "rio-cogeo==7.0.2",
+    "rio-tiler==9.4.0",
 ]
 
 [project.optional-dependencies]
@@ -32,6 +34,11 @@ dev = [
     "ruff==0.8.4",
     "mypy==1.14.0",
     "pip-audit==2.7.3",
+    # test-only: computing "which XYZ tile covers this point" for tile tests.
+    # Not an app runtime dependency - rio-tiler pulls it in transitively, but
+    # tests import it directly, so it's pinned explicitly rather than relying
+    # on someone else's transitive resolution.
+    "morecantile==7.0.3",
 ]
 s3 = ["boto3==1.35.90"]
 
