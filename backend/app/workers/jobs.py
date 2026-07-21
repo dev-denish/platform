@@ -122,6 +122,11 @@ async def run_ingest_job(
         )
     except (UnprocessableError, ValidationError) as e:
         # Not worth retrying: the input itself is bad (corrupt raster, bad values).
+        # Terminal - this is the one place staged_path is deleted for this path
+        # (IngestionService.ingest itself no longer does, so a retryable
+        # failure below doesn't lose the file it needs to retry with).
+        with contextlib.suppress(OSError):
+            os.unlink(staged_path)
         with db.transaction() as cur:
             JobRepository(cur).mark_failed(job_id, {"code": e.code, "message": e.message})
         jobs_completed_total.labels(kind=_KIND, status="failed").inc()
@@ -132,6 +137,9 @@ async def run_ingest_job(
         error = {"code": "job_error", "message": str(e)}
         max_tries = settings.job_max_retries
         if job_try >= max_tries:
+            # Terminal (no more retries left) - safe to clean up now.
+            with contextlib.suppress(OSError):
+                os.unlink(staged_path)
             with db.transaction() as cur:
                 JobRepository(cur).mark_dead_letter(job_id, error)
             jobs_completed_total.labels(kind=_KIND, status="dead_letter").inc()
@@ -141,6 +149,8 @@ async def run_ingest_job(
         with db.transaction() as cur:
             JobRepository(cur).record_retry_error(job_id, error)
         log.warning("job.retry_scheduled", error=str(e), next_try=job_try + 1)
+        # staged_path deliberately left in place - the retry below re-invokes
+        # this function with the SAME staged_path.
         # Verified by reading arq.worker.Worker.run_job (arq 0.28.0) directly: a
         # BARE exception is a PERMANENT arq-level failure - arq only retries on an
         # explicit `Retry`, never on a plain re-raise. So raise it explicitly here.
@@ -149,6 +159,11 @@ async def run_ingest_job(
         # workers/queue.py, and the row stays `queued` with the error recorded,
         # awaiting a manual/administrative retry (see that class's ponytail note).
         raise Retry(defer=_backoff_seconds(job_try)) from e
+
+    # Ingest itself succeeded (this is the one success path) - staged_path is
+    # no longer needed by any further retry, safe to clean up now.
+    with contextlib.suppress(OSError):
+        os.unlink(staged_path)
 
     # Phase 3 Wave A: convert the just-ingested layer to a COG for map tiling.
     # Best-effort (see _try_convert_to_cog's docstring for why it can never raise

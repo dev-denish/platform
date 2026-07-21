@@ -7,6 +7,7 @@ from app.core.config import Settings
 from app.core.db import Database
 from app.core.errors import AuthError
 from app.core.security import (
+    _DUMMY_HASH,
     create_access_token,
     create_refresh_token,
     decode_token,
@@ -26,9 +27,14 @@ class AuthService:
     def login(self, username: str, password: str) -> TokenPair:
         with self.db.transaction() as cur:
             user = UserRepository(cur).get_by_username(username)
-            # Constant-ish work whether or not the user exists (avoid user enumeration
-            # via timing): verify against the found hash, else a throwaway compare.
-            ok = bool(user) and verify_password(password, user["password_hash"])
+            # Genuinely constant work whether or not the user exists (avoid user
+            # enumeration via timing): always run one real bcrypt compare, against
+            # the found hash or else a fixed dummy one - `and` alone would
+            # short-circuit past bcrypt entirely for a nonexistent username.
+            password_matches = verify_password(
+                password, user["password_hash"] if user else _DUMMY_HASH
+            )
+            ok = bool(user) and password_matches
             if not ok:
                 raise AuthError("Incorrect username or password.")
             AuditRepository(cur).record(

@@ -94,14 +94,43 @@ export default function UploadPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, job?.job_id, pollGen]);
 
+  function isSatellite() {
+    return form.dataset_type === "Satellite / Raw Imagery";
+  }
+
   function step1Valid() {
     return form.file && form.project_name.trim().length > 0;
   }
 
+  // Mirrors the backend's real rule (app/api/v1/datasets.py): accuracy_score
+  // is a classification-accuracy metric, so it's only REQUIRED when a
+  // class_legend is supplied - there's no classification to be accurate about
+  // for a raw, unclassified scene. If it IS provided, it must still be 0-100.
+  function hasLegend() {
+    const raw = form.class_legend.trim();
+    if (!raw) return false;
+    try {
+      const parsed = JSON.parse(raw);
+      return !!parsed && typeof parsed === "object" && Object.keys(parsed).length > 0;
+    } catch {
+      return false;
+    }
+  }
+
   function step2Valid() {
     if (!form.source.trim() || !form.date_processed) return false;
-    const acc = Number(form.accuracy_score);
-    return acc >= 0 && acc <= 100;
+    const legendRaw = form.class_legend.trim();
+    if (legendRaw) {
+      try {
+        JSON.parse(legendRaw);
+      } catch {
+        return false;
+      }
+    }
+    const accRaw = form.accuracy_score.trim();
+    if (!accRaw) return !hasLegend();
+    const acc = Number(accRaw);
+    return !Number.isNaN(acc) && acc >= 0 && acc <= 100;
   }
 
   async function handleSubmit() {
@@ -118,7 +147,7 @@ export default function UploadPage() {
       body.append("dataset_type", form.dataset_type);
       body.append("source", form.source);
       body.append("classification_method", form.classification_method);
-      body.append("accuracy_score", form.accuracy_score);
+      if (form.accuracy_score.trim()) body.append("accuracy_score", form.accuracy_score);
       body.append("date_processed", form.date_processed);
       body.append("pixel_size_m", form.pixel_size_m || "10");
       if (form.class_legend.trim()) body.append("class_legend", form.class_legend);
@@ -223,22 +252,37 @@ export default function UploadPage() {
         </header>
         <section className="panel">
           {ingest ? (
-            <div className="stat-grid">
-              <div className="stat-card">
-                <span className="stat-label">Total area</span>
-                <span className="stat-value">
-                  {formatNumber(ingest.total_area_ha)} <span className="stat-unit">ha</span>
-                </span>
-              </div>
-              {Object.entries(ingest.class_stats ?? {}).map(([label, area]) => (
-                <div className="stat-card" key={label}>
-                  <span className="stat-label">{label}</span>
+            <>
+              <div className="stat-grid">
+                <div className="stat-card">
+                  <span className="stat-label">Total area</span>
                   <span className="stat-value">
-                    {formatNumber(area)} <span className="stat-unit">ha</span>
+                    {formatNumber(ingest.total_area_ha)} <span className="stat-unit">ha</span>
                   </span>
                 </div>
-              ))}
-            </div>
+                {ingest.class_stats
+                  ? Object.entries(ingest.class_stats).map(([label, area]) => (
+                      <div className="stat-card" key={label}>
+                        <span className="stat-label">{label}</span>
+                        <span className="stat-value">
+                          {formatNumber(area)} <span className="stat-unit">ha</span>
+                        </span>
+                      </div>
+                    ))
+                  : null}
+              </div>
+              {/* No class_legend was supplied at upload, so there's no per-class
+                  breakdown - this was an unclassified scene; show generic band
+                  statistics instead. */}
+              {!ingest.class_stats && ingest.band_stats ? (
+                <dl className="review-list">
+                  <ReviewRow label="Band min" value={formatNumber(ingest.band_stats.min)} />
+                  <ReviewRow label="Band max" value={formatNumber(ingest.band_stats.max)} />
+                  <ReviewRow label="Band mean" value={formatNumber(ingest.band_stats.mean)} />
+                  <ReviewRow label="Band std. dev." value={formatNumber(ingest.band_stats.stddev)} />
+                </dl>
+              ) : null}
+            </>
           ) : (
             <ErrorBanner message="The job succeeded but returned no result." />
           )}
@@ -345,18 +389,24 @@ export default function UploadPage() {
                 placeholder="e.g. Random forest"
               />
             </label>
-            <label className="field">
-              <span className="field-label">Accuracy score (%)</span>
-              <input
-                type="number"
-                min="0"
-                max="100"
-                step="0.1"
-                className="field-input"
-                value={form.accuracy_score}
-                onChange={(e) => update("accuracy_score", e.target.value)}
-              />
-            </label>
+            {!isSatellite() || hasLegend() ? (
+              <label className="field">
+                <span className="field-label">Accuracy score (%){hasLegend() ? "" : " (optional)"}</span>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.1"
+                  className="field-input"
+                  value={form.accuracy_score}
+                  onChange={(e) => update("accuracy_score", e.target.value)}
+                />
+                <span className="field-hint">
+                  Required only when a class legend is supplied below - there's no
+                  classification to be accurate about otherwise.
+                </span>
+              </label>
+            ) : null}
             <label className="field">
               <span className="field-label">Date processed</span>
               <input
@@ -383,9 +433,19 @@ export default function UploadPage() {
                 className="field-input field-textarea"
                 value={form.class_legend}
                 onChange={(e) => update("class_legend", e.target.value)}
-                placeholder='{"1": "Forest", "2": "Water"}'
+                placeholder={
+                  isSatellite()
+                    ? "Leave blank for raw, unclassified imagery. Only add a legend if this is a classified product, e.g. {\"1\": \"Forest\", \"2\": \"Water\"}."
+                    : '{"1": "Forest", "2": "Water"}'
+                }
                 rows={3}
               />
+              {isSatellite() ? (
+                <span className="field-hint">
+                  Satellite / Raw Imagery is usually unclassified - most uploads of
+                  this type should leave this blank.
+                </span>
+              ) : null}
             </label>
             <div className="form-actions">
               <button type="button" className="ghost-button" onClick={() => setStep(1)}>
@@ -407,7 +467,10 @@ export default function UploadPage() {
               <ReviewRow label="Type" value={form.dataset_type} />
               <ReviewRow label="Source" value={form.source} />
               <ReviewRow label="Classification method" value={form.classification_method || "—"} />
-              <ReviewRow label="Accuracy" value={`${form.accuracy_score}%`} />
+              <ReviewRow
+                label="Accuracy"
+                value={form.accuracy_score.trim() ? `${form.accuracy_score}%` : "—"}
+              />
               <ReviewRow label="Date processed" value={form.date_processed} />
               <ReviewRow label="Pixel size" value={`${form.pixel_size_m} m`} />
             </dl>

@@ -13,6 +13,7 @@ from app.domain.dtos import (
     CurrentUser,
     Page,
     ProjectDetail,
+    ProjectEvolution,
     ProjectKpis,
     ProjectLayers,
     ProjectSummary,
@@ -58,6 +59,18 @@ def get_layers(
     svc: Annotated[ProjectService, Depends(get_project_service)],
 ) -> ProjectLayers:
     return svc.get_layers(project_id)
+
+
+@router.get("/projects/{project_id}/evolution", response_model=ProjectEvolution)
+def get_evolution(
+    project_id: UUID,
+    _user: CurrentUserDep,
+    svc: Annotated[ProjectService, Depends(get_project_service)],
+) -> ProjectEvolution:
+    """Phase 3 Wave G: land-class change across the project's real
+    classified dated layers. `applicable=False` (not a 404/422) when fewer
+    than 2 eligible dates exist - see ProjectService.get_evolution."""
+    return svc.get_evolution(project_id)
 
 
 @router.get("/summary")

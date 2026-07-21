@@ -172,6 +172,61 @@ def test_upload_accepts_valid_request_as_admin(client):
     assert poll_body["result"]["total_area_ha"] == 2250.0
 
 
+def test_upload_accepts_missing_accuracy_score_without_a_legend(client):
+    """accuracy_score is a classification-accuracy metric - optional when no
+    class_legend is supplied, since there's no classification to be accurate
+    about (e.g. a raw, unclassified scene)."""
+    files = {"file": ("scene.tif", b"fakebytes", "image/tiff")}
+    data = {
+        "project_name": "Raw Scene", "dataset_type": "LULC",
+        "source": "Sentinel-2", "date_processed": "2026-01-01",
+    }
+    r = client.post("/api/v1/datasets/upload", headers=AUTH, files=files, data=data)
+    assert r.status_code == 202
+
+
+def test_upload_requires_accuracy_score_when_legend_supplied(client):
+    """The inverse rule: a class_legend implies a real classification, so
+    accuracy_score becomes required again - the frontend must mirror this
+    exactly rather than invent its own rule that could drift from it."""
+    files = {"file": ("scene.tif", b"fakebytes", "image/tiff")}
+    data = {
+        "project_name": "Classified Scene", "dataset_type": "LULC",
+        "source": "Sentinel-2", "date_processed": "2026-01-01",
+        "class_legend": '{"1": "Forest", "2": "Water"}',
+    }
+    r = client.post("/api/v1/datasets/upload", headers=AUTH, files=files, data=data)
+    assert r.status_code == 422
+    assert r.json()["error"]["code"] in ("validation_error", "unprocessable")
+
+
+def test_upload_accepts_satellite_type_without_a_legend(client):
+    """'Satellite / Raw Imagery' is a UI-only convenience label over the same
+    legend-driven ingestion path as LULC - no legend required, same as any
+    other type."""
+    files = {"file": ("scene.tif", b"fakebytes", "image/tiff")}
+    data = {
+        "project_name": "Raw Satellite Scene", "dataset_type": "Satellite / Raw Imagery",
+        "source": "Sentinel-2", "date_processed": "2026-01-01",
+    }
+    r = client.post("/api/v1/datasets/upload", headers=AUTH, files=files, data=data)
+    assert r.status_code == 202
+
+
+def test_upload_requires_accuracy_score_when_legend_supplied_for_satellite_type(client):
+    """Same accuracy_score/class_legend rule applies regardless of dataset_type -
+    there's no separate validation path for this type."""
+    files = {"file": ("scene.tif", b"fakebytes", "image/tiff")}
+    data = {
+        "project_name": "Classified Satellite Scene", "dataset_type": "Satellite / Raw Imagery",
+        "source": "Sentinel-2", "date_processed": "2026-01-01",
+        "class_legend": '{"1": "Forest", "2": "Water"}',
+    }
+    r = client.post("/api/v1/datasets/upload", headers=AUTH, files=files, data=data)
+    assert r.status_code == 422
+    assert r.json()["error"]["code"] in ("validation_error", "unprocessable")
+
+
 def test_job_not_found_or_not_owned_is_a_uniform_404(client):
     r = client.get(
         "/api/v1/jobs/00000000-0000-0000-0000-000000000000", headers=AUTH

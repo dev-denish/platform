@@ -87,7 +87,7 @@ async def upload_dataset(
     project_name: str = Form(...),
     dataset_type: str = Form(...),
     source: str = Form(...),
-    accuracy_score: float = Form(...),
+    accuracy_score: float | None = Form(None),
     date_processed: str = Form(...),
     region: str = Form("Unspecified"),
     classification_method: str = Form(""),
@@ -120,6 +120,11 @@ async def upload_dataset(
             legend = json.loads(class_legend)
         except json.JSONDecodeError as e:
             raise ValidationError("class_legend must be valid JSON.") from e
+
+    # accuracy_score is a classification-accuracy metric: only meaningful (and
+    # required) when a class_legend defines what's being classified.
+    if legend and meta.accuracy_score is None:
+        raise ValidationError("accuracy_score is required when a class_legend is supplied.")
 
     staged = await _stream_to_temp(
         file, suffix=ext, max_bytes=settings.max_upload_bytes,

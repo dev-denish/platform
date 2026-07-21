@@ -126,6 +126,10 @@ services:
       context: ../frontend
       args:
         VITE_API_BASE: /api/v1
+        # Unset by default -> keyless Esri World Imagery (see frontend/src/lib/basemap.js).
+        # Set DMRV_BASEMAP_URL (+ optionally DMRV_BASEMAP_ATTRIBUTION) in .env to swap providers.
+        VITE_BASEMAP_URL: ${DMRV_BASEMAP_URL:-}
+        VITE_BASEMAP_ATTRIBUTION: ${DMRV_BASEMAP_ATTRIBUTION:-}
     ports:
       - "8080:8080"
     depends_on:

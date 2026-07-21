@@ -39,6 +39,14 @@ def hash_password(plain: str) -> str:
     return bcrypt.hashpw(plain.encode(), bcrypt.gensalt()).decode()
 
 
+# A real bcrypt hash of a value nobody's password will ever equal, so
+# AuthService.login can run one bcrypt op whether or not the username exists -
+# a nonexistent username short-circuiting straight to "no" (no bcrypt run) is a
+# timing side-channel that lets an attacker distinguish valid usernames from
+# invalid ones by response latency alone.
+_DUMMY_HASH = hash_password(str(uuid.uuid4()))
+
+
 def verify_password(plain: str, hashed: str) -> bool:
     try:
         return bcrypt.checkpw(plain.encode(), hashed.encode())

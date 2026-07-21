@@ -25,7 +25,9 @@ def login(
 
 
 @router.post("/refresh", response_model=TokenPair)
+@limiter.limit("5/minute")
 def refresh(
+    request: Request,
     body: RefreshRequest,
     auth: Annotated[AuthService, Depends(get_auth_service)],
 ) -> TokenPair:

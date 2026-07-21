@@ -9,6 +9,7 @@ from typing import Any
 from uuid import UUID
 
 import psycopg
+from psycopg.types.json import Jsonb
 
 
 class DatasetRepository:
@@ -26,7 +27,7 @@ class DatasetRepository:
 
     def insert(
         self, *, project_id: UUID, dataset_type: str, source: str,
-        accuracy_score: float, date_processed: str, batch_id: UUID,
+        accuracy_score: float | None, date_processed: str, batch_id: UUID,
     ) -> UUID:
         self.cur.execute(
             """
@@ -39,6 +40,15 @@ class DatasetRepository:
         )
         return self.cur.fetchone()["dataset_id"]  # type: ignore[index]
 
+    def mark_failed_promotion(self, dataset_id: UUID | str) -> None:
+        """Compensating action for IngestionService.ingest: the row's own
+        transaction already committed, but promoting its artifacts to
+        storage then failed - see that call site."""
+        self.cur.execute(
+            "UPDATE dataset SET deleted_at = now() WHERE dataset_id = %s",
+            (str(dataset_id),),
+        )
+
 
 class LayerRepository:
     def __init__(self, cur: psycopg.Cursor) -> None:
@@ -47,18 +57,21 @@ class LayerRepository:
     def insert(
         self, *, dataset_id: UUID, file_key: str, preview_key: str, crs: str,
         bounds: tuple[float, float, float, float], pixel_size_m: float,
+        band_count: int, class_legend: dict[str, Any] | None,
     ) -> None:
         minx, miny, maxx, maxy = bounds
         self.cur.execute(
             """
             INSERT INTO spatial_layer
               (dataset_id, file_key, preview_key, crs,
-               bbox_minx, bbox_miny, bbox_maxx, bbox_maxy, pixel_size_m, extent)
+               bbox_minx, bbox_miny, bbox_maxx, bbox_maxy, pixel_size_m, extent,
+               band_count, class_legend)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    ST_MakeEnvelope(%s, %s, %s, %s, 4326))
+                    ST_MakeEnvelope(%s, %s, %s, %s, 4326), %s, %s)
             """,
             (str(dataset_id), file_key, preview_key, crs,
-             minx, miny, maxx, maxy, pixel_size_m, minx, miny, maxx, maxy),
+             minx, miny, maxx, maxy, pixel_size_m, minx, miny, maxx, maxy,
+             band_count, Jsonb(class_legend) if class_legend is not None else None),
         )
 
     def list_for_project(self, project_id: UUID | str) -> list[dict[str, Any]]:
@@ -66,7 +79,7 @@ class LayerRepository:
             """
             SELECT sl.layer_id, sl.crs, sl.bbox_minx, sl.bbox_miny,
                    sl.bbox_maxx, sl.bbox_maxy, sl.pixel_size_m, sl.preview_key,
-                   sl.cog_key, d.type, d.date_processed
+                   sl.cog_key, sl.band_count, sl.class_legend, d.type, d.date_processed
             FROM spatial_layer sl
             JOIN dataset d ON d.dataset_id = sl.dataset_id
             WHERE d.project_id = %s AND d.deleted_at IS NULL
@@ -89,8 +102,22 @@ class LayerRepository:
         return self.cur.fetchone()
 
     def get(self, layer_id: UUID | str) -> dict[str, Any] | None:
+        # Joins dataset/project and excludes both deleted_at columns: without
+        # this, soft-deleting a project (which never cascades - see
+        # ProjectService.delete_project) left its COG readable forever via
+        # any endpoint that resolves a layer directly by layer_id (tile
+        # rendering, pixel inspect), even though the project itself 404s
+        # everywhere else. Both callers of this method (get_cog_key,
+        # get_render_context) go through this one query, so this single fix
+        # closes the gap for both.
         self.cur.execute(
-            "SELECT layer_id, dataset_id, cog_key FROM spatial_layer WHERE layer_id = %s",
+            """
+            SELECT sl.layer_id, sl.dataset_id, sl.cog_key, sl.class_legend
+            FROM spatial_layer sl
+            JOIN dataset d ON d.dataset_id = sl.dataset_id
+            JOIN project p ON p.project_id = d.project_id
+            WHERE sl.layer_id = %s AND d.deleted_at IS NULL AND p.deleted_at IS NULL
+            """,
             (str(layer_id),),
         )
         return self.cur.fetchone()
@@ -118,13 +145,30 @@ class KpiRepository:
         )
 
     def for_project(self, project_id: UUID | str) -> list[dict[str, Any]]:
+        """Every KPI row for this project, each tagged with the real
+        `layer_id` it belongs to (Phase 3 Wave G) - not just flattened by
+        metric_name. A dataset always has exactly one spatial_layer row in
+        this app's ingest model (both written in the same transaction - see
+        IngestionService.ingest), so this join is exact, not a guess; keying
+        by layer_id (rather than the kpi table's own dataset_id FK) lets a
+        caller join directly against GET /projects/{id}/layers's layer_id
+        with no extra correlation field needed.
+
+        Bugfix: the old query selected only metric_name/value/unit with no
+        per-dataset attribution at all - ProjectService.get_kpis then merged
+        every dataset's rows into ONE flat dict keyed by metric_name, so a
+        project with 2+ layers sharing a metric name (e.g. every classified
+        layer has its own "total_area") silently lost all but one layer's
+        numbers to dict-key collision.
+        """
         self.cur.execute(
             """
-            SELECT k.metric_name, k.value, k.unit
+            SELECT l.layer_id, k.metric_name, k.value, k.unit
             FROM kpi k
             JOIN dataset d ON d.dataset_id = k.dataset_id
+            JOIN spatial_layer l ON l.dataset_id = d.dataset_id
             WHERE d.project_id = %s AND d.deleted_at IS NULL
-            ORDER BY k.metric_name
+            ORDER BY d.date_processed, k.metric_name
             """,
             (str(project_id),),
         )

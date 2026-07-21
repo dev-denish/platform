@@ -272,13 +272,22 @@ class FakeTileService:
             raise NotFoundError("No tiles available for this layer.")
         return "cogs/fake.tif"
 
-    def render(self, cog_key: str, z: int, x: int, y: int) -> bytes:
+    def get_render_context(self, layer_id: UUID) -> tuple[str, dict | None]:
+        return self.get_cog_key(layer_id), None
+
+    def render(
+        self, cog_key: str, z: int, x: int, y: int, *,
+        legend=None, bands=None, stretch=None, color_overrides=None,
+    ) -> bytes:
         from rio_tiler.errors import TileOutsideBounds
 
         from app.services.tile_renderer import render_tile
 
         try:
-            return render_tile(self._cog_path, z, x, y)
+            return render_tile(
+                self._cog_path, z, x, y,
+                legend=legend, bands=bands, stretch=stretch, color_overrides=color_overrides,
+            )
         except TileOutsideBounds as e:
             # Same translation TileService.render does - a fake that skipped
             # this would let a real bug in that translation slip past this test.

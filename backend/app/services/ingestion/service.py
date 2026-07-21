@@ -24,23 +24,18 @@ import tempfile
 import uuid
 from uuid import UUID
 
+import rasterio
+
 from app.core.config import Settings
 from app.core.db import Database
 from app.core.errors import UnprocessableError
-from app.domain.dtos import CurrentUser, IngestMetadata, IngestResult
+from app.domain.dtos import BandStatsOut, CurrentUser, IngestMetadata, IngestResult
 from app.domain.enums import AuditAction
 from app.repositories.audit import AuditRepository
 from app.repositories.datasets import DatasetRepository, KpiRepository, LayerRepository
 from app.repositories.projects import ProjectRepository
 from app.services.ingestion import raster as R
 from app.services.ingestion.storage import Storage
-
-
-def _metric_key(label: str) -> str:
-    import re
-
-    safe = re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")
-    return f"class_area_{safe}"
 
 
 class IngestionService:
@@ -64,6 +59,11 @@ class IngestionService:
                 src_crs, bounds = R.reproject_to_4326(
                     staged_path, reproj_tmp, block=self.settings.raster_window_size
                 )
+                # Cheap header-only read (no pixel data) - the real band count
+                # this layer's tiles/symbology controls key off of, rather than
+                # something the frontend would have to guess or hardcode.
+                with rasterio.open(reproj_tmp) as reproj_src:
+                    band_count = reproj_src.count
                 R.render_preview(reproj_tmp, preview_tmp, legend)
                 stats = R.compute_stats(
                     staged_path, legend, block=self.settings.raster_window_size
@@ -99,11 +99,15 @@ class IngestionService:
                 LayerRepository(cur).insert(
                     dataset_id=dataset_id, file_key=raster_key, preview_key=preview_key,
                     crs="EPSG:4326", bounds=bounds, pixel_size_m=meta.pixel_size_m,
+                    band_count=band_count, class_legend=legend,
                 )
                 kpis = KpiRepository(cur)
                 kpis.upsert(dataset_id, "total_area", stats.total_area_ha, "ha")
-                for label, area in stats.class_area_ha.items():
-                    kpis.upsert(dataset_id, _metric_key(label), area, "ha")
+                # band_stats (no legend) describes brightness/reflectance, not a
+                # carbon-relevant class - nothing meaningful to KPI on there.
+                if stats.class_area_ha is not None:
+                    for label, area in stats.class_area_ha.items():
+                        kpis.upsert(dataset_id, R.metric_key(label), area, "ha")
                 AuditRepository(cur).record(
                     actor_id=actor.user_id, actor_name=actor.username,
                     action=AuditAction.INGEST_DATASET, target=str(dataset_id),
@@ -115,15 +119,48 @@ class IngestionService:
                 )
 
             # ---- 3. promote artifacts ONLY after commit (no orphans on failure)
-            self.storage.save(preview_key, preview_tmp)
-            self.storage.save(raster_key, reproj_tmp)
+            try:
+                self.storage.save(preview_key, preview_tmp)
+                self.storage.save(raster_key, reproj_tmp)
+            except Exception:
+                # The transaction above already committed and can't be rolled
+                # back from here - a raster_key/preview_key that doesn't
+                # actually exist in storage would otherwise surface forever
+                # (broken preview, 404ing tiles) on every read path. Soft-
+                # delete through the same `deleted_at` column every one of
+                # those read paths already filters on, so the phantom row
+                # disappears instead. A retry (see workers/jobs.py) creates a
+                # fresh dataset row rather than resurrecting this one -
+                # consistent with ingestion already being documented as not
+                # idempotent across a full re-run.
+                with self.db.transaction() as cur:
+                    DatasetRepository(cur).mark_failed_promotion(dataset_id)
+                raise
 
+            band_stats = (
+                BandStatsOut(
+                    min=stats.band_stats.min, max=stats.band_stats.max,
+                    mean=stats.band_stats.mean, stddev=stats.band_stats.stddev,
+                )
+                if stats.band_stats is not None
+                else None
+            )
             return IngestResult(
                 project_id=project_id, dataset_id=dataset_id, batch_id=batch_id,
                 total_area_ha=stats.total_area_ha, class_stats=stats.class_area_ha,
+                band_stats=band_stats,
             )
         finally:
-            for p in (staged_path, reproj_tmp, preview_tmp):
+            # staged_path is NOT cleaned up here - see workers/run_ingest_job,
+            # which owns deleting it, and only once the job reaches a truly
+            # terminal state. This function's own exceptions (from step 1)
+            # are always wrapped as UnprocessableError (non-retryable), but a
+            # bare exception from step 2/3 is retried by the worker with this
+            # SAME staged_path (see workers/jobs.py's Retry) - deleting it
+            # unconditionally here made every such retry fail on a missing
+            # file, which then got misreported as "raster could not be
+            # processed" instead of the real, transient cause.
+            for p in (reproj_tmp, preview_tmp):
                 with contextlib.suppress(OSError):
                     if os.path.exists(p):
                         os.unlink(p)

@@ -28,6 +28,11 @@ class DatasetType(StrEnum):
     NDVI = "NDVI"
     BIOMASS = "Biomass"
     BOUNDARY = "Boundary"
+    # UI-only convenience label around the same legend-driven ingestion path as
+    # LULC (raster.py branches on legend presence, not dataset_type): a raw
+    # scene with no class_legend gets band_stats, one with a legend gets
+    # class_stats - identical to any other type.
+    SATELLITE = "Satellite / Raw Imagery"
 
 
 class ProjectStatus(StrEnum):

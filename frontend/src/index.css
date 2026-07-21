@@ -37,16 +37,24 @@
   --sidebar-text-active: #ffffff;
   --sidebar-active-bg: #0b6b46;
 
-  --font-display: "Inter", "IBM Plex Sans", "Segoe UI", Roboto, -apple-system, BlinkMacSystemFont, Helvetica, Arial,
-    sans-serif;
-  --font-body: "Inter", "IBM Plex Sans", "Segoe UI", Roboto, -apple-system, BlinkMacSystemFont, Helvetica, Arial,
-    sans-serif;
+  --font-display: "Inter", "Segoe UI", Roboto, -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif;
+  --font-body: "Inter", "Segoe UI", Roboto, -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, monospace;
 
   --radius-sm: 8px;
   --radius-md: 14px;
   --shadow-card: 0 4px 16px rgba(9, 38, 26, 0.06), 0 1px 3px rgba(9, 38, 26, 0.05);
   --shadow-lift: 0 12px 32px rgba(9, 38, 26, 0.12);
+
+  /* Phase 3 Wave F: the GEE-style map toolbar/toggle containers sit directly
+   * on top of imagery of unknown color, so a literal `transparent`
+   * background (rgba alpha 0) can make their text/icons unreadable against a
+   * busy or bright basemap - confirmed by screenshot against real tile
+   * imagery, not just a theoretical concern. A light, mostly-see-through
+   * wash keeps the minimal/uncluttered look while still guaranteeing
+   * contrast no matter what's underneath. */
+  --chrome-wash: rgba(255, 255, 255, 0.62);
+  --chrome-wash-hover: rgba(255, 255, 255, 0.92);
 }
 
 * {
@@ -348,6 +356,11 @@ a {
 .ghost-button:hover:not(:disabled) {
   border-color: var(--accent);
   color: var(--accent-strong);
+}
+
+.ghost-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .danger-button {
@@ -696,10 +709,106 @@ a {
   font-style: normal;
 }
 
+/* ---------------------------------------------------------- per-layer key metrics (Wave G) */
+
+.layer-metrics-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.layer-metrics-section {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.layer-metrics-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  background: var(--bg-elevated);
+  border: none;
+  padding: 10px 16px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.layer-metrics-title {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.layer-metrics-chevron {
+  display: inline-block;
+  color: var(--text-faint);
+  transition: transform 0.15s ease;
+}
+
+.layer-metrics-chevron-open {
+  transform: rotate(180deg);
+}
+
+.layer-metrics-section .stat-grid {
+  padding: 16px;
+}
+
+.layer-metrics-section .empty-state {
+  margin: 0;
+  padding: 16px;
+}
+
 .data-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 13.5px;
+}
+
+/* ---------------------------------------------------------- landscape evolution (Wave G) */
+
+.evolution-table-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-x: auto;
+}
+
+.evolution-mode-toggle {
+  align-self: flex-start;
+}
+
+.evolution-table th,
+.evolution-table td {
+  white-space: nowrap;
+}
+
+.evolution-consecutive-pair {
+  font-size: 12.5px;
+}
+
+.evolution-positive {
+  color: var(--accent-strong);
+}
+
+.evolution-negative {
+  color: var(--clay);
+}
+
+/* The first-vs-last view puts these classes directly on a <td> that ALSO
+ * has .mono-cell (equal specificity, so whichever rule the stylesheet
+ * happens to define second would otherwise win) - this combined selector
+ * has higher specificity and always wins regardless of source order. The
+ * consecutive-pairs view instead puts them on a plain inner <span> with no
+ * .mono-cell of its own, where the rules above already apply untouched. */
+.mono-cell.evolution-positive {
+  color: var(--accent-strong);
+}
+
+.mono-cell.evolution-negative {
+  color: var(--clay);
 }
 
 .data-table th {
@@ -976,16 +1085,382 @@ a {
 /* ---------------------------------------------------------- layers & map */
 
 .map-frame {
-  height: 320px;
+  position: relative;
+  height: 460px;
   border-radius: var(--radius-md);
   overflow: hidden;
   border: 1px solid var(--border);
+}
+
+/* Phase 3 Wave F: real Fullscreen API target (see ProjectMap.jsx's
+ * requestFullscreen/exitFullscreen) - the UA already expands the element to
+ * fill the screen, this just drops the rounded corners/border that would
+ * otherwise look wrong at full viewport size. -webkit- prefix for Safari. */
+.map-frame:fullscreen,
+.map-frame:-webkit-full-screen {
+  height: 100vh;
+  border-radius: 0;
+  border: none;
+}
+
+/* ---------------------------------------------------------- GEE-style map chrome (Wave E) */
+
+.map-overlay-topleft,
+.map-overlay-topright {
+  position: absolute;
+  top: 10px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.map-overlay-topleft {
+  left: 10px;
+}
+
+.map-overlay-topright {
+  right: 10px;
+  align-items: flex-end;
+}
+
+/* Leaflet's own zoom control defaults to the same top-left corner as
+ * .map-overlay-topleft's toolbar - push it down to clear that toolbar's
+ * height instead of overlapping it. */
+.leaflet-top.leaflet-left {
+  top: 54px;
+}
+
+.leaflet-control-zoom {
+  border: none !important;
+  border-radius: var(--radius-sm) !important;
+  box-shadow: var(--shadow-card) !important;
+  background: var(--chrome-wash) !important;
+  overflow: hidden;
+}
+
+/* Phase 3 Wave F: Leaflet's own leaflet.css hardcodes a solid white
+ * background on each zoom button (`.leaflet-bar a { background-color: #fff }`)
+ * - override so each BUTTON is transparent at rest (the container above
+ * supplies the light wash behind both of them) and only fills in on hover. */
+.leaflet-control-zoom a {
+  background-color: transparent !important;
+}
+
+.leaflet-control-zoom a:hover {
+  background-color: var(--chrome-wash-hover) !important;
+}
+
+.map-toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  background: var(--chrome-wash);
+  border: none;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-card);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.icon-button:hover {
+  background: var(--chrome-wash-hover);
+  color: var(--accent-strong);
+}
+
+.basemap-toggle {
+  display: inline-flex;
+  background: var(--chrome-wash);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-card);
+  padding: 3px;
+  gap: 2px;
+}
+
+.basemap-toggle-btn {
+  border: none;
+  background: transparent;
+  padding: 5px 12px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-muted);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.basemap-toggle-btn:hover:not(.basemap-toggle-btn-active) {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.basemap-toggle-btn-active {
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.layers-panel {
+  position: relative; /* anchors .symbology-popover to this panel, not the viewport */
+  width: 240px;
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-card);
+  font-size: 12.5px;
+}
+
+.layers-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  background: var(--accent);
+  color: #ffffff;
+  border: none;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  padding: 8px 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.layers-panel-header-collapsed {
+  border-radius: var(--radius-sm);
+}
+
+.layers-panel-chevron {
+  display: inline-block;
+  transition: transform 0.15s ease;
+}
+
+.layers-panel-chevron-open {
+  transform: rotate(180deg);
+}
+
+.layers-panel-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+  max-height: 280px;
+  overflow-y: auto;
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+}
+
+.layer-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.layer-row:last-child {
+  border-bottom: none;
+}
+
+.layer-row-checkbox {
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.layer-row-checkbox:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.layer-row-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.layer-row-gear {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: 4px;
+}
+
+.layer-row-gear:hover {
+  color: var(--accent-strong);
+  background: var(--surface-hover);
+}
+
+.symbology-popover {
+  position: absolute;
+  top: 0;
+  right: calc(100% + 10px);
+  width: 260px;
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lift);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 12.5px;
+}
+
+.symbology-popover-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.symbology-popover-subtitle {
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* SymbologyPanel keeps its own card chrome (border/padding/margin) for its
+ * original standalone use - strip that when it's nested inside the popover,
+ * which already supplies its own card chrome, so the two don't double up. */
+.symbology-popover .symbology-panel {
+  border: none;
+  padding: 0;
+  margin-bottom: 0;
+}
+
+.symbology-popover-opacity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+}
+
+.symbology-popover-opacity input[type="range"] {
+  flex: 1;
+}
+
+.symbology-popover-opacity-value {
+  font-family: var(--font-mono);
+  min-width: 3ch;
+  text-align: right;
+}
+
+.symbology-popover-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.symbology-popover-footer .primary-button,
+.symbology-popover-footer .ghost-button {
+  padding: 6px 14px;
+  font-size: 12.5px;
 }
 
 .map-root {
   height: 100%;
   width: 100%;
   background: var(--bg-elevated);
+}
+
+.coord-readout {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: 1000;
+  background: rgba(20, 20, 20, 0.72);
+  color: #fff;
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+  padding: 4px 10px;
+  border-radius: 999px;
+  pointer-events: none;
+}
+
+.coord-readout-crs {
+  opacity: 0.65;
+}
+
+.measure-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  /* Phase 3 Wave F: a light wash rather than the old solid card, matching
+   * the reference's minimal chrome - see --chrome-wash's own comment for why
+   * this isn't literally `transparent` (text/icon legibility against
+   * arbitrary basemap imagery underneath). */
+  background: var(--chrome-wash);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-card);
+  padding: 6px 8px;
+}
+
+.measure-result {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.pixel-popup {
+  font-size: 12.5px;
+  max-width: 220px;
+}
+
+.pixel-popup-row + .pixel-popup-row {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.pixel-popup-value {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.pixel-popup-error {
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.map-scroll-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  z-index: 1000;
+  background: rgba(20, 20, 20, 0.72);
+  color: #fff;
+  font-size: 11.5px;
+  padding: 4px 11px;
+  border-radius: 999px;
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity 0.6s ease;
+}
+
+.map-scroll-hint-faded {
+  opacity: 0;
 }
 
 .layer-grid {
@@ -1027,6 +1502,102 @@ a {
 .layer-type {
   font-weight: 600;
   color: var(--accent);
+}
+
+/* ---------------------------------------------------------- symbology */
+
+.symbology-panel {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.symbology-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.symbology-title {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.symbology-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.symbology-toggle-btn {
+  border: none;
+  background: transparent;
+  padding: 4px 11px;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.symbology-toggle-btn:hover:not(.symbology-toggle-btn-active) {
+  background: var(--surface-hover);
+}
+
+.symbology-toggle-btn-active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.symbology-classes,
+.symbology-bands {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 18px;
+}
+
+.symbology-class-row,
+.symbology-band-row,
+.symbology-stretch-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.symbology-class-row input[type="color"] {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
+}
+
+.symbology-band-row select {
+  font-size: 12.5px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: inherit;
+}
+
+.symbology-stretch-row input[type="range"] {
+  width: 100px;
 }
 
 /* ---------------------------------------------------------- legend */

@@ -22,6 +22,13 @@ RUN npm ci
 COPY . .
 ARG VITE_API_BASE=/api/v1
 ENV VITE_API_BASE=${VITE_API_BASE}
+# Empty by default - src/lib/basemap.js falls back to keyless Esri World
+# Imagery when these are unset. Set both to swap in Mapbox/Google/etc once a
+# key is available; no code change needed.
+ARG VITE_BASEMAP_URL=
+ARG VITE_BASEMAP_ATTRIBUTION=
+ENV VITE_BASEMAP_URL=${VITE_BASEMAP_URL}
+ENV VITE_BASEMAP_ATTRIBUTION=${VITE_BASEMAP_ATTRIBUTION}
 RUN npm run build
 
 # ---------- serve ----------

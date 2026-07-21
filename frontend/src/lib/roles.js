@@ -22,6 +22,6 @@ export function canDeleteProject(role) {
   return role === ROLES.ADMINISTRATOR;
 }
 
-export const DATASET_TYPES = ["LULC", "NDVI", "Biomass", "Boundary"];
+export const DATASET_TYPES = ["LULC", "NDVI", "Biomass", "Boundary", "Satellite / Raw Imagery"];
 
 export const PROJECT_STATUSES = ["Active", "Under Review", "Archived"];
