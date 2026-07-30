@@ -204,6 +204,8 @@ export default function ProjectMap({ layers, onRefreshLayers }) {
   const [symbologyState, setSymbologyState] = useState(() => initSymbologyState(layers));
   const [tilesExpired, setTilesExpired] = useState(false);
   const retriedRef = useRef(false);
+  const batchLoadedRef = useRef(0);
+  const batchErroredRef = useRef(0);
   // Phase 3 Wave E: GEE-style Map/Satellite toggle - swaps only the BASE
   // reference layer underneath the project's own tiles, same free tile
   // sources as before (Esri satellite default, Carto "Map" - see
@@ -332,18 +334,45 @@ export default function ProjectMap({ layers, onRefreshLayers }) {
     setLayerState((prev) => ({ ...prev, [layerId]: { ...prev[layerId], opacity } }));
   }
 
-  function handleTileError() {
-    if (!retriedRef.current) {
-      retriedRef.current = true;
-      onRefreshLayers?.();
-    } else {
-      setTilesExpired(true);
-    }
+  // A real expired/invalid token fails EVERY tile of a layer, since they all
+  // share the one signed token in the URL. Tiles at the edge of a layer's
+  // bounding box legitimately 404 too (outside the COG's actual pixel data -
+  // see tile_service.render's "No data at this tile"), but that's permanent
+  // and unrelated to auth, and recurs on every reload - a plain <img> error
+  // event can't see the HTTP status to tell the two apart directly. So
+  // instead of reacting per-error, wait for the whole batch to settle
+  // (`load`, which Leaflet fires once all tiles finish loading OR erroring)
+  // and only treat it as expiry when NOTHING in that batch loaded - a mix of
+  // some successes and some errors is just normal missing-data edges and is
+  // ignored, so it can't loop forever re-minting tokens for a 404 that will
+  // never go away.
+  function handleTileLoadStart() {
+    batchLoadedRef.current = 0;
+    batchErroredRef.current = 0;
   }
 
   function handleTileLoad() {
-    retriedRef.current = false;
-    setTilesExpired(false);
+    batchLoadedRef.current += 1;
+  }
+
+  function handleTileError() {
+    batchErroredRef.current += 1;
+  }
+
+  async function handleBatchSettled() {
+    if (batchErroredRef.current === 0) return;
+    if (batchLoadedRef.current > 0) {
+      retriedRef.current = false;
+      setTilesExpired(false);
+      return;
+    }
+    if (!retriedRef.current) {
+      retriedRef.current = true;
+      const ok = await onRefreshLayers?.();
+      if (ok === false) setTilesExpired(true);
+    } else {
+      setTilesExpired(true);
+    }
   }
 
   // Tile-vs-preview rendering for one layer.
@@ -356,7 +385,13 @@ export default function ProjectMap({ layers, onRefreshLayers }) {
           key={key ?? `${l.layer_id}-tiles`}
           url={buildTileUrl(l.tile_url_template, symbologyState[l.layer_id], hasLegend)}
           opacity={opacity}
-          eventHandlers={{ tileerror: handleTileError, load: handleTileLoad }}
+          maxZoom={22}
+          eventHandlers={{
+            loading: handleTileLoadStart,
+            tileload: handleTileLoad,
+            tileerror: handleTileError,
+            load: handleBatchSettled,
+          }}
         />
       );
     }
@@ -448,7 +483,13 @@ export default function ProjectMap({ layers, onRefreshLayers }) {
             onSymbologyChange={updateSymbology}
           />
         </div>
-        <MapContainer bounds={bounds} boundsOptions={{ padding: [24, 24] }} scrollWheelZoom={false} className="map-root">
+        <MapContainer
+          bounds={bounds}
+          boundsOptions={{ padding: [24, 24] }}
+          scrollWheelZoom={false}
+          maxZoom={22}
+          className="map-root"
+        >
           <ScrollZoomOnActivate />
           <FullscreenInvalidate />
           <CoordinateReadout />
