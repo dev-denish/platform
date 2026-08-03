@@ -6,7 +6,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 import rasterio
-from rasterio.transform import from_origin
+from rasterio.transform import Affine, from_origin
 
 from app.services.ingestion import raster as R
 
@@ -75,6 +75,18 @@ def test_reprojection_produces_valid_lonlat_bounds(utm_lulc, tmp_path):
     assert maxx > minx and maxy > miny
     with rasterio.open(dst) as d:
         assert d.crs.to_epsg() == 4326
+
+
+def test_has_real_mask_true_after_reproject_false_on_a_plain_file(utm_lulc, tmp_path):
+    """`reproject_to_4326`'s output always carries a real geometric mask -
+    `has_real_mask` must say so. A plain file nobody ever ran through the
+    warp (e.g. a legacy pre-fix COG) has none - the exact case
+    ProjectService._needs_reingestion flags for re-upload."""
+    path, _ = utm_lulc
+    dst = tmp_path / "reproj_masked.tif"
+    R.reproject_to_4326(path, str(dst), block=128)
+    assert R.has_real_mask(str(dst)) is True
+    assert R.has_real_mask(path) is False
 
 
 def test_legend_labels_and_preview(utm_lulc, tmp_path):
@@ -173,12 +185,16 @@ def test_no_legend_preview_is_a_real_composite_not_a_class_palette(utm_raw_multi
 
 
 @pytest.fixture
-def utm_raw_multiband_no_nodata_half_padded(tmp_path):
-    """Real data in the left half, warp-fill padding (exactly 0 in every
-    band) in the right half, and crucially NO `nodata` value set at all -
-    matches a real ingested "Satellite / Raw Imagery" layer confirmed to have
-    nodata=None at every pipeline stage, whose rotated real footprint left
-    zero-padding around it with nothing recorded to mark it as "not data"."""
+def utm_raw_multiband_no_nodata_half_zero(tmp_path):
+    """Real data in the left half, ordinary zeros baked directly into every
+    band's pixel VALUES in the right half, NO `nodata` value set, and NO
+    rotation/CRS mismatch either - an axis-aligned, flat raster exactly as
+    it would be handed to this app by an external tool that already
+    zero-filled part of it before upload.
+
+    See test_baked_in_zero_across_all_bands_is_excluded_from_a_raw_composite
+    below - Wave: production render audit reconsiders this exact fixture's
+    verdict for the 3-band composite path specifically."""
     h = w = 200
     rng = np.random.default_rng(5)
     bands = np.zeros((3, h, w), dtype="uint16")
@@ -195,36 +211,53 @@ def utm_raw_multiband_no_nodata_half_padded(tmp_path):
     return str(path)
 
 
-def test_no_nodata_padding_renders_transparent_not_opaque_black(
-    utm_raw_multiband_no_nodata_half_padded, tmp_path
+def test_baked_in_zero_across_all_bands_is_excluded_from_a_raw_composite(
+    utm_raw_multiband_no_nodata_half_zero, tmp_path
 ):
-    """Regression test: without a `nodata` value, warp-fill padding (0 in
-    every band) used to be treated as ordinary data - it both skewed the
-    percentile stretch and painted solid opaque black instead of
-    transparent. The padding half must come out transparent and the real-data
-    half must keep genuine contrast, unskewed by the zeros next to it."""
-    out = tmp_path / "half_padded_prev.png"
-    R.render_preview(utm_raw_multiband_no_nodata_half_padded, str(out), legend=None, max_dim=200)
+    """Wave: production render audit reverses this fixture's previous verdict
+    for the 3-band composite path specifically - proven against a real ad-hoc
+    upload rendering as white/washed-out patches despite a geometric mask
+    reporting 100% valid (no rotation/reprojection mismatch for `add_alpha`
+    to reveal, since the source needed no reprojection at all).
+
+    Why this reversal doesn't reopen the bug the OLD `padding_value()`
+    heuristic caused (see test_legend_defined_class_zero_is_not_dropped_as_
+    padding below): that bug was a single CLASSIFIED band where a real
+    legend can define class value 0 as meaningful data (e.g. Water=0) - one
+    band's 0 is real. This fixture has 3 INDEPENDENT bands landing on the
+    exact same sentinel at once, with no legend at all - a real
+    reflectance/DN measurement varies at least slightly band-to-band, so
+    `_band_composite_rgba` now treats all-3-bands-exactly-0 as fill, same as
+    tile_renderer._mask_uninitialized_fill. Fixing a genuinely ambiguous
+    SINGLE band's zero still needs a real nodata tag - that limitation is
+    unchanged and is exactly what test_no_nodata_zero_fill_without_rotation_
+    counts_as_unclassified (classified, single-band) still documents."""
+    out = tmp_path / "half_zero_prev.png"
+    R.render_preview(utm_raw_multiband_no_nodata_half_zero, str(out), legend=None, max_dim=200)
 
     from PIL import Image
 
     img = np.array(Image.open(out))
     left, right = img[:, : img.shape[1] // 2], img[:, img.shape[1] // 2 :]
-    assert (right[:, :, 3] == 0).mean() > 0.9, "padding half must render (near-)fully transparent"
+    assert (right[:, :, 3] == 0).mean() > 0.9, (
+        "baked-in zero across all 3 bands at once must now be excluded as "
+        "fill, not rendered as real (if visually flat) data"
+    )
     visible_left = left[left[:, :, 3] > 0]
     assert visible_left.size > 0
     assert visible_left[:, :3].std() > 5, "real-data half must keep genuine contrast"
 
 
 @pytest.fixture
-def lulc_no_nodata_with_padding(tmp_path):
+def lulc_no_nodata_with_zero_fill(tmp_path):
     """A classified LULC raster with a real, irregular classified footprint
     (values 1-9, like the real Bairluty legend) sitting inside a larger
-    axis-aligned raster, warp-fill padding (0) filling everything outside
-    that footprint, and crucially NO `nodata` value set at all - matches a
-    real ingested classified layer confirmed to have nodata=None, whose
-    Unclassified area came out as ~59% of the total (the padding, not a real
-    ninth-plus class)."""
+    axis-aligned raster, ordinary zeros filling everything outside that
+    footprint, and crucially NO `nodata` value set and NO rotation - matches
+    a real ingested classified layer confirmed to have nodata=None. Renamed
+    from `..._with_padding` (Wave: geometric padding fix) - see
+    test_no_nodata_zero_fill_without_rotation_counts_as_unclassified below
+    for why this is no longer treated as padding."""
     h = w = 200
     arr = np.zeros((h, w), dtype="uint16")
     # An irregular (non-rectangular) real footprint, not just "one corner" -
@@ -246,28 +279,40 @@ def lulc_no_nodata_with_padding(tmp_path):
     return str(path), real_pixel_count
 
 
-def test_no_nodata_padding_excluded_from_area_not_bucketed_as_unclassified(
-    lulc_no_nodata_with_padding,
+def test_no_nodata_zero_fill_without_rotation_counts_as_unclassified(
+    lulc_no_nodata_with_zero_fill,
 ):
-    """The main bug this fix addresses: a classified raster with no real
-    nodata tag had its warp-fill padding (value 0) silently counted as
-    "Unclassified" area AND folded into Total Area - for a real dataset this
-    was 59% of the reported total. Padding must be excluded from area
-    entirely: it must not appear as "Unclassified", and Total Area must equal
-    only the genuinely classified (non-zero) pixels."""
-    path, real_pixel_count = lulc_no_nodata_with_padding
+    """Documents the wave's own explicitly stated limitation - this is NOT a
+    bug: this fixture's zero-fill is baked directly into an axis-aligned,
+    non-rotated raster's ordinary pixel values, with no `nodata` tag - there
+    is no warp-introduced geometric mismatch for `add_alpha` to reveal, so
+    it's indistinguishable from real data. Now that `padding_value()`'s
+    value-based guess is gone with NO fallback, every pixel counts: the
+    unlisted 0s land in "Unclassified" - the SAME rule any other
+    legend-unlisted real value already gets (see
+    test_genuinely_unlisted_real_value_still_reports_as_unclassified) -
+    and Total Area is genuinely the FULL raster. See this module's own
+    docstring for why: fixing this specific pattern needs the source to
+    carry a real nodata tag, which no warp-time mask can invent."""
+    path, real_pixel_count = lulc_no_nodata_with_zero_fill
     legend = {str(i): {"label": f"Class {i}"} for i in range(1, 10)}
     stats = R.compute_stats(path, legend=legend, block=37)
 
-    assert "Unclassified" not in stats.class_area_ha, (
-        "warp-fill padding must be excluded entirely, not bucketed as a fake "
-        "Unclassified class"
-    )
+    h = w = 200
     pixel_ha = (10 * 10) / 10_000.0
-    expected_total = round(real_pixel_count * pixel_ha, 4)
-    assert stats.total_area_ha == pytest.approx(expected_total, abs=1e-6), (
-        "Total Area must cover only real classified pixels, not the padding "
-        "around them"
+    print(f"real (non-zero) pixels: {real_pixel_count}, full raster: {h * w}")
+    print(f"MEASURED total_area_ha: {stats.total_area_ha}, Unclassified: {stats.class_area_ha.get('Unclassified')}")
+
+    assert "Unclassified" in stats.class_area_ha, (
+        "without a nodata tag or geometric mismatch, the zero-fill is no "
+        "longer excluded - it's ordinary unlisted data, same as any other "
+        "legend-unlisted value"
+    )
+    expected_unclassified = round((h * w - real_pixel_count) * pixel_ha, 4)
+    assert stats.class_area_ha["Unclassified"] == pytest.approx(expected_unclassified, abs=1e-6)
+    assert stats.total_area_ha == pytest.approx(h * w * pixel_ha, abs=1e-6), (
+        "every pixel counts now - there's no safe way to guess which zeros "
+        "are real vs fill without a nodata tag or a genuine warp mismatch"
     )
     assert sum(stats.class_area_ha.values()) == pytest.approx(stats.total_area_ha, abs=1e-6)
 
@@ -304,21 +349,26 @@ def test_legend_defined_class_zero_is_not_dropped_as_padding(tmp_path):
 
 
 def test_accumulate_band_stats_checks_all_bands_for_padding(tmp_path):
-    """Regression test: `_accumulate_band_stats` used to read ONLY band 1 -
-    both to decide what's padding and to compute stats. A real pixel with
-    band 1 == 0 but real data in other bands was wrongly excluded (band-1-
-    only padding check), and true warp-fill padding (every band 0) was only
-    excluded if band 1 itself happened to be 0. This raster has: a region
-    where band 1 is genuinely 0 but bands 2/3 are real data (must be KEPT),
-    and a separate region that is 0 in every band (must be EXCLUDED)."""
+    """Wave: production render audit / area-accuracy follow-up reverses part
+    of this test's previous verdict: proven against 4 real ingested layers
+    where Total Area was inflated by ~59% - an exact 0 in every one of >=3
+    real bands at once is now excluded, same as
+    tile_renderer._mask_uninitialized_fill already excludes it from
+    rendering.
+
+    What's UNCHANGED and still the critical regression guard - the actual
+    Wave H bug: band 1 reading 0 while other bands carry real data (rows
+    0-19) must still always count as real. Only a pixel where EVERY band
+    reads 0 AT ONCE (rows 40-63) is now excluded - a lone dark band is never
+    enough on its own."""
     h = w = 64
     bands = np.zeros((3, h, w), dtype="uint16")
-    # rows 0-19: band 1 == 0 but bands 2/3 real - must count as real data
+    # rows 0-19: band 1 == 0 but bands 2/3 real - must still count as real data
     bands[1, :20, :] = 500
     bands[2, :20, :] = 700
     # rows 20-39: ordinary real data in all bands
     bands[:, 20:40, :] = 300
-    # rows 40-63: every band 0 - true warp-fill padding, must be excluded
+    # rows 40-63: every band 0 at once, no nodata, no rotation - now excluded
     path = tmp_path / "multiband_padding.tif"
     profile = dict(
         driver="GTiff", height=h, width=w, count=3, dtype="uint16",
@@ -329,9 +379,16 @@ def test_accumulate_band_stats_checks_all_bands_for_padding(tmp_path):
 
     stats = R.compute_stats(str(path), legend=None, block=17)
     pixel_ha = (10 * 10) / 10_000.0
-    expected_count = 40 * w  # rows 0-39 are real; rows 40-63 are padding
-    assert stats.total_area_ha == pytest.approx(expected_count * pixel_ha, abs=1e-6)
-    # band 1's own stats over the real (unmasked) pixels: 20*w zeros + 20*w 300s
+    real_rows = 40  # rows 0-39 only - rows 40-63 are now excluded fake fill
+    print(f"MEASURED total_area_ha: {stats.total_area_ha} (real rows only: {real_rows * w * pixel_ha})")
+    assert stats.total_area_ha == pytest.approx(real_rows * w * pixel_ha, abs=1e-6), (
+        "rows 40-63 (every band 0 at once) must now be excluded as fake fill"
+    )
+    # band 1's own stats over the real rows only: 20*w at 0 (rows 0-19, a
+    # legitimately dark band 1 with real data elsewhere) + 20*w at 300 (rows
+    # 20-39) - rows 40-63's 0s are gone, but band 1's min was already 0 from
+    # rows 0-19, so min is unaffected; this is the proof that a real dark
+    # band is untouched by the fix.
     assert stats.band_stats.min == pytest.approx(0.0, abs=1e-6)
     assert stats.band_stats.max == pytest.approx(300.0, abs=1e-6)
 
@@ -358,3 +415,115 @@ def test_genuinely_unlisted_real_value_still_reports_as_unclassified(tmp_path):
     pixel_ha = (10 * 10) / 10_000.0
     expected_unclassified = round(100 * pixel_ha, 4)  # the 10x10 block of value 99
     assert stats.class_area_ha["Unclassified"] == pytest.approx(expected_unclassified, abs=1e-6)
+
+
+# ============================================================ Wave: geometric padding fix
+
+
+@pytest.fixture
+def rotated_lulc_with_class_zero(tmp_path):
+    """A REAL rotated raster - genuine geotransform rotation (b, d != 0 in
+    the affine transform), like a locally-surveyed plot grid not aligned to
+    true north - 100% real classified data (including class 0 = Water), NO
+    padding baked into the source at all. Every consumer of this module
+    reads through a north-up `WarpedVRT` (including `compute_stats` itself,
+    now unconditionally), which necessarily introduces real corner fill
+    outside the rotated footprint once forced onto a north-up grid. This is
+    the exact scenario the geometric mask fix is for, built with a REAL
+    GDAL warp (this fixture's own rotated transform), not a numpy
+    simulation of padding."""
+    h = w = 200
+    arr = np.zeros((h, w), dtype="uint16")
+    arr[: h // 2, :] = 0  # Water - legend-defined real class 0
+    arr[h // 2 :, :] = 1  # Forest
+    angle = np.radians(20)
+    transform = Affine(
+        10 * np.cos(angle), -10 * np.sin(angle), 640000,
+        10 * np.sin(angle), 10 * np.cos(angle), 1445000,
+    )
+    path = tmp_path / "rotated.tif"
+    profile = dict(
+        driver="GTiff", height=h, width=w, count=1, dtype="uint16",
+        crs="EPSG:32643", transform=transform, nodata=None,
+    )
+    with rasterio.open(path, "w", **profile) as d:
+        d.write(arr, 1)
+    # Independent ground truth, computed from the SOURCE's own geometry
+    # directly - not from anything this module computes. Rotation changes
+    # neither pixel count nor pixel area, only orientation, so the true
+    # area is exactly the source's own pixel count * its own pixel area.
+    pixel_ha = abs(transform.a * transform.e - transform.b * transform.d) / 10_000.0
+    truth_water_ha = round((h // 2) * w * pixel_ha, 4)
+    truth_forest_ha = round((h - h // 2) * w * pixel_ha, 4)
+    return str(path), truth_water_ha, truth_forest_ha
+
+
+def test_rotated_real_warp_with_class_zero_matches_ground_truth(rotated_lulc_with_class_zero):
+    """The exact bug this wave fixes, rebuilt with a REAL GDAL warp (genuine
+    geotransform rotation), not a numpy simulation: a real, legend-defined
+    class 0 (Water) in a raster whose own rotation forces compute_stats'
+    now-unconditional north-up warp to introduce real corner fill. The OLD
+    `padding_value()` would have given up entirely the moment the legend
+    named class 0 (returning None - "no safe padding value" - so it never
+    excluded the corner fill at all, counting it as real Forest/Water and
+    overstating both). The NEW geometric mask excludes ONLY the genuine
+    corner fill, independent of pixel value, so Water=0 is fully kept and
+    the fill is fully dropped."""
+    path, truth_water_ha, truth_forest_ha = rotated_lulc_with_class_zero
+    legend = {"0": {"label": "Water"}, "1": {"label": "Forest"}}
+    stats = R.compute_stats(path, legend=legend, block=37)
+
+    measured_water = stats.class_area_ha.get("Water")
+    measured_forest = stats.class_area_ha.get("Forest")
+    print(f"GROUND TRUTH: Water={truth_water_ha} ha, Forest={truth_forest_ha} ha, "
+          f"total={truth_water_ha + truth_forest_ha} ha")
+    print(f"MEASURED:     Water={measured_water} ha, Forest={measured_forest} ha, "
+          f"total={stats.total_area_ha} ha")
+
+    assert "Water" in stats.class_area_ha
+    assert measured_water == pytest.approx(truth_water_ha, rel=0.01)
+    assert measured_forest == pytest.approx(truth_forest_ha, rel=0.01)
+    assert "Unclassified" not in stats.class_area_ha, (
+        "the rotated corner fill must be excluded entirely by the geometric "
+        "mask, not bucketed as a fake Unclassified class"
+    )
+    assert stats.total_area_ha == pytest.approx(truth_water_ha + truth_forest_ha, rel=0.01)
+
+
+def test_rotated_source_with_real_padding_tag_still_respects_it(tmp_path):
+    """A rotated source that DOES carry a real `nodata` tag (a legitimate
+    no-data region within its own real footprint, e.g. a cloud mask) must
+    still have that respected - `add_alpha` tracks BOTH the declared nodata
+    AND the geometric corner fill from de-rotation, simultaneously, not
+    one at the expense of the other."""
+    h = w = 100
+    arr = np.full((h, w), 1, dtype="uint16")  # Forest everywhere
+    arr[:20, :] = 5  # an explicit nodata region WITHIN the real rotated footprint
+    angle = np.radians(15)
+    transform = Affine(
+        10 * np.cos(angle), -10 * np.sin(angle), 640000,
+        10 * np.sin(angle), 10 * np.cos(angle), 1445000,
+    )
+    path = tmp_path / "rotated_with_nodata.tif"
+    profile = dict(
+        driver="GTiff", height=h, width=w, count=1, dtype="uint16",
+        crs="EPSG:32643", transform=transform, nodata=5,
+    )
+    with rasterio.open(path, "w", **profile) as d:
+        d.write(arr, 1)
+
+    pixel_ha = abs(transform.a * transform.e - transform.b * transform.d) / 10_000.0
+    truth_forest_ha = round((h - 20) * w * pixel_ha, 4)
+
+    legend = {"1": {"label": "Forest"}}
+    stats = R.compute_stats(str(path), legend=legend, block=23)
+    print(f"GROUND TRUTH Forest: {truth_forest_ha} ha; MEASURED: {stats.class_area_ha.get('Forest')} ha")
+    assert stats.class_area_ha["Forest"] == pytest.approx(truth_forest_ha, rel=0.01)
+    assert "Unclassified" not in stats.class_area_ha
+
+
+def test_padding_value_is_removed(tmp_path):
+    """Confirms `padding_value` is actually gone from the module - not left
+    dead/unreachable - so nothing can silently start calling it again."""
+    assert not hasattr(R, "padding_value")
+    assert not hasattr(R, "legend_defines")

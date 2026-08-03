@@ -28,6 +28,36 @@ Enterprise solution:
     so rendering a preview never loads full resolution.
   * Reprojection to EPSG:4326 (for display) streams tile-by-tile into a tiled
     GeoTIFF via WarpedVRT, so it is also memory-bounded.
+
+Wave: geometric padding fix. Replaces the old `padding_value()` heuristic
+(guessing "0 probably means padding" from a pixel's VALUE, with no way to
+tell a real legend-defined class 0 apart from warp-fill padding once a
+legend names it) with a REAL geometric mask: every warp in this module now
+passes `add_alpha=True` to its `WarpedVRT`, which makes rasterio/GDAL warp a
+SYNTHETIC "fully valid" band alongside the real data, through the identical
+transform and resampling - the result is exactly which output pixels the
+warp actually placed real source data into, independent of what VALUE ended
+up there. A real Water=0 pixel and warp-fill padding that happens to also
+read 0 are no longer indistinguishable, because this mask never looks at
+values at all.
+
+This also runs for the "already projected in metres" case that never used
+to warp at all: `WarpedVRT(src, crs=src.crs, ...)` is a verified lossless,
+bit-exact passthrough when the source is already north-up (the common
+case - see tests/unit/test_raster_stats.py), but a WarpedVRT unconditionally
+produces a north-up destination grid, so for the rare source whose OWN
+geotransform carries genuine rotation, this is what reveals (and correctly
+masks) the resulting corner fill - the equivalent of `reproject_to_4326`'s
+own axis-alignment for the area-measurement path.
+
+Known limitation, stated plainly: this can only mask padding that a WARP
+introduces (rotation, reprojection, or resampling onto a different grid). It
+cannot recover a case where an upload's own flat pixel array already has
+padding baked into ordinary VALUES by some tool upstream of this app, with
+no `nodata` tag and no geometric mismatch for a warp to reveal - GDAL has no
+way to distinguish that from real data, and neither do we. That is a
+data-quality/source-metadata concern the uploader has to fix, not something
+any warp-time mask can invent after the fact.
 """
 from __future__ import annotations
 
@@ -39,7 +69,7 @@ from dataclasses import dataclass
 import numpy as np
 import rasterio
 from PIL import Image
-from rasterio.enums import Resampling
+from rasterio.enums import MaskFlags, Resampling
 from rasterio.vrt import WarpedVRT
 from rasterio.warp import transform_bounds
 from rasterio.windows import Window
@@ -74,52 +104,6 @@ class RasterStats:
     # supplied - see compute_stats.
     class_area_ha: dict[str, float] | None  # label -> hectares
     band_stats: BandStats | None  # generic min/max/mean/stddev for an unclassified band
-
-
-def legend_defines(value: int, legend: Legend) -> bool:
-    """Whether `legend` explicitly names `value` as a real class (e.g.
-    Dynamic World's class 0 = Water) - the check that decides whether the
-    padding heuristic below is even safe to apply for that value."""
-    if not legend:
-        return False
-    return _entry_label(legend.get(str(value))) is not None
-
-
-def padding_value(nodata: float | None, legend: Legend = None) -> float | None:
-    """The pixel value that means 'no real data here', for both area stats
-    and classified tile rendering: the raster's own recorded `nodata` if it
-    has one, otherwise 0 - reproject_to_4326's warp-fill padding signature
-    around a rotated/irregular scene's real footprint on a raster that never
-    had a nodata value set (see this module's docstring; tile_renderer.py's
-    `_mask_warp_fill`/`read_pixel` apply the equivalent rule for multi-band
-    data, where "every band exactly 0" plays the same role as "value 0" does
-    for a single-band classified raster). Single, importable definition so
-    stats computation and tile rendering can't silently disagree on what
-    counts as padding. Returns None - "no safe padding value" - when there's
-    no way to tell, so callers must treat every pixel as real data.
-
-    Bugfix (Phase 3 Wave G): `compute_stats`'s classified-area counting and
-    `tile_renderer._colormap_for_uint8` both read pixel values from a raster
-    directly (not through rio-tiler's own nodata masking), and neither ever
-    excluded warp-fill padding when the raster had no real nodata tag - a
-    classified LULC layer with a real, irregular plot boundary sitting in a
-    larger axis-aligned raster showed the surrounding padding as ~59% of the
-    "Unclassified" area (should be 0 real ha), and the same padding rendered
-    as an opaque fake class color on the map instead of transparent.
-
-    Bugfix (Phase 3 Wave I): the fallback-to-0 heuristic above then went too
-    far the other way - it fired unconditionally whenever no nodata was
-    recorded, silently dropping a legend-defined class 0 (a real, named
-    class like Dynamic World's Water=0) as if it were warp-fill padding. 0
-    is ambiguous between "real class" and "padding heuristic" with no way to
-    tell them apart by value alone once a legend names it, so the heuristic
-    simply doesn't apply in that case - real nodata (explicit source
-    metadata) still always takes precedence and is unaffected by this."""
-    if nodata is not None:
-        return nodata
-    if legend_defines(0, legend):
-        return None
-    return 0
 
 
 def color_for_value(value: int, legend: Legend) -> str:
@@ -205,64 +189,63 @@ def _pixel_area_m2(transform) -> float:
     return abs(transform.a * transform.e - transform.b * transform.d)
 
 
-def _accumulate_counts(dataset, block: int, nodata, legend: Legend = None) -> dict[int, int]:
-    """Windowed pass over band 1; returns {pixel_value: count}, with padding
-    (see `padding_value`) excluded entirely - not bucketed as a fake class
-    and not counted toward total area. Classified data is always single-band
-    by this app's own convention (band 1 = class value), so "this pixel's
-    value is the padding value" is the complete, exact check here - no
-    approximation the way a genuinely multi-band check would need. Memory
-    O(block^2).
-
-    `legend` is passed through to `padding_value` so a legend-defined class 0
-    (e.g. Water=0) is never excluded as padding - see that function."""
-    pad = padding_value(nodata, legend)
+def _accumulate_counts(vrt, block: int) -> dict[int, int]:
+    """Windowed pass over band 1 of a VRT opened with `add_alpha=True` (see
+    compute_stats); returns {pixel_value: count}, with padding excluded via
+    the warp's own real geometric alpha/mask band (the last band,
+    `vrt.count`) - not a guess from the pixel's value. A legend-defined
+    class 0 (e.g. Water=0) and genuine warp-fill padding that happens to
+    also read 0 are distinguishable now, because this mask never inspects
+    values at all - only where the warp actually placed real source data.
+    Memory O(block^2)."""
+    mask_band = vrt.count
     counts: dict[int, int] = {}
-    for win in _iter_windows(dataset.width, dataset.height, block):
-        arr = dataset.read(1, window=win)
-        if pad is not None:
-            arr = arr[arr != pad]
-        if arr.size == 0:
+    for win in _iter_windows(vrt.width, vrt.height, block):
+        arr = vrt.read(1, window=win)
+        alpha = vrt.read(mask_band, window=win)
+        valid = arr[alpha > 0]
+        if valid.size == 0:
             continue
-        vals, cnts = np.unique(arr, return_counts=True)
+        vals, cnts = np.unique(valid, return_counts=True)
         for v, c in zip(vals.tolist(), cnts.tolist(), strict=True):
             counts[int(v)] = counts.get(int(v), 0) + int(c)
     return counts
 
 
-def _accumulate_band_stats(dataset, block: int, nodata) -> tuple[float, float, float, float, int]:
-    """Windowed pass returning band 1's own (min, max, mean, stddev,
-    valid_pixel_count) - excluding warp-fill padding correctly: padding means
-    EVERY band is 0 at once (the same rule `tile_renderer._mask_warp_fill`
-    already applies to tile rendering), so this reads all of the dataset's
-    bands per window (still windowed/memory-bounded - O(block^2 * band_count)
-    per window, not per whole raster) to build that mask, then reports band
-    1's stats over only the real (unmasked) pixels.
+def _accumulate_band_stats(vrt, block: int) -> tuple[float, float, float, float, int]:
+    """Windowed pass over a VRT opened with `add_alpha=True` (see
+    compute_stats): band 1's own (min, max, mean, stddev, valid_pixel_count),
+    padding excluded via the warp's real geometric alpha/mask band - not the
+    old single-band "band 1 is exactly 0" heuristic (Wave H), which wrongly
+    excluded a pixel with a real value in every OTHER band just because band
+    1 alone happened to be 0.
 
-    Bugfix (Phase 3 Wave H): this used to read ONLY band 1 and had no
-    padding exclusion at all for the reason documented in the git history -
-    checking just band 1 for a genuinely multi-band scene risks the same
-    silent-miscount bug `padding_value`/`_mask_warp_fill` already fixed
-    elsewhere: a real pixel can have band 1 == 0 while other bands are real
-    data (undercounting if band 1 alone were treated as padding), and
-    conversely warp-fill padding doesn't always land on exactly 0 in band 1
-    specifically (overcounting/skewing total_area_ha and band_stats if
-    nothing masked it). Reading all bands to check "all bands 0 at once" is
-    the same rule used everywhere else in this module, applied here too."""
+    Wave: production render audit / area-accuracy follow-up. A real >=3-band
+    raster additionally excludes a pixel that is an exact 0 in EVERY real
+    band AT ONCE - the identical signal
+    tile_renderer._mask_uninitialized_fill excludes from rendering (see its
+    docstring for why this is safe), applied here too: Total Area was found
+    inflated by the same uncounted fake-fill fraction on the same files the
+    render bug hit. This is NOT a return of Wave H's bug - a lone band
+    reading 0 while others carry real data (Wave H's actual failure case)
+    still always counts; only every real band landing on 0 simultaneously
+    does not."""
     count = 0
     total = 0.0
     total_sq = 0.0
     minv = math.inf
     maxv = -math.inf
-    band_count = dataset.count
-    band_indexes = list(range(1, band_count + 1))
-    for win in _iter_windows(dataset.width, dataset.height, block):
-        raw = dataset.read(band_indexes, window=win)
-        band1 = raw[0]
-        invalid = np.all(raw == 0, axis=0)
-        if nodata is not None:
-            invalid |= band1 == nodata
-        arr = band1[~invalid]
+    mask_band = vrt.count
+    real_band_count = mask_band - 1
+    check_uninitialized = real_band_count >= 3
+    for win in _iter_windows(vrt.width, vrt.height, block):
+        band1 = vrt.read(1, window=win)
+        alpha = vrt.read(mask_band, window=win)
+        valid = alpha > 0
+        if check_uninitialized:
+            all_bands = vrt.read(list(range(1, real_band_count + 1)), window=win)
+            valid = valid & ~(all_bands == 0).all(axis=0)
+        arr = band1[valid]
         if arr.size == 0:
             continue
         arr = arr.astype(np.float64)
@@ -293,27 +276,27 @@ def compute_stats(src_path: str, legend: Legend, block: int = 2048) -> RasterSta
     has_legend = bool(legend)
     with rasterio.open(src_path) as src:
         crs = src.crs
-        nodata = src.nodata
         projected_metres = bool(
             crs and crs.is_projected and (crs.linear_units or "").lower() in {"metre", "meter", "m"}
         )
-        if projected_metres:
-            # Exact: measure on the native grid, no resampling error.
+        # Always warp - even when already projected in metres, where the
+        # target CRS is the source's OWN crs. That's a verified lossless,
+        # bit-exact passthrough for an already north-up source (the common
+        # case), but a WarpedVRT unconditionally produces a north-up
+        # destination grid, so this is what reveals - and, via `add_alpha`,
+        # correctly geometry-masks - any corner fill for the rare source
+        # whose own geotransform carries genuine rotation. Geographic
+        # sources still go through the same lazy equal-area reprojection as
+        # before; the only change is the mask mechanism, not the target CRS
+        # choice.
+        target_crs = crs if projected_metres else EQUAL_AREA_CRS
+        area_crs = crs.to_string() if projected_metres else EQUAL_AREA_CRS
+        with WarpedVRT(src, crs=target_crs, resampling=Resampling.nearest, add_alpha=True) as vrt:
             if has_legend:
-                counts = _accumulate_counts(src, block, nodata, legend)
+                counts = _accumulate_counts(vrt, block)
             else:
-                minv, maxv, mean, std, count = _accumulate_band_stats(src, block, nodata)
-            pixel_area_ha = _pixel_area_m2(src.transform) / 10_000.0
-            area_crs = crs.to_string()
-        else:
-            # Geographic/other: measure through a lazy equal-area reprojection.
-            with WarpedVRT(src, crs=EQUAL_AREA_CRS, resampling=Resampling.nearest) as vrt:
-                if has_legend:
-                    counts = _accumulate_counts(vrt, block, vrt.nodata, legend)
-                else:
-                    minv, maxv, mean, std, count = _accumulate_band_stats(vrt, block, vrt.nodata)
-                pixel_area_ha = _pixel_area_m2(vrt.transform) / 10_000.0
-                area_crs = EQUAL_AREA_CRS
+                minv, maxv, mean, std, count = _accumulate_band_stats(vrt, block)
+            pixel_area_ha = _pixel_area_m2(vrt.transform) / 10_000.0
 
     if has_legend:
         buckets = _bucket_by_legend(counts, legend)
@@ -347,22 +330,26 @@ def _percentile_stretch_uint8(band: np.ndarray, valid_mask: np.ndarray) -> np.nd
     return stretched.astype(np.uint8)
 
 
-def _classified_rgba(arr: np.ndarray, legend: Legend, nodata) -> np.ndarray:
+def _classified_rgba(arr: np.ndarray, legend: Legend, valid_mask: np.ndarray) -> np.ndarray:
     """Per-value class-color render - only meaningful when a legend actually
-    names what each value means (LULC and any other legend-driven upload)."""
+    names what each value means (LULC and any other legend-driven upload).
+    `valid_mask` (Wave: geometric padding fix) is the real per-pixel mask
+    from the SAME warp that produced `arr` (see render_preview) - wherever
+    it's False, that pixel is warp-fill padding, geometrically, regardless
+    of its raw value; a legend-defined class 0 (e.g. Water) renders normally
+    everywhere it's True."""
     rgba = np.zeros((*arr.shape, 4), dtype=np.uint8)
     for v in np.unique(arr).tolist():
-        if nodata is not None and v == nodata:
-            continue
         hexc = color_for_value(int(v), legend).lstrip("#")
         r, g, b = (int(hexc[i : i + 2], 16) for i in (0, 2, 4))
         rgba[arr == v] = (r, g, b, 235)
-    if nodata is not None:
-        rgba[arr == nodata] = (0, 0, 0, 0)
+    rgba[~valid_mask] = (0, 0, 0, 0)
     return rgba
 
 
-def _band_composite_rgba(vrt, out_h: int, out_w: int, nodata) -> np.ndarray:
+def _band_composite_rgba(
+    vrt, out_h: int, out_w: int, real_band_count: int, valid_mask: np.ndarray
+) -> np.ndarray:
     """Real band-to-RGB composite for raw/unclassified imagery: first 3 bands
     as R/G/B (1 band repeated to grayscale if that's all there is), each
     contrast-stretched independently. Not a "true color" render (band order
@@ -371,28 +358,37 @@ def _band_composite_rgba(vrt, out_h: int, out_w: int, nodata) -> np.ndarray:
     actual data, instead of a classified-raster color palette applied to
     continuous values (which produces meaningless per-pixel color noise).
 
-    Bugfix (Wave E): a rotated/irregular scene reprojected onto an
-    axis-aligned grid leaves warp-fill padding around its real footprint - 0
-    in every band - with no `nodata` recorded when the source never had one.
-    Treated as ordinary data, that padding both skews the percentile stretch
-    and paints as opaque black instead of transparent (see tile_renderer.py's
-    twin fix for the map-tile side of the same bug). "Every requested band
-    exactly 0" is masked out alongside real `nodata`, not just `nodata`
-    alone."""
-    n = 3 if vrt.count >= 3 else 1
-    raw = vrt.read(list(range(1, n + 1)), out_shape=(n, out_h, out_w), resampling=Resampling.nearest)
+    `valid_mask` (Wave: geometric padding fix) is the warp's own real
+    geometric alpha/mask band (see render_preview), decimated to this same
+    (out_h, out_w) - the actual answer for padding a WARP introduced,
+    independent of what value ended up there, replacing the old blanket
+    "every requested band exactly 0" guess (Wave E).
 
-    invalid = np.all(raw == 0, axis=0)
-    if nodata is not None:
-        invalid |= raw[0] == nodata
-    valid_mask = ~invalid
+    Wave: production render audit. That geometric mask can't see padding an
+    upload's OWN source array already had baked into ordinary values before
+    reaching this app (see reproject_to_4326's "Known limitation") - proven
+    against a real ad-hoc upload where ~40% of pixels are an exact `0` in
+    every one of 3 real bands simultaneously, confined to an irregular blob,
+    while the geometric mask reports 100% valid. With >=3 real distinct
+    bands (`n == 3` below) that combination is what synthetic/uninitialized
+    fill looks like, not real imagery - a genuine measurement varies at
+    least slightly band-to-band - so it's excluded here too, same as
+    tile_renderer._mask_uninitialized_fill. Not extended to the n == 1
+    (grayscale) case: with only one real band there's no cross-band signal
+    to tell real (possibly legitimately dark) data apart from fill."""
+    n = 3 if real_band_count >= 3 else 1
+    raw = vrt.read(
+        list(range(1, n + 1)), out_shape=(n, out_h, out_w), resampling=Resampling.nearest
+    )
+    if n == 3:
+        valid_mask = valid_mask & ~(raw == 0).all(axis=0)
 
     channels = [_percentile_stretch_uint8(raw[i], valid_mask) for i in range(n)]
     if n == 1:
         channels = channels * 3
     r, g, b = channels
     rgba = np.dstack([r, g, b, np.full_like(r, 235)])
-    rgba[invalid, 3] = 0
+    rgba[~valid_mask, 3] = 0
     return rgba
 
 
@@ -411,20 +407,37 @@ def render_preview(src_path: str, out_path: str, legend: Legend, max_dim: int = 
     image. Render a real band composite instead.
     """
     with rasterio.open(src_path) as src, WarpedVRT(
-        src, crs=DISPLAY_CRS, resampling=Resampling.nearest
+        src, crs=DISPLAY_CRS, resampling=Resampling.nearest, add_alpha=True
     ) as vrt:
+        real_band_count = vrt.count - 1  # the last band is the synthetic alpha add_alpha appended
         scale = max(vrt.width, vrt.height) / max_dim
         out_w = max(1, int(vrt.width / scale)) if scale > 1 else vrt.width
         out_h = max(1, int(vrt.height / scale)) if scale > 1 else vrt.height
-        nodata = vrt.nodata
+        alpha = vrt.read(vrt.count, out_shape=(out_h, out_w), resampling=Resampling.nearest)
+        valid_mask = alpha > 0
 
         if legend:
             arr = vrt.read(1, out_shape=(out_h, out_w), resampling=Resampling.nearest)
-            rgba = _classified_rgba(arr, legend, nodata)
+            rgba = _classified_rgba(arr, legend, valid_mask)
         else:
-            rgba = _band_composite_rgba(vrt, out_h, out_w, nodata)
+            rgba = _band_composite_rgba(vrt, out_h, out_w, real_band_count, valid_mask)
 
     Image.fromarray(rgba, mode="RGBA").save(out_path)
+
+
+def has_real_mask(path: str) -> bool:
+    """True if `path` already carries a real, warp-derived geometric mask
+    (this module's `add_alpha`/`write_mask`, above) rather than no mask at
+    all or the old value-based `nodata` heuristic it replaced. A cheap,
+    header-only check - no pixel data is read - so a caller can flag a layer
+    ingested before this fix without a DB migration or backfill job (see
+    ProjectService._needs_reingestion). Per this module's own "Known
+    limitation" above, a False result can only be resolved by re-ingesting
+    from the original source file - there is nothing to recompute from the
+    file alone."""
+    with rasterio.open(path) as ds:
+        flags = ds.mask_flag_enums[0]
+    return MaskFlags.per_dataset in flags and MaskFlags.all_valid not in flags
 
 
 def reproject_to_4326(
@@ -433,18 +446,42 @@ def reproject_to_4326(
     """
     Stream a reprojection to EPSG:4326 into a tiled GeoTIFF, tile-by-tile.
     Returns (source_crs_string, bounds_4326 as (minx,miny,maxx,maxy)).
+
+    Wave: geometric padding fix. Alongside the real bands, a synthetic
+    "fully valid" band is warped through the IDENTICAL transform/resampling
+    (`add_alpha=True` - see this module's docstring) and used to write a
+    REAL internal mask band onto `dst_path` ITSELF - not a separate shadow
+    file, not app-only metadata. Any tool that opens this GeoTIFF later
+    (including outside this app) sees the correct valid-data area; rio-cogeo
+    (ingestion/cog.py) carries the mask through COG conversion unchanged
+    (verified: mask coverage is bit-identical before/after). This replaces
+    the old value-based `padding_value()` guess (removed) with the only
+    thing that can actually distinguish "genuine class value" from
+    "warp-introduced fill": where the warp geometrically placed real source
+    data, independent of what value ended up there. No `nodata` value is
+    written on the output at all - the mask is the single source of truth,
+    so a real class value that happens to equal whatever a nodata sentinel
+    would have been can never collide with it again.
     """
     with rasterio.open(src_path) as src:
         src_crs = src.crs.to_string() if src.crs else "unknown"
-        with WarpedVRT(src, crs=DISPLAY_CRS, resampling=Resampling.nearest) as vrt:
+        real_band_count = src.count
+        with WarpedVRT(
+            src, crs=DISPLAY_CRS, resampling=Resampling.nearest, add_alpha=True
+        ) as vrt:
             profile = vrt.profile.copy()
             profile.update(
                 driver="GTiff", tiled=True, blockxsize=512, blockysize=512,
-                compress="deflate", predictor=1,
+                compress="deflate", predictor=1, count=real_band_count,
             )
-            with rasterio.open(dst_path, "w", **profile) as dst:
+            profile.pop("nodata", None)
+            with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True), rasterio.open(
+                dst_path, "w", **profile
+            ) as dst:
                 for win in _iter_windows(vrt.width, vrt.height, block):
-                    dst.write(vrt.read(window=win), window=win)
+                    data = vrt.read(window=win)
+                    dst.write(data[:real_band_count], window=win)
+                    dst.write_mask(data[-1] > 0, window=win)
     # Read back the written file's bounds and normalise numerically to 4326.
     with rasterio.open(dst_path) as d:
         b = transform_bounds(d.crs, DISPLAY_CRS, *d.bounds)

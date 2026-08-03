@@ -37,16 +37,30 @@ def db() -> Database:
 def test_find_or_create_by_name_is_idempotent(db):
     name = f"Proj-{uuid.uuid4()}"
     with db.transaction() as cur:
-        pid1 = ProjectRepository(cur).find_or_create_by_name(name, "Karnataka")
+        pid1, created1 = ProjectRepository(cur).find_or_create_by_name(name, "Karnataka")
     with db.transaction() as cur:
-        pid2 = ProjectRepository(cur).find_or_create_by_name(name.upper(), "Karnataka")
+        pid2, created2 = ProjectRepository(cur).find_or_create_by_name(name.upper(), "Karnataka")
     assert pid1 == pid2  # case-insensitive unique index prevents a duplicate
+    assert created1 is True
+    assert created2 is False  # the second call found the first call's row
 
 
 def test_kpi_upsert_does_not_duplicate(db):
+    """Diagnosed (production render audit follow-up): this used to read back
+    through `KpiRepository.for_project`, which INNER JOINs `spatial_layer` -
+    correct for its real caller (a project's Layers panel, where a dataset
+    always has exactly one spatial_layer row written in the same ingest
+    transaction), but this test's fixture never creates one, so the join
+    silently returned zero rows regardless of what upsert did (proven: the
+    assertion failed on `0 == 1`, never `2 == 1` - not a duplicate, ever;
+    the raw `kpi` table always held exactly one correctly-updated row,
+    backed by the real `kpi_dataset_id_metric_name_key` unique constraint
+    ON CONFLICT relies on). Reading the `kpi` table directly is what this
+    test is actually about - upsert's own dedup behavior, not
+    for_project's unrelated layer-attribution join."""
     name = f"Proj-{uuid.uuid4()}"
     with db.transaction() as cur:
-        pid = ProjectRepository(cur).find_or_create_by_name(name, "R")
+        pid, _created = ProjectRepository(cur).find_or_create_by_name(name, "R")
         did = DatasetRepository(cur).insert(
             project_id=pid, dataset_type="LULC", source="S", accuracy_score=90.0,
             date_processed="2026-01-01", batch_id=uuid.uuid4(),
@@ -55,7 +69,10 @@ def test_kpi_upsert_does_not_duplicate(db):
         k.upsert(did, "total_area", 100.0, "ha")
         k.upsert(did, "total_area", 250.0, "ha")  # same key -> update, not insert
     with db.connection() as conn, conn.cursor() as cur:
-        rows = KpiRepository(cur).for_project(pid)
-    totals = [r for r in rows if r["metric_name"] == "total_area"]
-    assert len(totals) == 1
-    assert float(totals[0]["value"]) == 250.0
+        cur.execute(
+            "SELECT value FROM kpi WHERE dataset_id = %s AND metric_name = 'total_area'",
+            (str(did),),
+        )
+        rows = cur.fetchall()
+    assert len(rows) == 1
+    assert float(rows[0]["value"]) == 250.0

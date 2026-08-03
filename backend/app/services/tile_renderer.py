@@ -20,13 +20,31 @@ classified data - a real multi-band "Satellite / Raw Imagery" scene made
 rio_tiler raise `InvalidFormat("Source data must be 1 band")` on every tile
 request. Branch on the COG's actual band count instead of assuming.
 
-Bugfix (Phase 3 Wave E): a rotated/irregular real scene reprojected onto an
-axis-aligned lat/lng grid (raster.reproject_to_4326) leaves warp-fill padding
-around its actual footprint - and when the SOURCE raster never had a `nodata`
-value set, that padding is literal 0 in every band with no nodata marker
-anywhere to say so. Treat "every requested band exactly 0" as an additional
-mask on top of whatever rio-tiler already masks, so those pixels are excluded
-from the stretch calculation AND rendered transparent instead of opaque black.
+Bugfix (Phase 3 Wave E, superseded): a rotated/irregular real scene
+reprojected onto an axis-aligned lat/lng grid (raster.reproject_to_4326) used
+to leave warp-fill padding around its actual footprint indistinguishable
+from real data when the SOURCE raster never had a `nodata` value set - "every
+requested band exactly 0" was treated as an additional mask on top of
+whatever rio-tiler already masked.
+
+Wave: geometric padding fix. `reproject_to_4326` now writes a REAL internal
+mask band onto the COG's source file itself (a genuine per-pixel record of
+where the warp actually placed real source data, geometric - not a guess
+from pixel values), which rio-cogeo carries through COG conversion
+unchanged. rio-tiler's `Reader` already reads that mask natively, so this
+module no longer needs its own value-based padding guess for the case that
+mask covers - the old `_mask_warp_fill`/`padding_value`/`legend_defines`
+machinery driven purely off `nodata`/rotation is gone.
+
+Bugfix (Wave: production render audit): the geometric mask only ever covers
+padding a WARP introduces. It reports "fully valid" for an upload whose own
+source array already had fill baked into ordinary pixel values before
+reaching this app - confirmed against a real ad-hoc upload rendering as
+white/washed-out patches despite `dataset_mask()` reporting 100% valid.
+`_mask_uninitialized_fill` reinstates a narrow value-based check for
+exactly that gap, scoped to a real (>=3 distinct band) raw composite only -
+see its docstring for why that scope keeps it safe from the class-0
+ambiguity the old, removed heuristic had.
 
 Symbology (Phase 3 Wave F): band-to-channel assignment, stretch percentiles,
 and per-class color overrides, all applied live at request time - no
@@ -52,57 +70,34 @@ import numpy as np
 from rio_tiler.io import Reader
 
 from app.core.errors import ValidationError
-from app.services.ingestion.raster import color_for_value, legend_defines, padding_value
+from app.services.ingestion.raster import color_for_value
 
 _TILE_FORMAT = "PNG"
 _DEFAULT_STRETCH = (2, 98)
 
 
 def _colormap_for_uint8(
-    nodata: float | None,
     legend: dict | None = None,
     overrides: dict[str, str] | None = None,
 ) -> dict[int, tuple[int, int, int, int]]:
     """Full 0-255 colormap so rio-tiler can map every possible class byte value.
     `overrides` (value-string -> "#rrggbb") take precedence over the legend's
     own color for that value, which takes precedence over DEFAULT_PALETTE - the
-    same fallback chain `color_for_value` already implements, just with one
-    more rung on top.
+    same fallback chain `color_for_value` already implements.
 
-    Bugfix (Phase 3 Wave G): classified rasters never got `_mask_warp_fill`'s
-    treatment (that only ever applied to the multi-band raw-imagery render
-    path) - a classified layer with no real nodata tag rendered its
-    reproject_to_4326 warp-fill padding as an opaque fake class color instead
-    of transparent (`color_for_value` falls through to DEFAULT_PALETTE[0] for
-    an unlisted value 0, painting it solid). `padding_value` is the same
-    single definition `compute_stats` now excludes from area entirely - both
-    paths agree on what counts as padding."""
+    No padding/nodata special-casing here at all (Wave: geometric padding
+    fix) - the COG's own real internal mask (written by reproject_to_4326)
+    already tells rio-tiler which pixels are padding; `img.render()` renders
+    a masked pixel fully transparent regardless of what the colormap dict
+    says for its raw value (verified directly against a real COG), so a
+    colormap only ever needs to define real class colors."""
     cmap: dict[int, tuple[int, int, int, int]] = {}
-    pad = padding_value(nodata, legend)
     for v in range(256):
-        if pad is not None and v == pad:
-            cmap[v] = (0, 0, 0, 0)
-            continue
         override = overrides.get(str(v)) if overrides else None
         hexc = (override or color_for_value(v, legend)).lstrip("#")
         r, g, b = (int(hexc[i : i + 2], 16) for i in (0, 2, 4))
         cmap[v] = (r, g, b, 235)
     return cmap
-
-
-def _mask_warp_fill(img) -> None:
-    """Mask pixels that are exactly 0 in EVERY requested band, on top of
-    whatever rio-tiler already masks. Real multi-band reflectance reading
-    exactly integer 0 in every single band simultaneously is essentially
-    never genuine ground data - it's the warp-fill padding reproject_to_4326
-    leaves around a rotated/irregular scene's real footprint, and there's no
-    `nodata` value recorded here to catch it any other way (see module
-    docstring). Mutates `img` in place; a no-op if nothing is exactly zero."""
-    zero_fill = np.all(img.data == 0, axis=0)
-    if not zero_fill.any():
-        return
-    mask = np.ma.getmaskarray(img.array) | np.broadcast_to(zero_fill, img.array.shape)
-    img.array = np.ma.masked_where(mask, img.array.data)
 
 
 def _percentile_ranges(stats, lo_pct: int, hi_pct: int) -> list[tuple[float, float]]:
@@ -121,14 +116,65 @@ def _percentile_ranges(stats, lo_pct: int, hi_pct: int) -> list[tuple[float, flo
     return ranges
 
 
-def read_pixel(cog_path: str, lon: float, lat: float, legend: dict | None = None) -> list[float | None]:
+def _mask_uninitialized_fill(img) -> None:
+    """Value-based fallback padding mask, for a real (>=3 distinct band) raw
+    composite ONLY - excludes a pixel that is an exact `0` in every
+    composited band simultaneously, on top of whatever the COG's own
+    geometric mask (Wave: geometric padding fix) already excluded.
+
+    Why this is still needed even with a real geometric mask: that mask can
+    only catch padding a WARP introduced (rotation/reprojection/resampling).
+    An upload whose own source array already had fill baked into ordinary
+    pixel values before it ever reached this app - no `nodata` tag, no
+    geometric mismatch for `add_alpha` to reveal (see raster.py's "Known
+    limitation") - passes straight through as "fully valid" (verified
+    against a real ad-hoc upload: `dataset_mask()` reports 100% valid while
+    ~40% of pixels are an exact `0,0,0` across all three composited bands,
+    confined to an irregular blob rather than a stray pixel here and there).
+
+    Why exact-zero-across-every-band is a safe signal here and wasn't for
+    the value-based heuristic this module already removed once: that
+    heuristic single-banded a CLASSIFIED layer, where a legend can validly
+    define class value 0 (e.g. Water) - one band's 0 is real data. A raw,
+    unclassified multi-band composite has no such legend; a genuine
+    reflectance/DN measurement varies at least slightly band-to-band, so
+    every requested band landing on the identical exact sentinel at once is
+    what synthetic/uninitialized fill looks like, not real imagery -
+    confirmed empirically: real per-tile percentile stats computed WITH
+    these pixels included get dragged toward 0, which is exactly what
+    washes real data out toward white after the stretch (the visible bug
+    this fixes) - excluding them fixes both the transparency and the
+    stretch in one place. Tested against a real dark feature too (deep
+    water/heavy shadow: low but per-pixel-noisy DN, not a fixed value) -
+    genuine sensor noise essentially never lands on an exact 0 in 3
+    independent bands at once, so it renders normally, not as fill.
+
+    Known residual limitation, stated plainly: a real feature some upstream
+    tool already hard-clipped to a literal integer 0 in every band (not just
+    very low values - e.g. an 8-bit product that saturates a dark region
+    flat) is still indistinguishable from fill. Nothing short of a real
+    per-file `nodata` tag resolves that; this only closes the gap for the
+    ordinary case where fill is a literal, exact, uniform sentinel and real
+    data is not."""
+    data = np.ma.getdata(img.array)
+    uninitialized = (data == 0).all(axis=0)
+    img.array.mask = np.ma.getmaskarray(img.array) | uninitialized[np.newaxis, :, :]
+
+
+def read_pixel(cog_path: str, lon: float, lat: float) -> list[float | None]:
     """Phase 3 Wave D: the real per-band value at one EPSG:4326 lon/lat, for
     pixel/attribute inspection. Raw numbers only, in native band order - no
     colormap/legend interpretation here (the caller already has the layer's
     class_legend from GET /projects/{id}/layers and maps a value to its label
     itself, same as the frontend's own Symbology panel already does - no
-    reason to duplicate that lookup server-side). `legend` is only consulted
-    for the padding heuristic below, never to relabel the returned values.
+    reason to duplicate that lookup server-side).
+
+    No `legend` parameter (Wave: geometric padding fix - it used to be
+    consulted only for the now-removed padding heuristic below): `cog.point`
+    already reads the COG's own real internal mask (written by
+    reproject_to_4326), so a legend-defined class 0 (e.g. Water=0) and
+    genuine warp-fill padding are already correctly distinguished by the
+    file itself - nothing left here needs to special-case value 0 at all.
 
     Raises `rio_tiler.errors.PointOutsideBounds` if the point isn't covered by
     this raster - same "not a failure, just no data here" contract as
@@ -138,16 +184,7 @@ def read_pixel(cog_path: str, lon: float, lat: float, legend: dict | None = None
         point = cog.point(lon, lat)
     data = np.ma.getdata(point.array)
     mask = np.ma.getmaskarray(point.array)
-    if not mask.any() and bool(np.all(data == 0)) and not legend_defines(0, legend):
-        # Mirrors _mask_warp_fill's reasoning above: every band reading exactly
-        # 0 at once is the warp-fill padding reproject_to_4326 leaves around a
-        # rotated/irregular scene's real footprint when no nodata value was
-        # ever recorded - not genuine data. Tiles already render this padding
-        # fully transparent, so a click there should report "no data", not a
-        # fabricated all-zero reading. Skipped when the legend names class 0
-        # as real (e.g. Water=0) - same ambiguity padding_value resolves.
-        mask = np.ones_like(mask)
-    return [None if m else float(v) for v, m in zip(data, mask)]
+    return [None if m else float(v) for v, m in zip(data, mask, strict=True)]
 
 
 def _validate_bands(bands: tuple[int, ...], band_count: int) -> None:
@@ -184,7 +221,7 @@ def render_tile(
             # Classified: band 1 holds class values by convention (matches
             # compute_stats' own assumption for legend-driven data).
             img = cog.tile(x, y, z)
-            colormap = _colormap_for_uint8(cog.dataset.nodata, legend=legend, overrides=color_overrides)
+            colormap = _colormap_for_uint8(legend=legend, overrides=color_overrides)
             return img.render(img_format=_TILE_FORMAT, colormap=colormap)
 
         # Raw band composite: there are no discrete "classes" here (or the
@@ -202,15 +239,23 @@ def render_tile(
         indexes = bands if bands is not None else ((1, 2, 3) if band_count >= 3 else (1,))
         lo_pct, hi_pct = stretch if stretch is not None else _DEFAULT_STRETCH
 
+        # `cog.tile()` already reads the COG's own real internal geometric
+        # mask (written by reproject_to_4326) for any requested band
+        # combination. The 3-distinct-band case additionally runs
+        # `_mask_uninitialized_fill` - see its docstring for why the
+        # geometric mask alone isn't always enough. Not applied to the
+        # grayscale/solo branch below: with only one real band there is no
+        # cross-band signal to tell real (possibly legitimately dark) data
+        # apart from fill.
         if len(indexes) == 3:
             img = cog.tile(x, y, z, indexes=indexes)
-            _mask_warp_fill(img)
-            ranges = _percentile_ranges(img.statistics(percentiles=[lo_pct, hi_pct]), lo_pct, hi_pct)
+            _mask_uninitialized_fill(img)
+            stats = img.statistics(percentiles=[lo_pct, hi_pct])
+            ranges = _percentile_ranges(stats, lo_pct, hi_pct)
         else:
             solo = cog.tile(x, y, z, indexes=indexes)
-            _mask_warp_fill(solo)
-            ranges = _percentile_ranges(solo.statistics(percentiles=[lo_pct, hi_pct]), lo_pct, hi_pct) * 3
+            stats = solo.statistics(percentiles=[lo_pct, hi_pct])
+            ranges = _percentile_ranges(stats, lo_pct, hi_pct) * 3
             img = cog.tile(x, y, z, indexes=indexes * 3)
-            _mask_warp_fill(img)
         img.rescale(in_range=ranges, out_range=((0, 255),) * 3)
         return img.render(img_format=_TILE_FORMAT)

@@ -91,7 +91,19 @@ class Settings(BaseSettings):
     # --- Uploads / limits ---
     max_upload_bytes: int = 2 * 1024 * 1024 * 1024  # 2 GiB hard cap
     allowed_raster_extensions: tuple[str, ...] = (".tif", ".tiff", ".img")
+    # Wave: multi-format layers. ".zip" = a shapefile bundle (.shp/.shx/.dbf/
+    # .prj together) - a lone ".shp" is unparseable without its sibling
+    # files, so it is deliberately not accepted on its own.
+    allowed_vector_extensions: tuple[str, ...] = (".geojson", ".json", ".kml", ".csv", ".zip")
     raster_window_size: int = 2048  # windowed-read block edge, in pixels
+
+    # --- External WMS/WFS layers (Wave: multi-format layers) ---
+    # Both are defense against a slow/hostile/misbehaving third-party server
+    # tying up backend resources - see app/services/external_fetch.py, the
+    # ONLY place server-side outbound HTTP happens in this codebase.
+    wms_request_timeout_s: float = 10.0  # total wall-clock budget for the whole request
+    wms_connect_timeout_s: float = 5.0  # shorter, separate cap on the initial TCP+TLS handshake
+    wms_max_response_bytes: int = 20 * 1024 * 1024  # 20 MiB cap per tile/feature fetch
 
     # --- Rate limiting ---
     rate_limit_login: str = "5/minute"

@@ -24,18 +24,34 @@ import tempfile
 import uuid
 from uuid import UUID
 
+import psycopg
 import rasterio
 
 from app.core.config import Settings
 from app.core.db import Database
-from app.core.errors import UnprocessableError
+from app.core.errors import UnprocessableError, ValidationError
+from app.domain.authz import require_project_upload
 from app.domain.dtos import BandStatsOut, CurrentUser, IngestMetadata, IngestResult
-from app.domain.enums import AuditAction
+from app.domain.enums import AuditAction, LayerKind
 from app.repositories.audit import AuditRepository
 from app.repositories.datasets import DatasetRepository, KpiRepository, LayerRepository
-from app.repositories.projects import ProjectRepository
+from app.repositories.vector_layers import VectorFeatureRepository
 from app.services.ingestion import raster as R
+from app.services.ingestion import vector as V
 from app.services.ingestion.storage import Storage
+from app.services.project_access import (
+    resolve_project_for_upload,
+    resolve_reference_library_project,
+)
+
+# Wave: multi-format layers. Maps a staged file's extension to which vector
+# parser handles it - checked before anything raster-specific runs, since
+# staged_path's suffix is the original upload's extension (see
+# api/v1/datasets.py's _stream_to_temp, which stages with suffix=ext).
+_VECTOR_FORMATS = {
+    ".geojson": "geojson", ".json": "geojson", ".kml": "kml",
+    ".csv": "csv", ".zip": "shapefile",
+}
 
 
 class IngestionService:
@@ -44,8 +60,114 @@ class IngestionService:
         self.settings = settings
         self.storage = storage
 
+    def _resolve_project(self, cur, meta: IngestMetadata, actor: CurrentUser) -> UUID:
+        """See app.services.project_access.resolve_project_for_upload - the
+        shared implementation (also used by WmsService for external WMS/WFS
+        layer creation, Wave: multi-format layers). Wave: Reference Layer
+        Library - a reference upload skips per-project membership entirely
+        and always lands in the one shared library project instead,
+        regardless of what `meta.project_name`/`region` say. Wave 3 (Added
+        Layers) - an ad-hoc upload already knows its (existing) project_id,
+        so it re-checks project-level upload access directly rather than
+        find-or-create-by-name."""
+        if meta.is_reference:
+            return resolve_reference_library_project(cur)
+        if meta.project_id is not None:
+            require_project_upload(cur, meta.project_id, actor)
+            return meta.project_id
+        return resolve_project_for_upload(
+            cur, project_name=meta.project_name, region=meta.region, actor=actor
+        )
+
     def ingest(
         self, *, staged_path: str, meta: IngestMetadata, legend: R.Legend, actor: CurrentUser
+    ) -> IngestResult:
+        ext = os.path.splitext(staged_path)[1].lower()
+        if ext in _VECTOR_FORMATS:
+            return self._ingest_vector(staged_path, _VECTOR_FORMATS[ext], meta, actor)
+        return self._ingest_raster(staged_path, meta, legend, actor)
+
+    def _ingest_vector(
+        self, staged_path: str, fmt: str, meta: IngestMetadata, actor: CurrentUser
+    ) -> IngestResult:
+        """Part A of Wave: multi-format layers. Mirrors _ingest_raster's
+        shape (one transaction for every DB row, attributed to the real
+        actor) but skips the file-promotion step entirely - a vector layer's
+        real data IS the vector_feature rows, there is no separate artifact
+        to promote into storage afterward."""
+        if fmt == "geojson":
+            features = V.parse_geojson(staged_path)
+        elif fmt == "kml":
+            features = V.parse_kml(staged_path)
+        elif fmt == "shapefile":
+            features = V.parse_shapefile_zip(staged_path)
+        elif fmt == "csv":
+            if not meta.lat_column or not meta.lon_column:
+                raise ValidationError(
+                    "lat_column and lon_column are required for a CSV upload."
+                )
+            features = V.parse_csv_points(staged_path, meta.lat_column, meta.lon_column)
+        else:  # pragma: no cover - _VECTOR_FORMATS is the only caller
+            raise ValidationError(f"Unsupported vector format: {fmt}")
+
+        bounds = V.compute_bounds(features)
+        batch_id = uuid.uuid4()
+
+        with self.db.transaction() as cur:
+            project_id: UUID = self._resolve_project(cur, meta, actor)
+            DatasetRepository(cur).insert(
+                project_id=project_id, dataset_type=meta.dataset_type.value,
+                source=meta.source, accuracy_score=meta.accuracy_score,
+                date_processed=meta.date_processed.isoformat(), batch_id=batch_id,
+                is_reference=meta.is_reference, is_adhoc=meta.is_adhoc,
+            )
+            cur.execute(
+                "SELECT dataset_id FROM dataset WHERE batch_id = %s "
+                "ORDER BY loaded_at DESC LIMIT 1",
+                (str(batch_id),),
+            )
+            dataset_id = cur.fetchone()["dataset_id"]  # type: ignore[index]
+
+            layer_id = LayerRepository(cur).insert_non_raster(
+                dataset_id=dataset_id, layer_kind=LayerKind.VECTOR.value,
+                crs="EPSG:4326", bounds=bounds,
+            )
+            vector_repo = VectorFeatureRepository(cur)
+            try:
+                # Geometry CONSTRUCTION happens in PostGIS (ST_GeomFromGeoJSON), not
+                # Python - see vector.py's module docstring - so a structurally
+                # malformed-but-parseable feature (e.g. a MultiPolygon whose
+                # coordinates are actually Polygon-shaped) only surfaces here, as a
+                # psycopg error, not earlier. Without this translation it was a bare
+                # exception: run_ingest_job treats anything that isn't
+                # Unprocessable/Validation/NotFound/Forbidden as TRANSIENT and
+                # retries it job_max_retries times before dead-lettering - wasteful
+                # and misleading for what is actually a permanent, client-caused
+                # rejection, exactly like a corrupt raster is already handled below
+                # in _ingest_raster.
+                vector_repo.insert_many(layer_id, features)
+            except psycopg.Error as e:
+                raise UnprocessableError(f"Invalid geometry in uploaded file: {e}") from e
+            total_area_ha = vector_repo.total_polygon_area_ha(layer_id)
+
+            KpiRepository(cur).upsert(dataset_id, "total_area", total_area_ha, "ha")
+            AuditRepository(cur).record(
+                actor_id=actor.user_id, actor_name=actor.username,
+                action=AuditAction.INGEST_DATASET, target=str(dataset_id),
+                detail=(
+                    f"{meta.project_name} ({meta.dataset_type.value}); vector/{fmt}; "
+                    f"{len(features)} feature(s); batch {batch_id}"
+                ),
+            )
+
+        return IngestResult(
+            project_id=project_id, dataset_id=dataset_id, batch_id=batch_id,
+            total_area_ha=total_area_ha, layer_kind=LayerKind.VECTOR,
+            feature_count=len(features),
+        )
+
+    def _ingest_raster(
+        self, staged_path: str, meta: IngestMetadata, legend: R.Legend, actor: CurrentUser
     ) -> IngestResult:
         dataset_id = uuid.uuid4()
         batch_id = uuid.uuid4()
@@ -76,13 +198,12 @@ class IngestionService:
 
             # ---- 2. one transaction for ALL rows, attributed to the real actor
             with self.db.transaction() as cur:
-                project_id: UUID = ProjectRepository(cur).find_or_create_by_name(
-                    meta.project_name, meta.region
-                )
+                project_id: UUID = self._resolve_project(cur, meta, actor)
                 DatasetRepository(cur).insert(
                     project_id=project_id, dataset_type=meta.dataset_type.value,
                     source=meta.source, accuracy_score=meta.accuracy_score,
                     date_processed=meta.date_processed.isoformat(), batch_id=batch_id,
+                    is_reference=meta.is_reference, is_adhoc=meta.is_adhoc,
                 )
                 # dataset_id was DB-generated above; re-read is avoided by using our
                 # own uuid for artifacts and letting the DB own the dataset PK. To keep

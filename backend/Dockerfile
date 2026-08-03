@@ -35,7 +35,8 @@ RUN pip install \
       "alembic==1.14.0" "sqlalchemy==2.0.36" "structlog==24.4.0" "slowapi==0.1.9" \
       "arq==0.28.0" "prometheus-client==0.25.0" \
       "rio-cogeo==7.0.2" "rio-tiler==9.4.0" \
-      "boto3==1.35.90"
+      "boto3==1.35.90" \
+      "httpx==0.28.1" "pyshp==2.3.1" "defusedxml==0.7.1"
 
 # ---------- runtime ----------
 FROM python:3.12-slim AS runtime

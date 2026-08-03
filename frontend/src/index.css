@@ -173,9 +173,25 @@ a {
 .shell-nav {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 16px;
   flex: 1;
   margin-top: 8px;
+}
+
+.shell-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.shell-nav-group-label {
+  padding: 0 10px 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--sidebar-text);
+  opacity: 0.6;
 }
 
 .shell-nav-link {
@@ -213,6 +229,17 @@ a {
   font-size: 13px;
   font-weight: 500;
   color: var(--sidebar-text-active);
+}
+
+/* Wave: password reset - "Change password" sits next to "Sign out", the
+   sidebar's existing spot for account-level actions. Stacked, not side by
+   side - the sidebar is narrow and two ghost-buttons in a row would wrap
+   awkwardly at this width. */
+.shell-user-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
 }
 
 /* sidebar sits on a dark surface while the rest of the app is light —
@@ -270,7 +297,11 @@ a {
 /* ---------------------------------------------------------- page chrome */
 
 .page {
-  max-width: 1080px;
+  width: 100%;
+  /* Fills the space next to the sidebar on normal/wide screens; capped so
+   * cards don't stretch absurdly thin on an ultrawide monitor - 1600px is
+   * roughly 4-5 stat cards or 6-7 layer cards per row before it feels sparse. */
+  max-width: 1600px;
   margin: 0 auto;
   display: flex;
   flex-direction: column;
@@ -423,6 +454,60 @@ a {
 .table-actions-cell {
   text-align: right;
   white-space: nowrap;
+}
+
+/* Wave: three-tier user removal - a row can now offer Deactivate/Hide-or-
+   Unhide/Permanently-delete all at once, instead of the single action every
+   other actions-cell in this app has needed so far. */
+.table-actions-multi {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+}
+
+.status-badge-gap {
+  margin-left: 6px;
+}
+
+.checkbox-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+/* Wave: bulk select + delete (Projects, Users). */
+.select-cell {
+  width: 1%;
+  white-space: nowrap;
+}
+
+.bulk-action-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: var(--accent-wash);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  padding: 10px 16px;
+}
+
+.bulk-action-bar-count {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent-strong);
+}
+
+.bulk-delete-list {
+  margin: 0;
+  padding-left: 20px;
+  max-height: 220px;
+  overflow-y: auto;
+  font-size: 13px;
 }
 
 /* ---------------------------------------------------------- spinner */
@@ -579,6 +664,40 @@ a {
 
 .success-banner-text {
   flex: 1;
+}
+
+/* Wave: User Management - the one-time "here's the password, copy it now"
+   confirmation on the Users page. Reuses .success-banner's shell but needs
+   room for a multi-line body (title + hint + the password itself) plus a
+   dismiss button, instead of the single text line SuccessBanner renders. */
+.credentials-banner {
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.credentials-banner-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.credentials-banner-title {
+  margin: 0;
+  font-size: 13px;
+}
+
+.credentials-banner-password {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 600;
+  background: #ffffff;
+  border: 1px solid rgba(11, 107, 70, 0.35);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  display: inline-block;
+  user-select: all;
+  width: fit-content;
 }
 
 /* ---------------------------------------------------------- confirm dialog */
@@ -993,6 +1112,13 @@ a {
   resize: vertical;
 }
 
+.projects-search {
+  display: block;
+  width: 100%;
+  max-width: 360px;
+  margin-bottom: 16px;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
@@ -1010,6 +1136,51 @@ a {
   gap: 12px;
   align-items: center;
   padding-top: 4px;
+}
+
+.legend-builder {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.legend-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.legend-row-pixel {
+  width: 64px;
+  flex: none;
+}
+
+.legend-row-select {
+  flex: 1;
+  min-width: 160px;
+}
+
+.legend-row-custom {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+}
+
+.legend-row-color {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: none;
+  cursor: pointer;
+  flex: none;
+}
+
+.legend-row-remove {
+  flex: none;
+  padding: 6px 10px;
 }
 
 /* ---------------------------------------------------------- upload steps */
@@ -1087,6 +1258,8 @@ a {
 .map-frame {
   position: relative;
   height: 460px;
+  display: flex;
+  flex-direction: column;
   border-radius: var(--radius-md);
   overflow: hidden;
   border: 1px solid var(--border);
@@ -1103,7 +1276,125 @@ a {
   border: none;
 }
 
-/* ---------------------------------------------------------- GEE-style map chrome (Wave E) */
+/* ---------------------------------------------------------- map chrome (Wave: map UI redesign) */
+
+/* Full-width bar above the map - zoom/Extent/Measure/Identify/basemap on the
+ * left, a live Lat/Lon/Zoom/Scale readout on the right. Replaces the old
+ * floating GEE-style controls; every control inside is the same tool as
+ * before, just relocated here (see MapToolbar.jsx). */
+.map-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex: none;
+  padding: 6px 10px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+}
+
+.map-toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.map-toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 10px;
+  background: none;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.map-toolbar-btn-text {
+  padding: 0 10px;
+}
+
+.map-toolbar-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.map-toolbar-btn-active {
+  background: var(--accent-wash);
+  border-color: var(--accent);
+  color: var(--accent-strong);
+}
+
+.map-toolbar-select {
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.map-toolbar-dropdown {
+  position: relative;
+}
+
+.map-toolbar-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  min-width: 120px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lift);
+  padding: 4px;
+  gap: 2px;
+}
+
+.map-toolbar-menu button {
+  border: none;
+  background: none;
+  text-align: left;
+  padding: 6px 8px;
+  border-radius: 6px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12.5px;
+}
+
+.map-toolbar-menu button:hover {
+  background: var(--surface-hover);
+}
+
+.map-toolbar-readout {
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* The docked Layers column + the actual map, side by side, filling the rest
+ * of .map-frame below the toolbar. */
+.map-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.map-canvas-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
 
 .map-overlay-topleft,
 .map-overlay-topright {
@@ -1124,37 +1415,23 @@ a {
   align-items: flex-end;
 }
 
-/* Leaflet's own zoom control defaults to the same top-left corner as
- * .map-overlay-topleft's toolbar - push it down to clear that toolbar's
- * height instead of overlapping it. */
-.leaflet-top.leaflet-left {
-  top: 54px;
+/* Leaflet's default scale control, restyled to match the app's chrome
+ * (Wave: map UI redesign) - a real cartographic distance bar, bottom-right
+ * of the map. */
+.leaflet-control-scale {
+  margin: 0 10px 10px 0 !important;
 }
 
-.leaflet-control-zoom {
-  border: none !important;
-  border-radius: var(--radius-sm) !important;
-  box-shadow: var(--shadow-card) !important;
+.leaflet-control-scale-line {
   background: var(--chrome-wash) !important;
-  overflow: hidden;
-}
-
-/* Phase 3 Wave F: Leaflet's own leaflet.css hardcodes a solid white
- * background on each zoom button (`.leaflet-bar a { background-color: #fff }`)
- * - override so each BUTTON is transparent at rest (the container above
- * supplies the light wash behind both of them) and only fills in on hover. */
-.leaflet-control-zoom a {
-  background-color: transparent !important;
-}
-
-.leaflet-control-zoom a:hover {
-  background-color: var(--chrome-wash-hover) !important;
-}
-
-.map-toolbar-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  border: 1px solid var(--border-strong) !important;
+  border-top: none !important;
+  color: var(--text) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 11px !important;
+  padding: 2px 6px !important;
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  box-shadow: var(--shadow-card);
 }
 
 .icon-button {
@@ -1178,43 +1455,19 @@ a {
   color: var(--accent-strong);
 }
 
-.basemap-toggle {
-  display: inline-flex;
-  background: var(--chrome-wash);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-card);
-  padding: 3px;
-  gap: 2px;
-}
-
-.basemap-toggle-btn {
-  border: none;
-  background: transparent;
-  padding: 5px 12px;
-  font-size: 12.5px;
-  font-weight: 500;
-  color: var(--text-muted);
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
-}
-
-.basemap-toggle-btn:hover:not(.basemap-toggle-btn-active) {
-  background: var(--surface-hover);
-  color: var(--text);
-}
-
-.basemap-toggle-btn-active {
-  background: var(--accent);
-  color: #ffffff;
-}
-
 .layers-panel {
-  position: relative; /* anchors .symbology-popover to this panel, not the viewport */
-  width: 240px;
+  /* anchors .symbology-popover to this panel, not the viewport - deliberately
+   * NOT overflow:auto here even though it's the fixed-height docked column:
+   * that would clip the popover, which is positioned outside this element's
+   * own width (see .symbology-popover's `left: calc(100% + 10px)`).
+   * .layers-panel-groups below carries the actual scrolling instead. */
+  position: relative;
+  flex: none;
+  width: 260px;
+  display: flex;
+  flex-direction: column;
   background: var(--surface);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-card);
+  border-right: 1px solid var(--border);
   font-size: 12.5px;
 }
 
@@ -1223,18 +1476,14 @@ a {
   align-items: center;
   justify-content: space-between;
   width: 100%;
+  flex: none;
   background: var(--accent);
   color: #ffffff;
   border: none;
-  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
   padding: 8px 12px;
   font-size: 12.5px;
   font-weight: 600;
   cursor: pointer;
-}
-
-.layers-panel-header-collapsed {
-  border-radius: var(--radius-sm);
 }
 
 .layers-panel-chevron {
@@ -1246,13 +1495,54 @@ a {
   transform: rotate(180deg);
 }
 
+.layers-panel-groups {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.layers-panel-toolbar {
+  flex: none;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.layers-panel-toolbar .ghost-button {
+  width: 100%;
+}
+
+.layer-group + .layer-group {
+  border-top: 1px solid var(--border);
+}
+
+.layer-group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: var(--bg-elevated);
+  border: none;
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.layer-group-chevron {
+  display: inline-block;
+  transition: transform 0.15s ease;
+}
+
+.layer-group-chevron-open {
+  transform: rotate(180deg);
+}
+
 .layers-panel-list {
   list-style: none;
   margin: 0;
   padding: 4px 0;
-  max-height: 280px;
-  overflow-y: auto;
-  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
 }
 
 .layer-row {
@@ -1277,15 +1567,38 @@ a {
   opacity: 0.5;
 }
 
-.layer-row-label {
+.layer-row-body {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.layer-row-label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text);
 }
 
-.layer-row-gear {
+.layer-row-feature-count {
+  font-size: 11px;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+}
+
+.layer-row-warning {
+  flex-shrink: 0;
+  font-size: 12px;
+  line-height: 1;
+  padding: 3px 2px;
+  color: #b8860b;
+  cursor: help;
+}
+
+.layer-row-info,
+.layer-row-gear,
+.layer-row-remove {
   flex-shrink: 0;
   background: none;
   border: none;
@@ -1297,15 +1610,48 @@ a {
   border-radius: 4px;
 }
 
+.layer-row-info:hover,
 .layer-row-gear:hover {
   color: var(--accent-strong);
   background: var(--surface-hover);
 }
 
+.layer-row-remove:hover:not(:disabled) {
+  color: var(--clay);
+  background: var(--clay-wash);
+}
+
+.layer-row-remove:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.layer-info-fields {
+  margin: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 10px;
+  font-size: 12.5px;
+}
+
+.layer-info-fields dt {
+  color: var(--text-faint);
+}
+
+.layer-info-fields dd {
+  margin: 0;
+  color: var(--text);
+  font-family: var(--font-mono);
+}
+
 .symbology-popover {
   position: absolute;
   top: 0;
-  right: calc(100% + 10px);
+  left: calc(100% + 10px);
+  /* Above Leaflet's own panes (z-index up to ~700) - without this the popover
+   * sits behind the map canvas now that .layers-panel is a normal docked
+   * sibling instead of a z-index:1000 floating overlay. */
+  z-index: 1000;
   width: 260px;
   background: var(--surface);
   border-radius: var(--radius-sm);
@@ -1379,24 +1725,6 @@ a {
   height: 100%;
   width: 100%;
   background: var(--bg-elevated);
-}
-
-.coord-readout {
-  position: absolute;
-  right: 10px;
-  bottom: 10px;
-  z-index: 1000;
-  background: rgba(20, 20, 20, 0.72);
-  color: #fff;
-  font-size: 11.5px;
-  font-family: var(--font-mono);
-  padding: 4px 10px;
-  border-radius: 999px;
-  pointer-events: none;
-}
-
-.coord-readout-crs {
-  opacity: 0.65;
 }
 
 .measure-tools {
@@ -1491,6 +1819,15 @@ a {
   display: block;
 }
 
+/* Wave: multi-format layers - vector/external layers have no raster preview
+   image to show here. */
+.layer-preview-placeholder {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  text-align: center;
+  padding: 0 1rem;
+}
+
 .layer-meta {
   display: flex;
   flex-wrap: wrap;
@@ -1502,6 +1839,19 @@ a {
 .layer-type {
   font-weight: 600;
   color: var(--accent);
+}
+
+.layer-adhoc-badge {
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 1px 5px;
+  margin-left: 4px;
 }
 
 /* ---------------------------------------------------------- symbology */

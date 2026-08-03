@@ -34,6 +34,7 @@ from app.core.metrics import jobs_submitted_total
 from app.core.ratelimit import limiter
 from app.domain.dtos import CurrentUser, IngestMetadata, JobAccepted
 from app.domain.enums import UPLOAD_ROLES
+from app.services.ingestion.vector import csv_header
 from app.services.jobs_service import JobService
 from app.workers.jobs import run_ingest_job
 from app.workers.queue import TaskRunner
@@ -42,6 +43,16 @@ router = APIRouter(tags=["datasets"])
 
 _CHUNK = 1024 * 1024  # 1 MiB
 _INGEST_KIND = "ingest_dataset"
+
+
+def _has_real_label(entry: object) -> bool:
+    """False for an entry whose label is blank/whitespace/"none" - the one
+    thing a class_legend entry must never be, since it would otherwise
+    surface as a real "None" class in KPIs/evolution. Checked here (the sole
+    entry point for a class_legend, regardless of client) rather than only in
+    the upload builder UI, so a direct API call can't reopen the same hole."""
+    label = entry.get("label") if isinstance(entry, dict) else entry
+    return isinstance(label, str) and bool(label.strip()) and label.strip().lower() != "none"
 
 
 async def _stream_to_temp(
@@ -93,15 +104,22 @@ async def upload_dataset(
     classification_method: str = Form(""),
     pixel_size_m: float = Form(10.0),
     class_legend: str | None = Form(None),
+    lat_column: str | None = Form(None),
+    lon_column: str | None = Form(None),
+    is_reference: bool = Form(False),
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> JobAccepted:
-    # validate extension against the allow-list
+    # validate extension against the allow-list (raster OR vector - Wave:
+    # multi-format layers; IngestionService.ingest branches on this same
+    # extension to pick raster vs vector parsing).
     ext = os.path.splitext(file.filename or "")[1].lower()
-    if ext not in settings.allowed_raster_extensions:
+    allowed = settings.allowed_raster_extensions + settings.allowed_vector_extensions
+    if ext not in allowed:
         raise ValidationError(
-            f"Unsupported file type '{ext or '(none)'}'. "
-            f"Allowed: {', '.join(settings.allowed_raster_extensions)}."
+            f"Unsupported file type '{ext or '(none)'}'. Allowed: {', '.join(allowed)}."
         )
+    if ext == ".csv" and (not lat_column or not lon_column):
+        raise ValidationError("lat_column and lon_column are required for a CSV upload.")
 
     # validate metadata via the DTO (raises 422 on bad values)
     try:
@@ -109,7 +127,8 @@ async def upload_dataset(
             project_name=project_name, region=region, dataset_type=dataset_type,  # type: ignore[arg-type]
             source=source, classification_method=classification_method,
             accuracy_score=accuracy_score, date_processed=date_processed,  # type: ignore[arg-type]
-            pixel_size_m=pixel_size_m,
+            pixel_size_m=pixel_size_m, lat_column=lat_column, lon_column=lon_column,
+            is_reference=is_reference,
         )
     except Exception as e:
         raise ValidationError(f"Invalid metadata: {e}") from e
@@ -120,6 +139,8 @@ async def upload_dataset(
             legend = json.loads(class_legend)
         except json.JSONDecodeError as e:
             raise ValidationError("class_legend must be valid JSON.") from e
+        if isinstance(legend, dict):
+            legend = {k: v for k, v in legend.items() if _has_real_label(v)} or None
 
     # accuracy_score is a classification-accuracy metric: only meaningful (and
     # required) when a class_legend defines what's being classified.
@@ -130,6 +151,20 @@ async def upload_dataset(
         file, suffix=ext, max_bytes=settings.max_upload_bytes,
         staging_dir=settings.upload_staging_dir,
     )
+
+    # Wave: multi-format layers. Validated against the REAL uploaded file's
+    # header, not the client's own (UX-only) CSV parse - a direct API call
+    # supplying columns that don't actually exist must fail here, before a
+    # job slot is even consumed, exactly like "reject clearly if no valid
+    # lat/lon can be resolved" for the KML/shapefile/GeoJSON formats above.
+    if ext == ".csv":
+        header = csv_header(staged)
+        if lat_column not in header or lon_column not in header:
+            with contextlib.suppress(OSError):
+                os.unlink(staged)
+            raise ValidationError(
+                f"Columns '{lat_column}'/'{lon_column}' not found in the CSV header: {header}."
+            )
 
     request_id = request_id_ctx.get()
     job_id, is_new = jobs.submit(

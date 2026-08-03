@@ -22,12 +22,18 @@ from app.core.db import Database
 from app.core.errors import AuthError, ForbiddenError
 from app.domain.dtos import CurrentUser
 from app.domain.enums import Role
+from app.services.adhoc_layer_service import AdhocLayerService
 from app.services.auth_service import AuthService
 from app.services.ingestion.service import IngestionService
 from app.services.ingestion.storage import Storage
 from app.services.jobs_service import JobService
+from app.services.membership_service import MembershipService
 from app.services.project_service import ProjectService
+from app.services.reference_layer_service import ReferenceLayerService
 from app.services.tile_service import TileService
+from app.services.user_service import UserService
+from app.services.vector_layer_service import VectorLayerService
+from app.services.wms_service import WmsService
 from app.workers.queue import TaskRunner
 
 
@@ -62,6 +68,14 @@ def get_project_service(
     return ProjectService(db, settings, storage)
 
 
+def get_membership_service(db: Annotated[Database, Depends(get_db)]) -> MembershipService:
+    return MembershipService(db)
+
+
+def get_user_service(db: Annotated[Database, Depends(get_db)]) -> UserService:
+    return UserService(db)
+
+
 def get_ingestion_service(
     db: Annotated[Database, Depends(get_db)],
     settings: Annotated[Settings, Depends(get_settings)],
@@ -75,6 +89,25 @@ def get_job_service(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> JobService:
     return JobService(db, settings)
+
+
+def get_vector_layer_service(db: Annotated[Database, Depends(get_db)]) -> VectorLayerService:
+    return VectorLayerService(db)
+
+
+def get_wms_service(
+    db: Annotated[Database, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> WmsService:
+    return WmsService(db, settings)
+
+
+def get_reference_layer_service(db: Annotated[Database, Depends(get_db)]) -> ReferenceLayerService:
+    return ReferenceLayerService(db)
+
+
+def get_adhoc_layer_service(db: Annotated[Database, Depends(get_db)]) -> AdhocLayerService:
+    return AdhocLayerService(db)
 
 
 def get_tile_service(

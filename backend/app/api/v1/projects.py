@@ -10,6 +10,8 @@ from fastapi import APIRouter, Depends, Query
 
 from app.api.deps import CurrentUserDep, get_project_service, require_role
 from app.domain.dtos import (
+    BulkDeleteRequest,
+    BulkDeleteResult,
     CurrentUser,
     Page,
     ProjectDetail,
@@ -26,59 +28,64 @@ router = APIRouter(tags=["projects"])
 
 @router.get("/projects", response_model=Page[ProjectSummary])
 def list_projects(
-    _user: CurrentUserDep,
+    user: CurrentUserDep,
     svc: Annotated[ProjectService, Depends(get_project_service)],
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
+    search: Annotated[str | None, Query(max_length=200)] = None,
 ) -> Page[ProjectSummary]:
-    return svc.list_projects(limit, offset)
+    # Wave: project-level RBAC - only projects `user` actually has membership
+    # on (or every project, for an Administrator). See ProjectService.list_projects.
+    return svc.list_projects(user, limit, offset, search)
 
 
 @router.get("/projects/{project_id}", response_model=ProjectDetail)
 def get_project(
     project_id: UUID,
-    _user: CurrentUserDep,
+    user: CurrentUserDep,
     svc: Annotated[ProjectService, Depends(get_project_service)],
 ) -> ProjectDetail:
-    return svc.get_project(project_id)
+    return svc.get_project(project_id, user)
 
 
 @router.get("/projects/{project_id}/kpis", response_model=ProjectKpis)
 def get_kpis(
     project_id: UUID,
-    _user: CurrentUserDep,
+    user: CurrentUserDep,
     svc: Annotated[ProjectService, Depends(get_project_service)],
 ) -> ProjectKpis:
-    return svc.get_kpis(project_id)
+    return svc.get_kpis(project_id, user)
 
 
 @router.get("/projects/{project_id}/layers", response_model=ProjectLayers)
 def get_layers(
     project_id: UUID,
-    _user: CurrentUserDep,
+    user: CurrentUserDep,
     svc: Annotated[ProjectService, Depends(get_project_service)],
 ) -> ProjectLayers:
-    return svc.get_layers(project_id)
+    return svc.get_layers(project_id, user)
 
 
 @router.get("/projects/{project_id}/evolution", response_model=ProjectEvolution)
 def get_evolution(
     project_id: UUID,
-    _user: CurrentUserDep,
+    user: CurrentUserDep,
     svc: Annotated[ProjectService, Depends(get_project_service)],
 ) -> ProjectEvolution:
     """Phase 3 Wave G: land-class change across the project's real
     classified dated layers. `applicable=False` (not a 404/422) when fewer
     than 2 eligible dates exist - see ProjectService.get_evolution."""
-    return svc.get_evolution(project_id)
+    return svc.get_evolution(project_id, user)
 
 
 @router.get("/summary")
 def portfolio_summary(
-    _user: CurrentUserDep,
+    user: CurrentUserDep,
     svc: Annotated[ProjectService, Depends(get_project_service)],
 ) -> dict:
-    return svc.portfolio_summary()
+    # Wave: project-level RBAC (follow-up fix) - scoped to `user`'s visible
+    # projects; see ProjectService.portfolio_summary.
+    return svc.portfolio_summary(user)
 
 
 @router.delete("/projects/{project_id}", status_code=204, response_model=None)
@@ -88,3 +95,12 @@ def delete_project(
     svc: Annotated[ProjectService, Depends(get_project_service)],
 ) -> None:
     svc.delete_project(project_id, user)
+
+
+@router.post("/projects/bulk-delete", response_model=BulkDeleteResult)
+def bulk_delete_projects(
+    body: BulkDeleteRequest,
+    user: Annotated[CurrentUser, Depends(require_role(*DELETE_PROJECT_ROLES))],
+    svc: Annotated[ProjectService, Depends(get_project_service)],
+) -> BulkDeleteResult:
+    return BulkDeleteResult(results=svc.bulk_delete_projects(body.ids, user))

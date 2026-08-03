@@ -34,6 +34,12 @@ from app.core.errors import AuthError
 
 TokenType = Literal["access", "refresh", "tile"]
 
+# Single definition of "how long a password must be" - both scripts/create_admin.py
+# (CLI) and app.services.user_service (the in-app "create user" screen) check
+# against this ONE constant, so the rule can't silently diverge between the two
+# entry points that create an account (Wave: User Management).
+MIN_PASSWORD_LENGTH = 8
+
 
 def hash_password(plain: str) -> str:
     return bcrypt.hashpw(plain.encode(), bcrypt.gensalt()).decode()

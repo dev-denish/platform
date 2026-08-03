@@ -9,6 +9,7 @@ export default function ConfirmDialog({
   open,
   title,
   detail,
+  children,
   confirmLabel = "Confirm",
   onConfirm,
   onCancel,
@@ -34,6 +35,7 @@ export default function ConfirmDialog({
     >
       <h2 className="confirm-dialog-title">{title}</h2>
       {detail ? <p className="confirm-dialog-detail">{detail}</p> : null}
+      {children}
       <div className="form-actions">
         <button type="button" className="ghost-button" onClick={onCancel}>
           Cancel

@@ -8,8 +8,10 @@ import EmptyState from "../components/EmptyState.jsx";
 import ConfirmDialog from "../components/ConfirmDialog.jsx";
 import { StatusBadge } from "../components/StatusBadge.jsx";
 import ProjectMap from "../components/ProjectMap.jsx";
+import ProjectMembers from "../components/ProjectMembers.jsx";
 import LandscapeEvolutionTable from "../components/LandscapeEvolutionTable.jsx";
-import { canDeleteProject } from "../lib/roles.js";
+import AddExternalLayerDialog from "../components/AddExternalLayerDialog.jsx";
+import { canDeleteProject, canUpload } from "../lib/roles.js";
 import { formatDate, formatNumber, humanizeMetricName } from "../lib/format.js";
 import { datedLayerGroups } from "../lib/timeline.js";
 
@@ -63,6 +65,22 @@ function LayerMetricsSection({ layer, metrics }) {
   );
 }
 
+// Wave: multi-format layers. A vector/external layer has no raster preview
+// image (no COG, no fixed pixel size) - this label fills both gaps in the
+// layer-card grid instead of showing a broken image or "null m/px".
+function layerKindLabel(layerKind) {
+  switch (layerKind) {
+    case "vector":
+      return "Vector layer";
+    case "external_wms":
+      return "WMS layer";
+    case "external_wfs":
+      return "WFS layer";
+    default:
+      return "Raster layer";
+  }
+}
+
 export default function ProjectDetailPage() {
   const { projectId } = useParams();
   const { user } = useAuth();
@@ -71,10 +89,12 @@ export default function ProjectDetailPage() {
   const [kpis, setKpis] = useState(null);
   const [layers, setLayers] = useState(null);
   const [evolution, setEvolution] = useState(null);
+  const [members, setMembers] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [addLayerOpen, setAddLayerOpen] = useState(false);
 
   useEffect(() => {
     load();
@@ -109,20 +129,29 @@ export default function ProjectDetailPage() {
     }
   }
 
+  // Re-fetches only the members list - used by ProjectMembers after an
+  // add/remove/role-change, same reload-just-this-section pattern as
+  // reloadLayers above.
+  async function reloadMembers() {
+    setMembers(await apiFetch(`/projects/${projectId}/members`));
+  }
+
   async function load() {
     setLoading(true);
     setError(null);
     try {
-      const [detailRes, kpisRes, layersRes, evolutionRes] = await Promise.all([
+      const [detailRes, kpisRes, layersRes, evolutionRes, membersRes] = await Promise.all([
         apiFetch(`/projects/${projectId}`),
         apiFetch(`/projects/${projectId}/kpis`),
         apiFetch(`/projects/${projectId}/layers`),
         apiFetch(`/projects/${projectId}/evolution`),
+        apiFetch(`/projects/${projectId}/members`),
       ]);
       setDetail(detailRes);
       setKpis(kpisRes);
       setLayers(layersRes);
       setEvolution(evolutionRes);
+      setMembers(membersRes);
     } catch (err) {
       setError(err.message ?? "Could not load this project.");
     } finally {
@@ -148,12 +177,16 @@ export default function ProjectDetailPage() {
 
   // Same chronological (dated-first, then undated) ordering LayersPanel uses
   // on the map, so the two lists read consistently - lib/timeline.js's
-  // date-grouping stays meaningfully shared, not duplicated.
+  // date-grouping stays meaningfully shared, not duplicated. Wave 3 (Added
+  // Layers): an ad-hoc layer never has real metrics (see
+  // KpiRepository.for_project's exclusion) - excluded here rather than
+  // showing every one of them an empty "No metrics yet" card.
   const orderedLayers = layers
     ? (() => {
-        const dated = datedLayerGroups(layers.layers).map((g) => g.layer);
+        const official = layers.layers.filter((l) => !l.is_adhoc);
+        const dated = datedLayerGroups(official).map((g) => g.layer);
         const datedIds = new Set(dated.map((l) => l.layer_id));
-        return [...dated, ...layers.layers.filter((l) => !datedIds.has(l.layer_id))];
+        return [...dated, ...official.filter((l) => !datedIds.has(l.layer_id))];
       })()
     : [];
 
@@ -198,6 +231,13 @@ export default function ProjectDetailPage() {
 
       <ErrorBanner message={error} onRetry={load} />
 
+      <ProjectMembers
+        projectId={projectId}
+        members={members?.members}
+        currentUser={user}
+        onChanged={reloadMembers}
+      />
+
       <section className="panel">
         <div className="panel-header">
           <h2 className="panel-title">Key metrics</h2>
@@ -216,22 +256,49 @@ export default function ProjectDetailPage() {
       <section className="panel">
         <div className="panel-header">
           <h2 className="panel-title">Spatial layers</h2>
+          {user && canUpload(user.role) ? (
+            <button type="button" className="ghost-button" onClick={() => setAddLayerOpen(true)}>
+              + Add WMS/WFS layer
+            </button>
+          ) : null}
         </div>
+
+        <AddExternalLayerDialog
+          open={addLayerOpen}
+          projectId={projectId}
+          projectName={detail.name}
+          region={detail.region}
+          onCreated={async () => {
+            setAddLayerOpen(false);
+            await reloadLayers();
+          }}
+          onCancel={() => setAddLayerOpen(false)}
+        />
+
         {!layers || layers.layers.length === 0 ? (
           <EmptyState title="No layers yet" detail="Ingested rasters will appear here with their extent and preview." />
         ) : (
           <>
-            <ProjectMap layers={layers.layers} onRefreshLayers={reloadLayers} />
+            <ProjectMap layers={layers.layers} onRefreshLayers={reloadLayers} projectId={projectId} />
             <div className="layer-grid">
               {layers.layers.map((l) => (
                 <div className="layer-card" key={l.layer_id}>
                   <div className="layer-preview">
-                    <img src={l.preview_url} alt={`${l.type} preview`} loading="lazy" />
+                    {l.preview_url ? (
+                      <img src={l.preview_url} alt={`${l.type} preview`} loading="lazy" />
+                    ) : (
+                      <div className="layer-preview-placeholder">{layerKindLabel(l.layer_kind)}</div>
+                    )}
                   </div>
                   <div className="layer-meta">
-                    <span className="layer-type">{l.type}</span>
+                    <span className="layer-type">
+                      {l.is_adhoc ? l.source ?? "Untitled layer" : l.type}
+                      {l.is_adhoc ? <span className="layer-adhoc-badge"> Added</span> : null}
+                    </span>
                     <span className="mono-cell">{l.crs}</span>
-                    <span className="mono-cell">{l.pixel_size_m} m/px</span>
+                    <span className="mono-cell">
+                      {l.pixel_size_m != null ? `${l.pixel_size_m} m/px` : layerKindLabel(l.layer_kind)}
+                    </span>
                     <span className="mono-cell">{l.date_processed ?? "undated"}</span>
                   </div>
                 </div>

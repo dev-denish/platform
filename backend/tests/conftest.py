@@ -25,7 +25,7 @@ from rasterio.transform import from_origin
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.config import Settings  # noqa: E402
-from app.core.errors import AuthError, NotFoundError  # noqa: E402
+from app.core.errors import AuthError, ConflictError, NotFoundError, ValidationError  # noqa: E402
 from app.domain.dtos import (  # noqa: E402
     CurrentUser,
     DatasetOut,
@@ -33,11 +33,14 @@ from app.domain.dtos import (  # noqa: E402
     JobOut,
     KpiValue,
     LayerOut,
+    MemberOut,
     Page,
     ProjectDetail,
     ProjectKpis,
     ProjectLayers,
+    ProjectMembers,
     ProjectSummary,
+    UserOut,
 )
 from app.domain.enums import DatasetType, ProjectStatus, Role  # noqa: E402
 from app.services.ingestion.cog import convert_to_cog  # noqa: E402
@@ -100,12 +103,25 @@ def real_cog(tmp_path) -> RealCog:
 
 
 class FakeAuthService:
+    # API-contract tier only - the real verify_password-against-a-real-hash
+    # behavior is proven against a real DB (see
+    # tests/integration/test_password_reset.py). This fixed "correct"
+    # current password just lets route wiring (wrong-password -> 401,
+    # too-short-new-password -> 422, valid -> 204) be exercised without one.
+    _FAKE_CURRENT_PASSWORD = "correct-current-password-1"  # noqa: S105 - test fixture, not a credential
+
     def current_user_from_access(self, token: str) -> CurrentUser:
         if token == "admin-token":
             return CurrentUser(user_id=_ADMIN_ID, username="admin", role=Role.ADMINISTRATOR)
         if token == "viewer-token":
             return CurrentUser(user_id=_VIEWER_ID, username="viewer", role=Role.VIEWER)
         raise AuthError("Invalid authentication token.")
+
+    def change_password(self, user: CurrentUser, current_password: str, new_password: str) -> None:
+        if len(new_password) < 8:
+            raise ValidationError("Password must be at least 8 characters.")
+        if current_password != self._FAKE_CURRENT_PASSWORD:
+            raise AuthError("Incorrect current password.")
 
 
 class FakeProjectService:
@@ -116,7 +132,9 @@ class FakeProjectService:
     def __init__(self) -> None:
         self._deleted: set[UUID] = set()
 
-    def list_projects(self, limit: int, offset: int) -> Page[ProjectSummary]:
+    def list_projects(
+        self, user: CurrentUser, limit: int, offset: int, search: str | None = None
+    ) -> Page[ProjectSummary]:
         if _PROJECT_ID in self._deleted:
             return Page[ProjectSummary](items=[], total=0, limit=limit, offset=offset)
         item = ProjectSummary(
@@ -124,9 +142,11 @@ class FakeProjectService:
             status=ProjectStatus.ACTIVE, latest_dataset_id=None,
             latest_accuracy=88.5, latest_processed=None,
         )
+        if search and search.lower() not in item.name.lower():
+            return Page[ProjectSummary](items=[], total=0, limit=limit, offset=offset)
         return Page[ProjectSummary](items=[item], total=1, limit=limit, offset=offset)
 
-    def get_project(self, project_id: UUID) -> ProjectDetail:
+    def get_project(self, project_id: UUID, user: CurrentUser) -> ProjectDetail:
         if project_id != _PROJECT_ID or project_id in self._deleted:
             raise NotFoundError("Project not found.")
         return ProjectDetail(
@@ -141,12 +161,15 @@ class FakeProjectService:
             ],
         )
 
-    def get_kpis(self, project_id: UUID) -> ProjectKpis:
+    def get_kpis(self, project_id: UUID, user: CurrentUser) -> ProjectKpis:
         if project_id != _PROJECT_ID or project_id in self._deleted:
             raise NotFoundError("Project not found.")
-        return ProjectKpis(project_id=_PROJECT_ID, kpis={"total_area": KpiValue(value=2250.0, unit="ha")})
+        return ProjectKpis(
+            project_id=_PROJECT_ID,
+            layers={str(_LAYER_ID): {"total_area": KpiValue(value=2250.0, unit="ha")}},
+        )
 
-    def get_layers(self, project_id: UUID) -> ProjectLayers:
+    def get_layers(self, project_id: UUID, user: CurrentUser) -> ProjectLayers:
         if project_id != _PROJECT_ID or project_id in self._deleted:
             raise NotFoundError("Project not found.")
         return ProjectLayers(
@@ -161,7 +184,7 @@ class FakeProjectService:
             ],
         )
 
-    def portfolio_summary(self) -> dict:
+    def portfolio_summary(self, user: CurrentUser) -> dict:
         if _PROJECT_ID in self._deleted:
             return {"portfolio": {}, "project_count": 0}
         return {"portfolio": {"total_area": 2250.0}, "project_count": 1}
@@ -170,6 +193,132 @@ class FakeProjectService:
         if project_id != _PROJECT_ID or project_id in self._deleted:
             raise NotFoundError("Project not found.")
         self._deleted.add(project_id)
+
+
+class FakeMembershipService:
+    """API-contract tier, no Postgres - real membership authorization
+    (Administrator bypass, project-role-vs-global-role, GIS-Associate-only
+    management) is proven separately against a real DB - see
+    tests/integration/test_project_membership.py. This fake only needs to
+    exist so route wiring (path/method/response shape) can be exercised
+    without a database, same role FakeProjectService already plays."""
+
+    def __init__(self) -> None:
+        self._members: dict[UUID, list[dict]] = {}
+
+    def list_members(self, project_id: UUID, actor: CurrentUser) -> ProjectMembers:
+        if project_id != _PROJECT_ID:
+            raise NotFoundError("Project not found.")
+        return ProjectMembers(
+            project_id=project_id,
+            members=[MemberOut(**m) for m in self._members.get(project_id, [])],
+        )
+
+    def add_member(self, project_id: UUID, username: str, role, actor: CurrentUser) -> MemberOut:
+        if project_id != _PROJECT_ID:
+            raise NotFoundError("Project not found.")
+        member = {
+            "user_id": uuid.uuid4(), "username": username,
+            "role": role or Role.VIEWER, "added_at": datetime.now(UTC), "added_by": actor.user_id,
+        }
+        self._members.setdefault(project_id, []).append(member)
+        return MemberOut(**member)
+
+    def remove_member(self, project_id: UUID, user_id: UUID, actor: CurrentUser) -> None:
+        members = self._members.get(project_id, [])
+        kept = [m for m in members if m["user_id"] != user_id]
+        if len(kept) == len(members):
+            raise NotFoundError("This user is not a member of this project.")
+        self._members[project_id] = kept
+
+    def update_role(self, project_id: UUID, user_id: UUID, role, actor: CurrentUser) -> MemberOut:
+        for m in self._members.get(project_id, []):
+            if m["user_id"] == user_id:
+                m["role"] = role
+                return MemberOut(**m)
+        raise NotFoundError("This user is not a member of this project.")
+
+
+class FakeUserService:
+    """API-contract tier, no Postgres - the real create/duplicate/deactivate
+    behavior (the upsert() revival-bug fix, the partial unique index) is
+    proven separately against a real DB - see
+    tests/integration/test_user_management.py. This fake only needs to exist
+    so route wiring (path/method/RBAC/response shape) can be exercised
+    without a database, same role FakeMembershipService already plays."""
+
+    def __init__(self) -> None:
+        self._users: dict[UUID, dict] = {
+            _ADMIN_ID: {
+                "user_id": _ADMIN_ID, "username": "admin", "role": Role.ADMINISTRATOR,
+                "created_at": datetime.now(UTC), "deleted_at": None, "deleted_by": None,
+                "hidden_at": None, "hidden_by": None,
+            }
+        }
+
+    def list_users(self, limit: int, offset: int, *, include_hidden: bool = False) -> Page[UserOut]:
+        items = [
+            UserOut(**u) for u in self._users.values()
+            if include_hidden or u["hidden_at"] is None
+        ]
+        return Page[UserOut](items=items, total=len(items), limit=limit, offset=offset)
+
+    def create_user(self, username: str, password: str, role, actor: CurrentUser) -> UserOut:
+        if any(u["username"] == username and u["deleted_at"] is None for u in self._users.values()):
+            raise ConflictError(f"'{username}' is already taken by an active account.")
+        new_id = uuid.uuid4()
+        row = {
+            "user_id": new_id, "username": username, "role": role,
+            "created_at": datetime.now(UTC), "deleted_at": None, "deleted_by": None,
+            "hidden_at": None, "hidden_by": None,
+        }
+        self._users[new_id] = row
+        return UserOut(**row)
+
+    def deactivate_user(self, user_id: UUID, actor: CurrentUser) -> None:
+        target = self._users.get(user_id)
+        if target is None or target["deleted_at"] is not None:
+            raise NotFoundError("User not found.")
+        target["deleted_at"] = datetime.now(UTC)
+        target["deleted_by"] = actor.user_id
+
+    def activate_user(self, user_id: UUID, actor: CurrentUser) -> None:
+        target = self._users.get(user_id)
+        if target is None or target["deleted_at"] is None:
+            raise NotFoundError("User not found.")
+        target["deleted_at"] = None
+        target["deleted_by"] = None
+
+    def hide_user(self, user_id: UUID, actor: CurrentUser) -> None:
+        target = self._users.get(user_id)
+        if target is None or target["hidden_at"] is not None:
+            raise NotFoundError("User not found.")
+        target["hidden_at"] = datetime.now(UTC)
+        target["hidden_by"] = actor.user_id
+
+    def unhide_user(self, user_id: UUID, actor: CurrentUser) -> None:
+        target = self._users.get(user_id)
+        if target is None or target["hidden_at"] is None:
+            raise NotFoundError("User not found.")
+        target["hidden_at"] = None
+        target["hidden_by"] = None
+
+    def permanent_delete_user(self, user_id: UUID, actor: CurrentUser) -> None:
+        if user_id == actor.user_id:
+            raise ValidationError("You cannot permanently delete your own account.")
+        if user_id not in self._users:
+            raise NotFoundError("User not found.")
+        del self._users[user_id]
+
+    def admin_reset_password(self, user_id: UUID, new_password: str, actor: CurrentUser) -> None:
+        if user_id == actor.user_id:
+            raise ValidationError(
+                "Use the self-service password change to update your own password."
+            )
+        if len(new_password) < 8:
+            raise ValidationError("Password must be at least 8 characters.")
+        if user_id not in self._users:
+            raise NotFoundError("User not found.")
 
 
 class FakeIngestionService:
@@ -307,6 +456,14 @@ def client(test_settings):
     app = create_app(test_settings)
     job_service = FakeJobService()
     project_service = FakeProjectService()
+    # Hoisted outside the lambda, same as job_service/project_service above -
+    # a lambda that called `FakeMembershipService()`/`FakeUserService()`
+    # directly would hand every request WITHIN ONE TEST a brand-new, empty
+    # instance (FastAPI resolves a dependency override fresh per request),
+    # so state from an earlier request in the same test (e.g. "create a
+    # user" then "hide that user") would never persist to see it.
+    membership_service = FakeMembershipService()
+    user_service = FakeUserService()
 
     app.state.settings = test_settings
     app.state.db = object()
@@ -315,6 +472,8 @@ def client(test_settings):
 
     app.dependency_overrides[deps.get_auth_service] = lambda: FakeAuthService()
     app.dependency_overrides[deps.get_project_service] = lambda: project_service
+    app.dependency_overrides[deps.get_membership_service] = lambda: membership_service
+    app.dependency_overrides[deps.get_user_service] = lambda: user_service
     app.dependency_overrides[deps.get_ingestion_service] = lambda: FakeIngestionService()
     app.dependency_overrides[deps.get_task_runner] = lambda: FakeTaskRunner(job_service)
     app.dependency_overrides[deps.get_job_service] = lambda: job_service

@@ -19,7 +19,7 @@ from uuid import UUID
 from arq.worker import Retry
 
 from app.core.db import Database
-from app.core.errors import UnprocessableError, ValidationError
+from app.core.errors import ForbiddenError, NotFoundError, UnprocessableError, ValidationError
 from app.core.logging import get_logger
 from app.core.metrics import job_duration_seconds, jobs_completed_total
 from app.domain.dtos import CurrentUser, IngestMetadata
@@ -120,9 +120,15 @@ async def run_ingest_job(
         result = svc.ingest(
             staged_path=staged_path, meta=meta_obj, legend=legend, actor=actor_obj
         )
-    except (UnprocessableError, ValidationError) as e:
-        # Not worth retrying: the input itself is bad (corrupt raster, bad values).
-        # Terminal - this is the one place staged_path is deleted for this path
+    except (UnprocessableError, ValidationError, NotFoundError, ForbiddenError) as e:
+        # Not worth retrying: either the input itself is bad (corrupt raster,
+        # bad values), or - Wave: project-level RBAC - the actor lacks the
+        # project-level role to upload here (IngestionService._resolve_project
+        # raises NotFoundError/ForbiddenError for that, from INSIDE this same
+        # ingest() call). Retrying an authorization failure would just burn
+        # through job_max_retries before dead-lettering what is actually a
+        # clean, immediate "no" - so this is terminal, like the other two.
+        # This is the one place staged_path is deleted for this path
         # (IngestionService.ingest itself no longer does, so a retryable
         # failure below doesn't lose the file it needs to retry with).
         with contextlib.suppress(OSError):
@@ -171,11 +177,17 @@ async def run_ingest_job(
     # keeping "succeeded" an honest, atomic signal that the ingest AND its tiles
     # (if convertible at all) are both ready, with no third "ingested but tiles
     # pending" state for callers to handle.
-    cog_key, cog_error = _try_convert_to_cog(db, storage, result.dataset_id, log)
+    # Wave: multi-format layers - a vector layer has no raster grid to
+    # convert at all (it has no file_key - see LayerRepository.insert_non_raster),
+    # so this step is skipped entirely rather than best-effort-failing on it.
     result_payload = result.model_dump(mode="json")
-    result_payload["cog_key"] = cog_key
-    if cog_error:
-        result_payload["cog_error"] = cog_error
+    if result.layer_kind == "raster":
+        cog_key, cog_error = _try_convert_to_cog(db, storage, result.dataset_id, log)
+        result_payload["cog_key"] = cog_key
+        if cog_error:
+            result_payload["cog_error"] = cog_error
+    else:
+        cog_key = None
 
     with db.transaction() as cur:
         JobRepository(cur).mark_succeeded(job_id, result_payload)

@@ -8,8 +8,10 @@ import DashboardPage from "./pages/DashboardPage.jsx";
 import ProjectsPage from "./pages/ProjectsPage.jsx";
 import ProjectDetailPage from "./pages/ProjectDetailPage.jsx";
 import UploadPage from "./pages/UploadPage.jsx";
+import UsersPage from "./pages/UsersPage.jsx";
+import WmsDomainsPage from "./pages/WmsDomainsPage.jsx";
 import NotFoundPage from "./pages/NotFoundPage.jsx";
-import { UPLOAD_ROLES } from "./lib/roles.js";
+import { MANAGE_USERS_ROLES, MANAGE_WMS_SOURCES_ROLES, UPLOAD_ROLES } from "./lib/roles.js";
 
 export default function App() {
   return (
@@ -24,6 +26,12 @@ export default function App() {
             <Route path="projects/:projectId" element={<ProjectDetailPage />} />
             <Route element={<RoleRoute allow={UPLOAD_ROLES} />}>
               <Route path="upload" element={<UploadPage />} />
+            </Route>
+            <Route element={<RoleRoute allow={MANAGE_USERS_ROLES} />}>
+              <Route path="users" element={<UsersPage />} />
+            </Route>
+            <Route element={<RoleRoute allow={MANAGE_WMS_SOURCES_ROLES} />}>
+              <Route path="wms-domains" element={<WmsDomainsPage />} />
             </Route>
           </Route>
         </Route>

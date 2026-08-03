@@ -14,6 +14,19 @@ break the map rather than reject cleanly. Instead, a short-lived signed token
 documented limitation of this approach (a time-boxed capability, not a
 per-user-revocable grant - the same tradeoff S3 presigned URLs make).
 
+Wave: project-level RBAC - `get_tile` deliberately gets NO live membership
+check added here. Its authorization already happens once, at mint time: the
+signed tile token is only ever handed out by `ProjectService.get_layers`
+(see `_tile_url_template`), which itself now runs the project's real
+membership check before minting anything. A forged/guessed token is already
+rejected by signature verification regardless. Adding a second, per-tile
+membership lookup here would duplicate that decision on every single z/x/y
+request (a map can fire dozens per pan/zoom) for no additional security -
+the token IS the capability, same tradeoff this docstring already documents
+below for symbology params. `get_pixel`, by contrast, is a normal
+authenticated fetch() with no minted-token step in between, so IT does get a
+live check (`TileService.require_layer_access`) - see that route below.
+
 Symbology params (Phase 3 Wave F): `bands`, `stretch`, `colors` are plain query
 params alongside the token, NOT encoded into it. Deliberate: the token's job is
 authorizing "can this bearer see tiles for LAYER X at all", and every band of
@@ -155,7 +168,7 @@ def get_tile(
 @router.get("/layers/{layer_id}/pixel", response_model=PixelValue)
 def get_pixel(
     layer_id: UUID,
-    _user: CurrentUserDep,
+    user: CurrentUserDep,
     svc: Annotated[TileService, Depends(get_tile_service)],
     lon: Annotated[float, Query(ge=-180, le=180)],
     lat: Annotated[float, Query(ge=-90, le=90)],
@@ -165,6 +178,9 @@ def get_pixel(
     frontend session (not an `<img>` GET), so it goes through the standard
     `Authorization: Bearer` dependency every other route uses instead of the
     signed tile-token scheme - no reason to mint a second capability type for
-    a request the browser can attach a real header to."""
+    a request the browser can attach a real header to. That also means (Wave:
+    project-level RBAC) it needs its OWN live membership check, unlike
+    `get_tile` - see this module's docstring for why the two routes differ."""
+    svc.require_layer_access(layer_id, user)  # NotFoundError (404) if no access
     values = svc.read_pixel(layer_id, lon, lat)  # NotFoundError (404) if no COG or outside bounds
     return PixelValue(layer_id=layer_id, lon=lon, lat=lat, values=values)

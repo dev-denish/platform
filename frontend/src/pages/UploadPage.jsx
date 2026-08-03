@@ -5,8 +5,38 @@ import ErrorBanner from "../components/ErrorBanner.jsx";
 import Spinner from "../components/Spinner.jsx";
 import { DATASET_TYPES } from "../lib/roles.js";
 import { formatNumber } from "../lib/format.js";
+import ClassLegendBuilder, { buildLegend } from "../components/ClassLegendBuilder.jsx";
 
-const ACCEPTED_EXTENSIONS = [".tif", ".tiff", ".img"];
+const RASTER_EXTENSIONS = [".tif", ".tiff", ".img"];
+// Wave: multi-format layers. ".zip" = a shapefile bundle (.shp/.shx/.dbf/
+// .prj together, see backend's app/services/ingestion/vector.py) - a lone
+// ".shp" can't be parsed without its sibling files.
+const VECTOR_EXTENSIONS = [".geojson", ".json", ".kml", ".csv", ".zip"];
+const ACCEPTED_EXTENSIONS = [...RASTER_EXTENSIONS, ...VECTOR_EXTENSIONS];
+
+function fileExtension(file) {
+  if (!file) return "";
+  const i = file.name.lastIndexOf(".");
+  return i === -1 ? "" : file.name.slice(i).toLowerCase();
+}
+
+/** Reads just the first line of a File client-side, for the CSV lat/lon
+ * column picker below - a UX convenience only. The backend re-validates the
+ * chosen columns against the REAL uploaded file's header before ingesting
+ * (never trusts this client-side parse) - see datasets.py's upload endpoint. */
+function readCsvHeader(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error);
+    reader.onload = () => {
+      const firstLine = String(reader.result).split(/\r?\n/, 1)[0] ?? "";
+      resolve(firstLine.split(",").map((c) => c.trim().replace(/^"|"$/g, "")));
+    };
+    // A header row is always well within the first slice of any real CSV -
+    // no need to read the whole (possibly huge) file just for column names.
+    reader.readAsText(file.slice(0, 8192));
+  });
+}
 
 // Phase 2: POST /datasets/upload returns 202 + {job_id, status_url} immediately;
 // the ingest result is discovered by polling GET /jobs/{id} until it reaches a
@@ -25,8 +55,16 @@ const INITIAL = {
   accuracy_score: "",
   date_processed: "",
   pixel_size_m: "10",
-  class_legend: "",
+  class_legend_rows: [],
+  lat_column: "",
+  lon_column: "",
+  // Wave: Reference Layer Library. When true, the project name/region below
+  // are never sent - the backend always resolves the one shared library
+  // project instead (see IngestMetadata.is_reference).
+  is_reference: false,
 };
+
+const REFERENCE_LIBRARY_PLACEHOLDER = "Reference Layer Library";
 
 export default function UploadPage() {
   const [step, setStep] = useState(1);
@@ -38,9 +76,35 @@ export default function UploadPage() {
   const [timedOut, setTimedOut] = useState(false);
   const [pollGen, setPollGen] = useState(0); // bumped to force the poll loop to restart
   const pollStartRef = useRef(null);
+  // Wave: multi-format layers. Column names from the selected CSV's own
+  // header row, for the lat/lon dropdowns below - null while no CSV is
+  // selected (or before it's been read yet).
+  const [csvColumns, setCsvColumns] = useState(null);
+  const [csvReadError, setCsvReadError] = useState(null);
 
   function update(field, value) {
     setForm((f) => ({ ...f, [field]: value }));
+  }
+
+  function isVectorFile(file) {
+    return VECTOR_EXTENSIONS.includes(fileExtension(file));
+  }
+
+  function isCsvFile(file) {
+    return fileExtension(file) === ".csv";
+  }
+
+  async function selectFile(file) {
+    setForm((f) => ({ ...f, file, lat_column: "", lon_column: "" }));
+    setCsvColumns(null);
+    setCsvReadError(null);
+    if (!file || !isCsvFile(file)) return;
+    try {
+      const columns = await readCsvHeader(file);
+      setCsvColumns(columns);
+    } catch {
+      setCsvReadError("Could not read this CSV's header row.");
+    }
   }
 
   function resetToStart() {
@@ -99,34 +163,25 @@ export default function UploadPage() {
   }
 
   function step1Valid() {
-    return form.file && form.project_name.trim().length > 0;
+    if (!form.file) return false;
+    if (!form.is_reference && form.project_name.trim().length === 0) return false;
+    // Wave: multi-format layers - explicit lat/lon column selection is
+    // required for a CSV upload, never guessed from header names (see
+    // backend's IngestMetadata.lat_column/lon_column docstring).
+    if (isCsvFile(form.file)) return !!form.lat_column && !!form.lon_column;
+    return true;
   }
 
   // Mirrors the backend's real rule (app/api/v1/datasets.py): accuracy_score
   // is a classification-accuracy metric, so it's only REQUIRED when a
   // class_legend is supplied - there's no classification to be accurate about
-  // for a raw, unclassified scene. If it IS provided, it must still be 0-100.
+  // for a raw, unclassified scene.
   function hasLegend() {
-    const raw = form.class_legend.trim();
-    if (!raw) return false;
-    try {
-      const parsed = JSON.parse(raw);
-      return !!parsed && typeof parsed === "object" && Object.keys(parsed).length > 0;
-    } catch {
-      return false;
-    }
+    return Object.keys(buildLegend(form.class_legend_rows)).length > 0;
   }
 
   function step2Valid() {
     if (!form.source.trim() || !form.date_processed) return false;
-    const legendRaw = form.class_legend.trim();
-    if (legendRaw) {
-      try {
-        JSON.parse(legendRaw);
-      } catch {
-        return false;
-      }
-    }
     const accRaw = form.accuracy_score.trim();
     if (!accRaw) return !hasLegend();
     const acc = Number(accRaw);
@@ -137,20 +192,23 @@ export default function UploadPage() {
     setSubmitting(true);
     setError(null);
     try {
-      if (form.class_legend.trim()) {
-        JSON.parse(form.class_legend); // validate before sending
-      }
+      const legend = buildLegend(form.class_legend_rows);
       const body = new FormData();
       body.append("file", form.file);
-      body.append("project_name", form.project_name);
+      body.append("project_name", form.is_reference ? REFERENCE_LIBRARY_PLACEHOLDER : form.project_name);
       body.append("region", form.region || "Unspecified");
       body.append("dataset_type", form.dataset_type);
+      body.append("is_reference", form.is_reference ? "true" : "false");
       body.append("source", form.source);
       body.append("classification_method", form.classification_method);
       if (form.accuracy_score.trim()) body.append("accuracy_score", form.accuracy_score);
       body.append("date_processed", form.date_processed);
       body.append("pixel_size_m", form.pixel_size_m || "10");
-      if (form.class_legend.trim()) body.append("class_legend", form.class_legend);
+      if (Object.keys(legend).length > 0) body.append("class_legend", JSON.stringify(legend));
+      if (isCsvFile(form.file)) {
+        body.append("lat_column", form.lat_column);
+        body.append("lon_column", form.lon_column);
+      }
 
       // 202 + {job_id, status_url}: the ingest itself is now a background job -
       // stage the polling state and switch to the tracking view.
@@ -161,11 +219,7 @@ export default function UploadPage() {
       setJob({ job_id: accepted.job_id, status: "queued", result: null, error: null });
       setStep(4);
     } catch (err) {
-      setError(
-        err.message?.includes("JSON")
-          ? "Class legend must be valid JSON, e.g. {\"1\": \"Forest\", \"2\": \"Water\"}."
-          : err.message ?? "Upload failed."
-      );
+      setError(err.message ?? "Upload failed.");
     } finally {
       setSubmitting(false);
     }
@@ -320,33 +374,89 @@ export default function UploadPage() {
         {step === 1 ? (
           <div className="form-grid">
             <label className="field field-wide">
-              <span className="field-label">Raster file</span>
+              <span className="field-label">File</span>
               <input
                 type="file"
                 accept={ACCEPTED_EXTENSIONS.join(",")}
                 className="field-file"
-                onChange={(e) => update("file", e.target.files?.[0] ?? null)}
+                onChange={(e) => selectFile(e.target.files?.[0] ?? null)}
               />
-              <span className="field-hint">Accepted: {ACCEPTED_EXTENSIONS.join(", ")} · up to 2 GiB</span>
+              <span className="field-hint">
+                Raster: {RASTER_EXTENSIONS.join(", ")} · Vector: {VECTOR_EXTENSIONS.join(", ")}{" "}
+                (shapefile as a .zip bundle) · up to 2 GiB
+              </span>
             </label>
-            <label className="field">
-              <span className="field-label">Project name</span>
+            {isCsvFile(form.file) ? (
+              <>
+                <ErrorBanner message={csvReadError} />
+                <label className="field">
+                  <span className="field-label">Latitude column</span>
+                  <select
+                    className="field-input"
+                    value={form.lat_column}
+                    onChange={(e) => update("lat_column", e.target.value)}
+                    disabled={!csvColumns}
+                  >
+                    <option value="">Select a column…</option>
+                    {(csvColumns ?? []).map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span className="field-label">Longitude column</span>
+                  <select
+                    className="field-input"
+                    value={form.lon_column}
+                    onChange={(e) => update("lon_column", e.target.value)}
+                    disabled={!csvColumns}
+                  >
+                    <option value="">Select a column…</option>
+                    {(csvColumns ?? []).map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="field-hint">
+                    Every other row must be a valid coordinate here, or the upload is
+                    rejected - never guessed from column names.
+                  </span>
+                </label>
+              </>
+            ) : null}
+            <label className="field field-wide checkbox-field">
               <input
-                className="field-input"
-                value={form.project_name}
-                onChange={(e) => update("project_name", e.target.value)}
-                placeholder="e.g. Rimba Raya Corridor"
+                type="checkbox"
+                checked={form.is_reference}
+                onChange={(e) => update("is_reference", e.target.checked)}
               />
-              <span className="field-hint">Matched or created by exact name.</span>
+              <span>Add as a shared reference layer (visible on every project, not just one)</span>
             </label>
-            <label className="field">
-              <span className="field-label">Region</span>
-              <input
-                className="field-input"
-                value={form.region}
-                onChange={(e) => update("region", e.target.value)}
-              />
-            </label>
+            {!form.is_reference ? (
+              <>
+                <label className="field">
+                  <span className="field-label">Project name</span>
+                  <input
+                    className="field-input"
+                    value={form.project_name}
+                    onChange={(e) => update("project_name", e.target.value)}
+                    placeholder="e.g. Rimba Raya Corridor"
+                  />
+                  <span className="field-hint">Matched or created by exact name.</span>
+                </label>
+                <label className="field">
+                  <span className="field-label">Region</span>
+                  <input
+                    className="field-input"
+                    value={form.region}
+                    onChange={(e) => update("region", e.target.value)}
+                  />
+                </label>
+              </>
+            ) : null}
             <div className="form-actions">
               <button type="button" className="primary-button" disabled={!step1Valid()} onClick={() => setStep(2)}>
                 Continue →
@@ -416,37 +526,36 @@ export default function UploadPage() {
                 onChange={(e) => update("date_processed", e.target.value)}
               />
             </label>
-            <label className="field">
-              <span className="field-label">Pixel size (m)</span>
-              <input
-                type="number"
-                min="0"
-                step="0.1"
-                className="field-input"
-                value={form.pixel_size_m}
-                onChange={(e) => update("pixel_size_m", e.target.value)}
-              />
-            </label>
-            <label className="field field-wide">
-              <span className="field-label">Class legend (optional JSON)</span>
-              <textarea
-                className="field-input field-textarea"
-                value={form.class_legend}
-                onChange={(e) => update("class_legend", e.target.value)}
-                placeholder={
-                  isSatellite()
-                    ? "Leave blank for raw, unclassified imagery. Only add a legend if this is a classified product, e.g. {\"1\": \"Forest\", \"2\": \"Water\"}."
-                    : '{"1": "Forest", "2": "Water"}'
-                }
-                rows={3}
-              />
-              {isSatellite() ? (
-                <span className="field-hint">
-                  Satellite / Raw Imagery is usually unclassified - most uploads of
-                  this type should leave this blank.
-                </span>
-              ) : null}
-            </label>
+            {/* Wave: multi-format layers - pixel size and a class legend are
+                raster concepts only; a vector upload has no raster grid or
+                classified band values at all. */}
+            {!isVectorFile(form.file) ? (
+              <>
+                <label className="field">
+                  <span className="field-label">Pixel size (m)</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.1"
+                    className="field-input"
+                    value={form.pixel_size_m}
+                    onChange={(e) => update("pixel_size_m", e.target.value)}
+                  />
+                </label>
+                <div className="field field-wide">
+                  <span className="field-label">Class legend (optional)</span>
+                  <ClassLegendBuilder
+                    rows={form.class_legend_rows}
+                    onChange={(rows) => update("class_legend_rows", rows)}
+                  />
+                  <span className="field-hint">
+                    {isSatellite()
+                      ? "Satellite / Raw Imagery is usually unclassified - most uploads of this type should leave this blank."
+                      : "Leave empty for raw, unclassified imagery. Only add classes if this is a classified product."}
+                  </span>
+                </div>
+              </>
+            ) : null}
             <div className="form-actions">
               <button type="button" className="ghost-button" onClick={() => setStep(1)}>
                 ← Back
@@ -462,8 +571,14 @@ export default function UploadPage() {
           <div className="form-grid">
             <dl className="review-list">
               <ReviewRow label="File" value={form.file?.name} />
-              <ReviewRow label="Project" value={form.project_name} />
-              <ReviewRow label="Region" value={form.region} />
+              {form.is_reference ? (
+                <ReviewRow label="Scope" value="Shared reference layer (every project)" />
+              ) : (
+                <>
+                  <ReviewRow label="Project" value={form.project_name} />
+                  <ReviewRow label="Region" value={form.region} />
+                </>
+              )}
               <ReviewRow label="Type" value={form.dataset_type} />
               <ReviewRow label="Source" value={form.source} />
               <ReviewRow label="Classification method" value={form.classification_method || "—"} />

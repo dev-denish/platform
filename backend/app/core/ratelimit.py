@@ -1,18 +1,31 @@
 """Shared rate limiter.
 
-Existing implementation (MVP): none - login and upload were unbounded, so credential
-stuffing and upload floods had no brake.
+Existing implementation (MVP-turned-bug): in-memory storage, which is per-process -
+behind gunicorn's WEB_CONCURRENCY>1 (see deploy/docker-compose.yml) each worker counts
+independently, so the real ceiling is ~N x the nominal limit for N workers. Confirmed
+empirically: 429s landed at attempts 7/8/9/11 instead of the nominal 6th request.
 
-Enterprise solution: a slowapi limiter keyed on client address, applied per-route to
-the sensitive endpoints (login, upload) rather than globally, so Kubernetes health
-probes and normal reads are never throttled. In a multi-pod deployment the limiter
-backing store moves to Redis (slowapi supports it via `storage_uri`) so limits are
-enforced across pods; the in-memory store is per-pod for now.
+Fix: back the limiter with the SAME Redis instance arq already uses (`settings.redis_url`
+- no second Redis config), so all workers share one counter per `{ip}:{endpoint}` key.
+slowapi/limits does this via Lua INCR+EXPIRE (fixed-window) - no custom counter code
+needed. `in_memory_fallback_enabled` degrades to the old per-process behavior if Redis
+is ever unreachable (also what makes this work in dev/tests without a real Redis),
+rather than raising 500s on every rate-limited endpoint.
+
+Known fixed-window gap (not solved here, doesn't matter at these limits): a client can
+burst up to 2x the limit across a window boundary (e.g. 5 requests at 0:59, 5 more at
+1:00). Upgrade path if that ever matters: limits' sliding-window-counter strategy.
 """
 from __future__ import annotations
 
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
+from app.core.config import get_settings
+
 # No global default limits: we opt specific routes in via @limiter.limit(...).
-limiter = Limiter(key_func=get_remote_address)
+limiter = Limiter(
+    key_func=get_remote_address,
+    storage_uri=get_settings().redis_url,
+    in_memory_fallback_enabled=True,
+)

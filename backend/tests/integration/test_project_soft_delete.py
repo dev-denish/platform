@@ -58,7 +58,8 @@ def _make_admin(db: Database) -> CurrentUser:
 
 def _make_project(db: Database, name: str) -> uuid.UUID:
     with db.transaction() as cur:
-        return ProjectRepository(cur).find_or_create_by_name(name, "Karnataka")
+        project_id, _created = ProjectRepository(cur).find_or_create_by_name(name, "Karnataka")
+    return project_id
 
 
 def test_get_version_is_none_for_missing_project(db):
@@ -92,7 +93,7 @@ def test_deleted_project_disappears_from_get_and_listing(db, project_service):
     project_service.delete_project(pid, actor)
 
     with pytest.raises(NotFoundError):
-        project_service.get_project(pid)
+        project_service.get_project(pid, actor)
 
     with db.connection() as conn, conn.cursor() as cur:
         assert ProjectRepository(cur).get(pid) is None

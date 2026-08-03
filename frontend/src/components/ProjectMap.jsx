@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   MapContainer,
   TileLayer,
+  WMSTileLayer,
+  GeoJSON,
   ImageOverlay,
   Rectangle,
   Polyline,
@@ -12,16 +14,17 @@ import {
   useMap,
   useMapEvents,
 } from "react-leaflet";
+import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { apiFetch } from "../config.js";
+import { apiFetch, API_BASE } from "../config.js";
 import { DATASET_TYPE_COLORS } from "../lib/colors.js";
 import { BASEMAP_URL, BASEMAP_ATTRIBUTION, CARTO_BASEMAP_URL, CARTO_BASEMAP_ATTRIBUTION } from "../lib/basemap.js";
 import { initSymbologyState, buildTileUrl, legendEntryLabel, legendEntryColor } from "../lib/symbology.js";
-import { lineDistanceMeters, polygonAreaHectares } from "../lib/measure.js";
+import { lineDistanceMeters, polygonAreaHectares, scaleRatioLabel } from "../lib/measure.js";
 import { formatNumber, formatHectares } from "../lib/format.js";
 import LayersPanel from "./LayersPanel.jsx";
 import MeasureTools from "./MeasureTools.jsx";
-import BasemapToggle from "./BasemapToggle.jsx";
+import MapToolbar from "./MapToolbar.jsx";
 import FullscreenToggle from "./FullscreenToggle.jsx";
 import ErrorBanner from "./ErrorBanner.jsx";
 
@@ -35,17 +38,25 @@ import ErrorBanner from "./ErrorBanner.jsx";
  * +/- zoom control are untouched by any of this - only wheel-zoom needed the
  * click-to-activate gate.
  *
- * Bugfix: the first version wired click/mouseleave via raw
- * `container.addEventListener(...)`, bypassing Leaflet's own event dispatch
- * entirely - a plain DOM listener glued on independently of how Leaflet
- * itself interprets mouse activity on that same container. It never visibly
- * worked. Every OTHER interactive behavior on this map (e.g. the Rectangle
- * `Tooltip`s below, which position themselves via Leaflet's own
- * mouseover/mousemove events) goes through Leaflet's event system and does
- * work - so click/hover here now goes through the same system, via
- * react-leaflet's `useMapEvents` (-> `map.on(...)`), instead of a parallel,
- * unproven path. Focus/blur have no Leaflet-level equivalent, so those stay
- * as plain DOM listeners on `map.getContainer()`.
+ * Bugfix (scroll-zoom stuck disabled after switching toolbar tools):
+ * `click` goes through Leaflet's own event system (`useMapEvents` ->
+ * `map.on(...)`) and is reliable - proven directly (instrumented
+ * `scrollWheelZoom.enable`/`disable` with call logging against the real
+ * running app) to always fire correctly. Hover re-activation used to go
+ * through Leaflet's `mouseover`/`mouseout` map events too, which worked in
+ * isolation but broke specifically after a real wheel-zoom: Leaflet's
+ * container-level mouseover/mouseout filters bubbled DOM events by checking
+ * `relatedTarget` is truly outside the container, and a wheel-zoom's
+ * pane/tile reflow was proven (same instrumentation, plus a direct
+ * `map.fire('mouseover')` sanity check showing the registered listener
+ * itself was still intact and correctly wired) to make that relatedTarget
+ * check silently fail to recognize a genuine re-entry after the mouse had
+ * been over a toolbar button outside the map. `mouseenter`/`mouseleave` are
+ * the actual browser-native primitives for "did the pointer truly cross
+ * this element's boundary" - non-bubbling, no relatedTarget filtering
+ * needed - so hover re-activation now uses those, as plain DOM listeners on
+ * `map.getContainer()` (same place focus/blur already lived), leaving click
+ * on Leaflet's own system since that part was never the problem.
  */
 function ScrollZoomOnActivate() {
   const map = useMap();
@@ -59,18 +70,19 @@ function ScrollZoomOnActivate() {
     map.scrollWheelZoom.disable();
   }, [map]);
 
-  const mapEventHandlers = useMemo(
-    () => ({ click: activate, mouseover: activate, mouseout: deactivate }),
-    [activate, deactivate]
-  );
+  const mapEventHandlers = useMemo(() => ({ click: activate }), [activate]);
   useMapEvents(mapEventHandlers);
 
   useEffect(() => {
     map.scrollWheelZoom.disable();
     const container = map.getContainer();
+    container.addEventListener("mouseenter", activate);
+    container.addEventListener("mouseleave", deactivate);
     container.addEventListener("focus", activate);
     container.addEventListener("blur", deactivate);
     return () => {
+      container.removeEventListener("mouseenter", activate);
+      container.removeEventListener("mouseleave", deactivate);
       container.removeEventListener("focus", activate);
       container.removeEventListener("blur", deactivate);
     };
@@ -84,27 +96,51 @@ function ScrollZoomOnActivate() {
 }
 
 /**
- * Live lat/lon readout in the map's corner (Phase 3 Wave D). EPSG:4326 always
- * - that's the storage/display CRS everywhere else in this app (see
+ * Feeds the top toolbar's live Lat/Lon/Zoom/Scale readout (Wave: map UI
+ * redesign - relocates Phase 3 Wave D's coordinate readout out of its own
+ * floating corner pill and into the toolbar, plus reports zoom/center for
+ * the two new derived readouts). Also hands the real Leaflet map instance up
+ * once, via `onReady`, so the toolbar's zoom in/out/Extent buttons can call
+ * it directly - those buttons live outside <MapContainer> (a real full-width
+ * bar above the map, not an overlay control), so they have no other way to
+ * reach the map. EPSG:4326 always, same as everywhere else in this app (see
  * LayerOut.crs) - a metric reprojection only ever happens internally, inside
- * the measure-tool math (lib/measure.js), never for what's shown here.
+ * the measure-tool math (lib/measure.js).
  */
-function CoordinateReadout() {
-  const [pos, setPos] = useState(null);
+function MapViewSync({ onReady, onChange }) {
+  const map = useMap();
+  useEffect(() => {
+    onReady(map);
+    onChange((v) => ({ ...v, zoom: map.getZoom(), center: map.getCenter() }));
+  }, [map, onReady, onChange]);
   useMapEvents({
     mousemove(e) {
-      setPos(e.latlng);
+      onChange((v) => ({ ...v, pos: e.latlng }));
     },
     mouseout() {
-      setPos(null);
+      onChange((v) => ({ ...v, pos: null }));
+    },
+    zoomend() {
+      onChange((v) => ({ ...v, zoom: map.getZoom(), center: map.getCenter() }));
+    },
+    moveend() {
+      onChange((v) => ({ ...v, zoom: map.getZoom(), center: map.getCenter() }));
     },
   });
-  if (!pos) return null;
-  return (
-    <div className="coord-readout">
-      {pos.lat.toFixed(5)}, {pos.lng.toFixed(5)} <span className="coord-readout-crs">EPSG:4326</span>
-    </div>
-  );
+  return null;
+}
+
+/** Real cartographic distance bar (Wave: map UI redesign), bottom-right of
+ * the map - Leaflet's own built-in control, just added via the hook API
+ * (react-leaflet has no <ScaleControl> component) so it shares this file's
+ * existing add-a-control-via-useMap pattern. */
+function ScaleControl() {
+  const map = useMap();
+  useEffect(() => {
+    const control = L.control.scale({ position: "bottomright", metric: true, imperial: false }).addTo(map);
+    return () => control.remove();
+  }, [map]);
+  return null;
 }
 
 /**
@@ -190,20 +226,108 @@ function initLayerState(layers) {
  *
  * onRefreshLayers (optional): re-fetch GET /projects/{id}/layers, which mints a
  * fresh signed tile token every call (see ProjectService._tile_url_template).
- * Tile tokens are time-boxed (Wave A, default 1h) and don't auto-renew, so a
- * long-open tab will eventually see tile 404/403s. Chosen behavior: on the
- * first tile error, silently call onRefreshLayers() once to pick up fresh
- * tokens - covers the common "left the tab open past the TTL" case with no
- * user-visible interruption. If tiles still fail after that retry, the token
- * mint itself is failing (e.g. the user's own session/auth is what's actually
- * expired, since refreshing layers requires a valid Bearer token) - stop
- * retrying and show a clear message instead of silently blank tiles.
+ * Tile tokens are time-boxed (default 1h) and don't auto-renew.
+ *
+ * Wave: tile-expiry UX (root-caused before this fix). Confirmed via a real
+ * browser network log, not assumption: `access_token_ttl_minutes` (15) is far
+ * shorter than `tile_token_ttl_seconds` (1h), so by the time a tile token
+ * expires, the access token has ALSO been expired for ~45 minutes already. The
+ * reactive retry below calls `onRefreshLayers`, which goes through the app's
+ * one shared `apiFetch` (see config.js) - that wrapper already transparently
+ * catches a 401, rotates the access token via the refresh token, and retries,
+ * so the reactive path was never structurally broken. What IS fragile about a
+ * purely reactive design: it's a single attempt with no retry-of-the-retry, so
+ * any transient hiccup right at that moment (slow network, a refresh racing
+ * with another one from a different tab) permanently strands the user behind
+ * the banner below until a manual reload - there's no second chance.
+ *
+ * Fix: a PROACTIVE refresh timer (well under the 1h tile-token TTL) is now the
+ * primary defense - see the effect below - so a real session essentially never
+ * reaches the reactive path during normal use. The reactive one-shot
+ * retry-then-banner stays as the fallback for genuine edge cases (e.g. the
+ * proactive refresh itself failing due to lost connectivity). If the REFRESH
+ * token itself is expired/rejected, `onRefreshLayers` resolves to `false` and
+ * the banner is the correct, intended outcome - that session is genuinely
+ * over and a real reload/re-login is required, not papered over.
  */
-export default function ProjectMap({ layers, onRefreshLayers }) {
+// Well under the 1h tile-token TTL, so a proactive refresh always lands with
+// margin to spare even if the tab was briefly backgrounded/throttled around
+// the scheduled tick.
+const PROACTIVE_REFRESH_INTERVAL_MS = 45 * 60 * 1000;
+
+export default function ProjectMap({ layers, onRefreshLayers, projectId }) {
   const [layerState, setLayerState] = useState(() => initLayerState(layers));
+  // Wave: map UI redesign. The Leaflet map instance (once mounted) and its
+  // live zoom/center/hovered-position, both consumed by the toolbar above -
+  // see MapViewSync's own docstring for why these can't just live inside the
+  // toolbar component itself.
+  const [mapRef, setMapRef] = useState(null);
+  const [mapView, setMapView] = useState({ pos: null, zoom: null, center: null });
   const [symbologyState, setSymbologyState] = useState(() => initSymbologyState(layers));
   const [tilesExpired, setTilesExpired] = useState(false);
-  const retriedRef = useRef(false);
+  // 'idle' (no retry outstanding) | 'pending' (one in flight) | 'failed' (the
+  // one attempt already lost). Replaces a plain boolean: with a boolean, an
+  // error batch arriving WHILE the first retry's `onRefreshLayers()` is still
+  // in flight (real, observed with 2+ simultaneous raster layers - their tile
+  // batches settle independently but share these refs) fell through to the
+  // "already retried, give up" branch and flashed the banner even though that
+  // in-flight retry was about to succeed. 'pending' lets a second settle
+  // event just wait for the first attempt's outcome instead of pre-judging it.
+  const retryStateRef = useRef("idle");
+  // Wave: multi-format layers. layer_id -> GeoJSON FeatureCollection (vector
+  // layers) or `null` on fetch failure - fetched once per layer via
+  // features_url (GET /layers/{id}/geojson or the WFS proxy) and cached here,
+  // unlike raster tiles which stream themselves through <TileLayer>.
+  const [vectorData, setVectorData] = useState({});
+
+  // Wave: tile-expiry UX. Proactive refresh is the PRIMARY defense (see this
+  // component's docstring) - re-mints fresh layer/tile tokens on a timer, well
+  // before the 1h tile-token TTL, so the reactive fallback below rarely fires
+  // in real use. `onRefreshLayers` is a plain function re-created by the
+  // parent on every render (not memoized there), so it's read through a ref
+  // rather than placed in this effect's dependency array - otherwise a
+  // same-page re-render unrelated to layers (e.g. opening a dialog) would
+  // tear down and restart this interval, pushing the actual refresh later and
+  // later. The effect itself still only runs once, for this component's
+  // lifetime on this project page.
+  const onRefreshLayersRef = useRef(onRefreshLayers);
+  useEffect(() => {
+    onRefreshLayersRef.current = onRefreshLayers;
+  }, [onRefreshLayers]);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      // Skip a tick while backgrounded - nothing is watching these tiles
+      // right now, and the reactive fallback still covers the tab regaining
+      // focus after the tile token has since expired.
+      if (document.visibilityState === "visible") onRefreshLayersRef.current?.();
+    }, PROACTIVE_REFRESH_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    const toFetch = layers.filter((l) => l.features_url && !(l.layer_id in vectorData));
+    if (toFetch.length === 0) return undefined;
+    let cancelled = false;
+    (async () => {
+      for (const l of toFetch) {
+        try {
+          // `features_url` (LayerRepository._features_url) already carries the
+          // full `/api/v1/...` path, same as tile_url_template - but unlike
+          // that one (used raw as a Leaflet tile URL), this goes through
+          // apiFetch, which itself prepends API_BASE. Strip it first or every
+          // vector/WFS layer 404s on a doubled `/api/v1/api/v1/...` path.
+          const data = await apiFetch(l.features_url.replace(API_BASE, ""));
+          if (!cancelled) setVectorData((prev) => ({ ...prev, [l.layer_id]: data }));
+        } catch {
+          if (!cancelled) setVectorData((prev) => ({ ...prev, [l.layer_id]: null }));
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [layers, vectorData]);
   const batchLoadedRef = useRef(0);
   const batchErroredRef = useRef(0);
   // Phase 3 Wave E: GEE-style Map/Satellite toggle - swaps only the BASE
@@ -313,16 +437,31 @@ export default function ProjectMap({ layers, onRefreshLayers }) {
     setPixelPopup({ latlng, loading: false, rows });
   }
 
+  // Wave: multi-format layers. An external_wms/external_wfs layer's stored
+  // bbox is a meaningless full-earth placeholder (its real extent isn't
+  // known without parsing GetCapabilities, which this wave doesn't do) - a
+  // real raster/vector layer's actual bounds always drive the auto-fit;
+  // an external layer never widens it out to the whole world.
+  const boundsLayers = useMemo(
+    () => layers.filter((l) => l.layer_kind !== "external_wms" && l.layer_kind !== "external_wfs"),
+    [layers]
+  );
+
   const bounds = useMemo(() => {
-    const all = layers.flatMap((l) => l.bounds);
-    if (all.length === 0) return null;
+    const all = boundsLayers.flatMap((l) => l.bounds);
+    if (all.length === 0) {
+      // A project with ONLY external_wms/wfs layers has no real bounds to
+      // fit to (see boundsLayers' own docstring) - fall back to a world
+      // view rather than rendering nothing at all.
+      return layers.length > 0 ? [[-60, -170], [75, 170]] : null;
+    }
     const lats = all.map((p) => p[0]);
     const lngs = all.map((p) => p[1]);
     return [
       [Math.min(...lats), Math.min(...lngs)],
       [Math.max(...lats), Math.max(...lngs)],
     ];
-  }, [layers]);
+  }, [boundsLayers, layers]);
 
   if (!bounds) return null;
 
@@ -362,22 +501,68 @@ export default function ProjectMap({ layers, onRefreshLayers }) {
   async function handleBatchSettled() {
     if (batchErroredRef.current === 0) return;
     if (batchLoadedRef.current > 0) {
-      retriedRef.current = false;
+      retryStateRef.current = "idle";
       setTilesExpired(false);
       return;
     }
-    if (!retriedRef.current) {
-      retriedRef.current = true;
+    if (retryStateRef.current === "idle") {
+      retryStateRef.current = "pending";
       const ok = await onRefreshLayers?.();
+      retryStateRef.current = ok === false ? "failed" : "idle";
       if (ok === false) setTilesExpired(true);
-    } else {
+    } else if (retryStateRef.current === "failed") {
       setTilesExpired(true);
     }
+    // 'pending': a retry from an earlier, still-unsettled batch is already in
+    // flight (see retryStateRef's own docstring above) - nothing to do here
+    // but wait for it; that attempt's own resolution will set 'idle'/'failed'.
+  }
+
+  // Wave: multi-format layers. Real geometries (vector layers, and an
+  // external_wfs layer's live GetFeature response - both fetched once into
+  // `vectorData` above) render as an actual Leaflet <GeoJSON>, not a raster
+  // tile/image at all - `undefined` while still loading, `null` on a failed
+  // fetch, either way nothing to render yet.
+  function renderVectorLayer(l, { opacity = 1, key } = {}) {
+    const data = vectorData[l.layer_id];
+    if (!data) return null;
+    const color = DATASET_TYPE_COLORS[l.type] ?? "#0B6B46";
+    return (
+      <GeoJSON
+        key={key ?? `${l.layer_id}-vector`}
+        data={data}
+        style={() => ({ color, weight: 2, fillOpacity: 0.15, opacity })}
+        pointToLayer={(_feature, latlng) =>
+          L.circleMarker(latlng, { radius: 5, color, weight: 2, fillOpacity: 0.7 * opacity, opacity })
+        }
+      />
+    );
   }
 
   // Tile-vs-preview rendering for one layer.
   function renderLayer(l, { opacity = 1, key } = {}) {
     if (!l) return null;
+    if (l.layer_kind === "vector" || l.layer_kind === "external_wfs") {
+      return renderVectorLayer(l, { opacity, key });
+    }
+    if (l.layer_kind === "external_wms" && l.tile_url_template) {
+      // A real WMS tile server, not our own {z}/{x}/{y} COG grid - Leaflet's
+      // WMSTileLayer computes bbox/width/height/srs per tile itself and
+      // appends them as query params to `url` (our SSRF-guarded proxy,
+      // never the third-party server directly - see
+      // ProjectService._tile_url_template_for). `layers` here is a
+      // required prop for L.tileLayer.wms's own bookkeeping only - the
+      // proxy always serves the layer_name stored at creation time
+      // regardless of what's sent, so its value doesn't matter.
+      return (
+        <WMSTileLayer
+          key={key ?? `${l.layer_id}-wms`}
+          url={l.tile_url_template}
+          params={{ layers: "_", format: "image/png", transparent: true }}
+          opacity={opacity}
+        />
+      );
+    }
     if (l.tile_url_template) {
       const hasLegend = !!(l.class_legend && Object.keys(l.class_legend).length > 0);
       return (
@@ -413,8 +598,14 @@ export default function ProjectMap({ layers, onRefreshLayers }) {
   // render - the same set drives both the Symbology gear popover's target
   // and Wave D's pixel-inspection targets, now naturally covering however
   // many layers happen to be visible at once instead of a single "active" one.
+  // Wave: multi-format layers - restricted to `raster` here: GET
+  // /layers/{id}/pixel only ever reads a COG (TileService.read_pixel), so a
+  // vector/external_wms/wfs layer has nothing for it to inspect.
   const symbologyLayers = layers.filter(
-    (l) => (layerState[l.layer_id] ?? { visible: true }).visible && l.tile_url_template
+    (l) =>
+      (layerState[l.layer_id] ?? { visible: true }).visible &&
+      l.layer_kind === "raster" &&
+      l.tile_url_template
   );
 
   // One popup row per inspected layer: the classified label (from the same
@@ -457,85 +648,104 @@ export default function ProjectMap({ layers, onRefreshLayers }) {
         onRetry={() => window.location.reload()}
       />
       <div className="map-frame" ref={mapFrameRef}>
-        {/* Phase 3 Wave E: plain React overlays, siblings of <MapContainer>
-         * (not react-leaflet children) - none of these need Leaflet's map
-         * context, just `.map-frame` itself as the positioned ancestor. */}
-        <div className="map-overlay-topleft">
-          <MeasureTools
-            mode={measureMode}
-            onModeChange={selectMeasureMode}
-            onClear={clearMeasurement}
-            result={measureResult}
-            pointCount={measurePoints.length}
-          />
-        </div>
-        <div className="map-overlay-topright">
-          <div className="map-toolbar-row">
-            <FullscreenToggle active={isFullscreen} onClick={toggleFullscreen} />
-            <BasemapToggle mode={basemapMode} onChange={setBasemapMode} />
-          </div>
+        <MapToolbar
+          onZoomIn={() => mapRef?.zoomIn()}
+          onZoomOut={() => mapRef?.zoomOut()}
+          onExtent={() => mapRef?.fitBounds(bounds, { padding: [24, 24] })}
+          measureMode={measureMode}
+          onSelectMeasureMode={selectMeasureMode}
+          basemapMode={basemapMode}
+          onBasemapChange={setBasemapMode}
+          lat={(mapView.pos ?? mapView.center)?.lat}
+          lon={(mapView.pos ?? mapView.center)?.lng}
+          zoom={mapView.zoom}
+          scaleLabel={mapView.zoom != null ? scaleRatioLabel(mapView.zoom, (mapView.pos ?? mapView.center)?.lat ?? 0) : null}
+        />
+        <div className="map-body">
           <LayersPanel
             layers={layers}
             layerState={layerState}
             symbologyState={symbologyState}
+            vectorData={vectorData}
             onToggleVisibility={toggle}
             onOpacityChange={setOpacity}
             onSymbologyChange={updateSymbology}
+            onRefreshLayers={onRefreshLayers}
+            projectId={projectId}
           />
-        </div>
-        <MapContainer
-          bounds={bounds}
-          boundsOptions={{ padding: [24, 24] }}
-          scrollWheelZoom={false}
-          maxZoom={22}
-          className="map-root"
-        >
-          <ScrollZoomOnActivate />
-          <FullscreenInvalidate />
-          <CoordinateReadout />
-          <MapClickRouter mode={measureMode} onInspect={inspectPixel} onMeasurePoint={addMeasurePoint} />
-          <MeasureDrawing mode={measureMode} points={measurePoints} />
-          {pixelPopup ? (
-            <Popup position={pixelPopup.latlng} eventHandlers={{ remove: () => setPixelPopup(null) }}>
-              <div className="pixel-popup">
-                {pixelPopup.loading ? (
-                  "Reading pixel…"
-                ) : pixelPopup.rows.length === 0 ? (
-                  "No active layer to inspect."
-                ) : (
-                  pixelPopup.rows.map((row) => (
-                    <div className="pixel-popup-row" key={row.layer.layer_id}>
-                      <strong>
-                        {row.layer.type} · {row.layer.date_processed ?? "undated"}
-                      </strong>
-                      {renderPixelRow(row)}
-                    </div>
-                  ))
-                )}
-              </div>
-            </Popup>
-          ) : null}
-          <TileLayer
-            attribution={basemapMode === "map" ? CARTO_BASEMAP_ATTRIBUTION : BASEMAP_ATTRIBUTION}
-            url={basemapMode === "map" ? CARTO_BASEMAP_URL : BASEMAP_URL}
-          />
-          {renderGenericLayers(layers)}
-          {layers.map((l) => (
-            <Rectangle
-              key={l.layer_id}
-              bounds={l.bounds}
-              pathOptions={{
-                color: DATASET_TYPE_COLORS[l.type] ?? "#0B6B46",
-                weight: 2,
-                fillOpacity: 0,
-              }}
+          <div className="map-canvas-wrap">
+            {/* Phase 3 Wave E: plain React overlays, siblings of
+             * <MapContainer> (not react-leaflet children) - none of these
+             * need Leaflet's map context, just `.map-canvas-wrap` itself as
+             * the positioned ancestor. */}
+            <div className="map-overlay-topleft">
+              <MeasureTools
+                mode={measureMode}
+                onClear={clearMeasurement}
+                result={measureResult}
+                pointCount={measurePoints.length}
+              />
+            </div>
+            <div className="map-overlay-topright">
+              <FullscreenToggle active={isFullscreen} onClick={toggleFullscreen} />
+            </div>
+            <MapContainer
+              bounds={bounds}
+              boundsOptions={{ padding: [24, 24] }}
+              scrollWheelZoom={false}
+              zoomControl={false}
+              maxZoom={22}
+              className="map-root"
             >
-              <Tooltip sticky>
-                {l.type} · {l.date_processed ?? "undated"}
-              </Tooltip>
-            </Rectangle>
-          ))}
-        </MapContainer>
+              <ScrollZoomOnActivate />
+              <FullscreenInvalidate />
+              <MapViewSync onReady={setMapRef} onChange={setMapView} />
+              <ScaleControl />
+              <MapClickRouter mode={measureMode} onInspect={inspectPixel} onMeasurePoint={addMeasurePoint} />
+              <MeasureDrawing mode={measureMode} points={measurePoints} />
+              {pixelPopup ? (
+                <Popup position={pixelPopup.latlng} eventHandlers={{ remove: () => setPixelPopup(null) }}>
+                  <div className="pixel-popup">
+                    {pixelPopup.loading ? (
+                      "Reading pixel…"
+                    ) : pixelPopup.rows.length === 0 ? (
+                      "No active layer to inspect."
+                    ) : (
+                      pixelPopup.rows.map((row) => (
+                        <div className="pixel-popup-row" key={row.layer.layer_id}>
+                          <strong>
+                            {row.layer.type} · {row.layer.date_processed ?? "undated"}
+                          </strong>
+                          {renderPixelRow(row)}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </Popup>
+              ) : null}
+              <TileLayer
+                attribution={basemapMode === "map" ? CARTO_BASEMAP_ATTRIBUTION : BASEMAP_ATTRIBUTION}
+                url={basemapMode === "map" ? CARTO_BASEMAP_URL : BASEMAP_URL}
+              />
+              {renderGenericLayers(layers)}
+              {boundsLayers.map((l) => (
+                <Rectangle
+                  key={l.layer_id}
+                  bounds={l.bounds}
+                  pathOptions={{
+                    color: DATASET_TYPE_COLORS[l.type] ?? "#0B6B46",
+                    weight: 2,
+                    fillOpacity: 0,
+                  }}
+                >
+                  <Tooltip sticky>
+                    {l.type} · {l.date_processed ?? "undated"}
+                  </Tooltip>
+                </Rectangle>
+              ))}
+            </MapContainer>
+          </div>
+        </div>
       </div>
     </div>
   );

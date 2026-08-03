@@ -14,18 +14,54 @@ class ProjectRepository:
     def __init__(self, cur: psycopg.Cursor) -> None:
         self.cur = cur
 
-    def list_paginated(self, limit: int, offset: int) -> tuple[list[dict[str, Any]], int]:
+    def list_paginated(
+        self,
+        limit: int,
+        offset: int,
+        *,
+        member_id: UUID | str | None = None,
+        search: str | None = None,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """`member_id` is None for an Administrator (every project, no
+        filter - see ProjectService.list_projects) or a user_id to restrict
+        the listing to projects that user has a live membership row on
+        (Wave: project-level RBAC). Same two-query shape (count, then page)
+        either way, just with an extra JOIN + WHERE clause spliced in.
+
+        `search` is an optional case-insensitive partial match on name,
+        ANDed alongside the deleted_at/membership filters above - never a
+        replacement for them."""
+        member_join = ""
+        params: list[Any] = []
+        if member_id is not None:
+            member_join = (
+                "JOIN project_membership pm ON pm.project_id = p.project_id "
+                "AND pm.user_id = %s AND pm.removed_at IS NULL"
+            )
+            params.append(str(member_id))
+
+        search_clause = ""
+        if search:
+            search_clause = "AND p.name ILIKE %s"
+            params.append(f"%{search}%")
+
+        # member_join/search_clause are always one of the fixed literals set
+        # above - never derived from the raw `member_id`/`search` values
+        # (which travel only as bound %s parameters) - so this f-string
+        # splices in constant clauses, not attacker-reachable SQL.
         self.cur.execute(
-            "SELECT count(*) AS n FROM project WHERE deleted_at IS NULL"
+            f"SELECT count(*) AS n FROM project p {member_join} WHERE p.deleted_at IS NULL {search_clause}",  # noqa: S608, E501
+            tuple(params),
         )
         total = int(self.cur.fetchone()["n"])  # type: ignore[index]
         self.cur.execute(
-            """
+            f"""
             SELECT p.project_id, p.name, p.region, p.status,
                    d.dataset_id AS latest_dataset_id,
                    d.accuracy_score AS latest_accuracy,
                    d.date_processed AS latest_processed
             FROM project p
+            {member_join}
             LEFT JOIN LATERAL (
                 SELECT dataset_id, accuracy_score, date_processed
                 FROM dataset d
@@ -33,11 +69,11 @@ class ProjectRepository:
                 ORDER BY d.loaded_at DESC
                 LIMIT 1
             ) d ON true
-            WHERE p.deleted_at IS NULL
+            WHERE p.deleted_at IS NULL {search_clause}
             ORDER BY p.name
             LIMIT %s OFFSET %s
-            """,
-            (limit, offset),
+            """,  # noqa: S608 - see the identical note on the count query above
+            (*params, limit, offset),
         )
         return list(self.cur.fetchall()), total
 
@@ -49,13 +85,21 @@ class ProjectRepository:
         )
         return self.cur.fetchone()
 
-    def find_or_create_by_name(self, name: str, region: str) -> UUID:
+    def find_or_create_by_name(self, name: str, region: str) -> tuple[UUID, bool]:
         """Atomic: relies on the unique index on lower(name). Concurrent first-time
         uploads of the same project can no longer create duplicates.
 
         The index (see migration 0001) is PARTIAL - `WHERE deleted_at IS NULL` - so
         Postgres will only accept it as an ON CONFLICT arbiter if the same predicate
         is repeated here.
+
+        Returns `(project_id, created)`. `created` is the standard Postgres
+        "was this an INSERT or did ON CONFLICT DO UPDATE fire" idiom
+        (`xmax = 0` is true only for a row this same command just inserted) -
+        Wave: project-level RBAC uses it to decide whether the uploader
+        becomes this project's first member (see
+        IngestionService._resolve_project) rather than needing a matching
+        membership row that, for a genuinely new project, cannot exist yet.
         """
         self.cur.execute(
             """
@@ -63,11 +107,13 @@ class ProjectRepository:
             VALUES (%s, %s, CURRENT_DATE, 'Active')
             ON CONFLICT (lower(name)) WHERE deleted_at IS NULL
               DO UPDATE SET name = project.name
-            RETURNING project_id
+            RETURNING project_id, (xmax = 0) AS created
             """,
             (name, region),
         )
-        return self.cur.fetchone()["project_id"]  # type: ignore[index]
+        row = self.cur.fetchone()
+        assert row is not None
+        return row["project_id"], bool(row["created"])  # type: ignore[index]
 
     def get_version(self, project_id: UUID | str) -> int | None:
         """Read the current optimistic-lock version for a live (non-deleted) row,

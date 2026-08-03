@@ -23,7 +23,7 @@ import sys
 
 from app.core.config import get_settings
 from app.core.db import Database
-from app.core.security import hash_password
+from app.core.security import MIN_PASSWORD_LENGTH, hash_password
 from app.domain.enums import Role
 from app.repositories.users import UserRepository
 
@@ -37,8 +37,11 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if len(args.password) < 8:
-        print("Refusing a password shorter than 8 characters.", file=sys.stderr)
+    if len(args.password) < MIN_PASSWORD_LENGTH:
+        print(
+            f"Refusing a password shorter than {MIN_PASSWORD_LENGTH} characters.",
+            file=sys.stderr,
+        )
         raise SystemExit(1)
 
     settings = get_settings()

@@ -17,6 +17,8 @@ from app.core.config import Settings
 from app.core.db import Database
 from app.core.errors import AuthError, NotFoundError
 from app.core.security import decode_token
+from app.domain.authz import require_project_view
+from app.domain.dtos import CurrentUser
 from app.repositories.datasets import LayerRepository
 from app.services.ingestion.storage import Storage
 from app.services.tile_renderer import read_pixel, render_tile
@@ -27,6 +29,20 @@ class TileService:
         self.db = db
         self.settings = settings
         self.storage = storage
+
+    def require_layer_access(self, layer_id: UUID, user: CurrentUser) -> None:
+        """Wave: project-level RBAC - `GET /layers/{id}/pixel` goes through
+        the normal `Authorization: Bearer` dependency (see that route's own
+        docstring), so unlike `get_tile` below it CAN and must be checked
+        per-request like any other project-scoped read. Resolves the
+        layer's project_id (LayerRepository.get already excludes a
+        soft-deleted project/dataset) and defers to the same
+        require_project_view every other project-scoped endpoint uses."""
+        with self.db.connection() as conn, conn.cursor() as cur:
+            layer = LayerRepository(cur).get(layer_id)
+            if not layer:
+                raise NotFoundError("No tiles available for this layer.")
+            require_project_view(cur, layer["project_id"], user)
 
     def verify_token(self, layer_id: UUID, token: str) -> None:
         payload = decode_token(self.settings, token, expected_type="tile")
@@ -80,13 +96,15 @@ class TileService:
 
     def read_pixel(self, layer_id: UUID, lon: float, lat: float) -> list[float | None]:
         """Phase 3 Wave D: real per-band pixel values at one lon/lat, for
-        click-to-inspect. Uses `get_render_context` (not just `get_cog_key`)
-        because `read_pixel` needs the layer's own class_legend too - a
-        legend-defined class 0 must not be reported as "no data" by the
-        warp-fill padding heuristic (Phase 3 Wave I)."""
-        cog_key, legend = self.get_render_context(layer_id)
+        click-to-inspect. `get_cog_key` alone is enough now (Wave: geometric
+        padding fix) - the COG's own real internal mask already tells
+        `read_pixel` which pixels are padding, so there's no legend-vs-0
+        heuristic left here needing the layer's class_legend (contrast
+        `render`, which still takes `legend` from its caller for the
+        separate classified-vs-raw-bands rendering-mode decision)."""
+        cog_key = self.get_cog_key(layer_id)
         cog_path = self.storage.local_path_for_processing(cog_key)
         try:
-            return read_pixel(cog_path, lon, lat, legend=legend)
+            return read_pixel(cog_path, lon, lat)
         except PointOutsideBounds as e:
             raise NotFoundError("No data at this location.") from e

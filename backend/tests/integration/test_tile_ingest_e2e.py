@@ -27,6 +27,8 @@ if not os.getenv("DMRV_TEST_DATABASE"):
 
 from app.core.config import get_settings  # noqa: E402
 from app.core.db import Database  # noqa: E402
+from app.domain.dtos import CurrentUser  # noqa: E402
+from app.domain.enums import Role  # noqa: E402
 from app.repositories.users import UserRepository  # noqa: E402
 from app.services.ingestion.storage import LocalStorage  # noqa: E402
 from app.services.jobs_service import JobService  # noqa: E402
@@ -96,8 +98,9 @@ def test_ingest_then_fetch_a_real_tile_end_to_end(db, tmp_path):
     assert job.result["cog_key"] is not None, job.result.get("cog_error")
 
     project_id = job.result["project_id"]
+    actor = CurrentUser(user_id=user_id, username="tiletest", role=Role.ADMINISTRATOR)
     proj_svc = ProjectService(db, settings, storage)
-    layers = proj_svc.get_layers(project_id)
+    layers = proj_svc.get_layers(project_id, actor)
     assert len(layers.layers) == 1
     layer = layers.layers[0]
     assert layer.tile_url_template is not None

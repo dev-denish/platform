@@ -24,13 +24,17 @@ dependencies = [
     "prometheus-client==0.25.0",
     "rio-cogeo==7.0.2",
     "rio-tiler==9.4.0",
+    "httpx==0.28.1",
+    "pyshp==2.3.1",
+    "defusedxml==0.7.1",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest==8.3.4",
     "pytest-cov==6.0.0",
-    "httpx==0.28.1",
+    # httpx is now a runtime dependency (see main dependencies list) - kept
+    # importable here via that, not re-pinned twice.
     "ruff==0.8.4",
     "mypy==1.14.0",
     "pip-audit==2.7.3",
@@ -64,6 +68,7 @@ ignore = ["S101"]  # asserts are fine in tests / internal invariants
 # FastAPI's dependency-injection idiom REQUIRES call defaults like File(...)/Form(...).
 "app/api/v1/datasets.py" = ["B008"]
 "app/api/v1/auth.py" = ["B008"]
+"app/api/v1/adhoc_layers.py" = ["B008"]
 
 [tool.mypy]
 python_version = "3.12"

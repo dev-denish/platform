@@ -29,3 +29,15 @@ export function polygonAreaHectares(latlngs) {
   const squareMeters = turfArea({ type: "Polygon", coordinates: [ring] });
   return squareMeters / 10000;
 }
+
+/**
+ * "1:8,407"-style ratio scale for the toolbar readout - the standard
+ * web-Mercator formula (same one QGIS/ArcGIS web viewers use): ground
+ * resolution at this zoom/latitude, divided by the OGC-standard assumed
+ * screen pixel size (0.28mm), rounded to a whole-number denominator.
+ */
+export function scaleRatioLabel(zoom, lat) {
+  const metersPerPixel = (156543.03392804097 * Math.cos((lat * Math.PI) / 180)) / Math.pow(2, zoom);
+  const denominator = Math.round(metersPerPixel / 0.00028);
+  return `1:${denominator.toLocaleString("en-US")}`;
+}
