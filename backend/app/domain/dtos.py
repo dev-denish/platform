@@ -415,6 +415,37 @@ class JobAccepted(BaseModel):
     status_url: str
 
 
+class ScanValuesResult(BaseModel):
+    """Response for `POST /datasets/scan-values` (Class Legend Builder's
+    "Scan file" action): every distinct real value found in band 1 of the
+    uploaded raster, ascending. Synchronous - unlike the ingest job above,
+    this is a quick, bounded read with nothing to persist, so there is no
+    job/polling round trip."""
+
+    values: list[int]
+
+
+class UpdateClassLegendRequest(BaseModel):
+    """Request for `PATCH /layers/{id}/class-legend` (Wave: editable class
+    legend). The FULL replacement legend, same shape as an upload's own
+    `class_legend` - a value present here (however it got there: unchanged,
+    renamed, recolored) is counted; a value from the old legend simply
+    absent here is what "removed" means. Reuses ClassLegendBuilder's own
+    `buildLegend()` shape on the frontend, so there's no separate add/
+    remove/rename wire format to keep in sync."""
+
+    class_legend: dict[str, dict[str, str] | str]
+
+
+class ClassLegendUpdateResult(BaseModel):
+    layer_id: UUID
+    class_legend: dict[str, Any]
+    total_area_ha: float
+    # None only if the new legend is empty - the layer reports as unclassified
+    # (band_stats) instead, same as a fresh upload with no legend at all.
+    class_area_ha: dict[str, float] | None
+
+
 class JobOut(BaseModel):
     id: UUID
     kind: str

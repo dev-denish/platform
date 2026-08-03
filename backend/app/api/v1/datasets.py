@@ -18,6 +18,7 @@ Poll `GET /api/v1/jobs/{id}` for the outcome (queued -> running -> succeeded /
 failed / dead_letter).
 """
 
+import asyncio
 import contextlib
 import json
 import os
@@ -28,12 +29,13 @@ from fastapi import APIRouter, Depends, File, Form, Header, Request, UploadFile
 
 from app.api.deps import get_job_service, get_settings, get_task_runner, require_role
 from app.core.config import Settings
-from app.core.errors import DomainError, PayloadTooLargeError, ValidationError
+from app.core.errors import DomainError, PayloadTooLargeError, UnprocessableError, ValidationError
 from app.core.logging import request_id_ctx
 from app.core.metrics import jobs_submitted_total
 from app.core.ratelimit import limiter
-from app.domain.dtos import CurrentUser, IngestMetadata, JobAccepted
+from app.domain.dtos import CurrentUser, IngestMetadata, JobAccepted, ScanValuesResult
 from app.domain.enums import UPLOAD_ROLES
+from app.services.ingestion import raster as R
 from app.services.ingestion.vector import csv_header
 from app.services.jobs_service import JobService
 from app.workers.jobs import run_ingest_job
@@ -200,3 +202,40 @@ async def upload_dataset(
         raise DomainError("Failed to enqueue the ingest job. Please retry the upload.") from e
 
     return JobAccepted(job_id=job_id, status_url=status_url)
+
+
+@router.post("/datasets/scan-values", response_model=ScanValuesResult)
+@limiter.limit("30/hour")
+async def scan_raster_values(
+    request: Request,
+    settings: Annotated[Settings, Depends(get_settings)],
+    user: Annotated[CurrentUser, Depends(require_role(*UPLOAD_ROLES))],
+    file: UploadFile = File(...),
+) -> ScanValuesResult:
+    """Class Legend Builder's "Scan file" action (matches QGIS's "Classify"):
+    read the actual distinct pixel values in band 1 of the file about to be
+    uploaded, so the legend can be pre-populated with one row per real value
+    instead of the user guessing what's in the raster. Synchronous - a
+    windowed, memory-bounded read (`R.scan_distinct_values`), same size cap
+    as the real upload, off the event loop via `asyncio.to_thread` but with
+    nothing to persist, so there's no job/polling round trip needed."""
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in settings.allowed_raster_extensions:
+        raise ValidationError(
+            f"Unsupported file type '{ext or '(none)'}'. "
+            f"Allowed: {', '.join(settings.allowed_raster_extensions)}."
+        )
+    staged = await _stream_to_temp(
+        file, suffix=ext, max_bytes=settings.max_upload_bytes,
+        staging_dir=settings.upload_staging_dir,
+    )
+    try:
+        values = await asyncio.to_thread(
+            R.scan_distinct_values, staged, settings.raster_window_size
+        )
+    except Exception as e:  # rasterio/GDAL failure -> client-safe 422
+        raise UnprocessableError(f"Raster could not be scanned: {e}") from e
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(staged)
+    return ScanValuesResult(values=values)

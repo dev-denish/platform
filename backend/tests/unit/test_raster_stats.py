@@ -100,22 +100,24 @@ def test_legend_labels_and_preview(utm_lulc, tmp_path):
     assert out.exists() and out.stat().st_size > 0
 
 
-def test_unmapped_pixel_values_bucket_into_unclassified(utm_lulc):
-    """The main correctness fix: a legend that only names SOME of the raster's
-    values must not turn the rest into their own fake per-value classes - they
-    all collapse into one "Unclassified" total."""
+def test_unmapped_pixel_values_are_excluded_entirely(utm_lulc):
+    """Wave: editable class legend. A legend that only names SOME of the
+    raster's values must not turn the rest into their own fake per-value
+    classes - AND (superseding the old "Unclassified" bucket) must not count
+    them toward Total Area either: an unmatched value is excluded exactly
+    like padding, so editing a legend (adding/removing a value) changes Total
+    Area by exactly that value's area."""
     path, arr = utm_lulc
     pixel_ha = (10 * 10) / 10_000.0
     # fixture has values 1-5; only name 1 and 2, leave 3/4/5 unmapped
     legend = {"1": {"label": "Forest"}, "2": {"label": "Water"}}
     stats = R.compute_stats(path, legend=legend, block=200)
-    assert set(stats.class_area_ha) == {"Forest", "Water", "Unclassified"}
-    expected_unclassified = round(int(np.isin(arr, [3, 4, 5]).sum()) * pixel_ha, 4)
-    assert stats.class_area_ha["Unclassified"] == pytest.approx(expected_unclassified, abs=1e-6)
-    # total area is unaffected by the legend - still every non-nodata pixel
-    assert stats.class_area_ha["Forest"] + stats.class_area_ha["Water"] + (
-        stats.class_area_ha["Unclassified"]
-    ) == pytest.approx(stats.total_area_ha, abs=1e-6)
+    assert set(stats.class_area_ha) == {"Forest", "Water"}
+    expected_matched = round(int(np.isin(arr, [1, 2]).sum()) * pixel_ha, 4)
+    assert stats.total_area_ha == pytest.approx(expected_matched, abs=1e-6)
+    assert stats.class_area_ha["Forest"] + stats.class_area_ha["Water"] == pytest.approx(
+        stats.total_area_ha, abs=1e-6
+    )
 
 
 def test_flat_string_legend_format_is_accepted(utm_lulc, tmp_path):
@@ -279,21 +281,18 @@ def lulc_no_nodata_with_zero_fill(tmp_path):
     return str(path), real_pixel_count
 
 
-def test_no_nodata_zero_fill_without_rotation_counts_as_unclassified(
+def test_no_nodata_zero_fill_without_rotation_excluded_as_unlisted(
     lulc_no_nodata_with_zero_fill,
 ):
-    """Documents the wave's own explicitly stated limitation - this is NOT a
-    bug: this fixture's zero-fill is baked directly into an axis-aligned,
+    """This fixture's zero-fill is baked directly into an axis-aligned,
     non-rotated raster's ordinary pixel values, with no `nodata` tag - there
     is no warp-introduced geometric mismatch for `add_alpha` to reveal, so
-    it's indistinguishable from real data. Now that `padding_value()`'s
-    value-based guess is gone with NO fallback, every pixel counts: the
-    unlisted 0s land in "Unclassified" - the SAME rule any other
-    legend-unlisted real value already gets (see
-    test_genuinely_unlisted_real_value_still_reports_as_unclassified) -
-    and Total Area is genuinely the FULL raster. See this module's own
-    docstring for why: fixing this specific pattern needs the source to
-    carry a real nodata tag, which no warp-time mask can invent."""
+    it's geometrically indistinguishable from real data. Wave: editable
+    class legend supersedes the old "counts as Unclassified, still in Total
+    Area" verdict: a value the legend doesn't name (0, here) is excluded from
+    Total Area exactly like any other legend-unlisted value (see
+    test_genuinely_unlisted_real_value_still_excluded) - Total Area is the
+    real classified footprint, not the full raster."""
     path, real_pixel_count = lulc_no_nodata_with_zero_fill
     legend = {str(i): {"label": f"Class {i}"} for i in range(1, 10)}
     stats = R.compute_stats(path, legend=legend, block=37)
@@ -301,18 +300,12 @@ def test_no_nodata_zero_fill_without_rotation_counts_as_unclassified(
     h = w = 200
     pixel_ha = (10 * 10) / 10_000.0
     print(f"real (non-zero) pixels: {real_pixel_count}, full raster: {h * w}")
-    print(f"MEASURED total_area_ha: {stats.total_area_ha}, Unclassified: {stats.class_area_ha.get('Unclassified')}")
+    print(f"MEASURED total_area_ha: {stats.total_area_ha}")
 
-    assert "Unclassified" in stats.class_area_ha, (
-        "without a nodata tag or geometric mismatch, the zero-fill is no "
-        "longer excluded - it's ordinary unlisted data, same as any other "
-        "legend-unlisted value"
-    )
-    expected_unclassified = round((h * w - real_pixel_count) * pixel_ha, 4)
-    assert stats.class_area_ha["Unclassified"] == pytest.approx(expected_unclassified, abs=1e-6)
-    assert stats.total_area_ha == pytest.approx(h * w * pixel_ha, abs=1e-6), (
-        "every pixel counts now - there's no safe way to guess which zeros "
-        "are real vs fill without a nodata tag or a genuine warp mismatch"
+    assert "Unclassified" not in stats.class_area_ha
+    assert stats.total_area_ha == pytest.approx(real_pixel_count * pixel_ha, abs=1e-6), (
+        "the unlisted zero-fill must be excluded from Total Area - only the "
+        "legend-matched classified footprint counts"
     )
     assert sum(stats.class_area_ha.values()) == pytest.approx(stats.total_area_ha, abs=1e-6)
 
@@ -393,11 +386,14 @@ def test_accumulate_band_stats_checks_all_bands_for_padding(tmp_path):
     assert stats.band_stats.max == pytest.approx(300.0, abs=1e-6)
 
 
-def test_genuinely_unlisted_real_value_still_reports_as_unclassified(tmp_path):
-    """The other half of the fix's contract: ONLY padding is excluded - a
-    real pixel value the legend simply doesn't name is still legitimate
-    information and must still show up as Unclassified (this is not a
-    license to hide every unmapped value, just the padding)."""
+def test_genuinely_unlisted_real_value_still_excluded(tmp_path):
+    """Wave: editable class legend. A real pixel value the legend simply
+    doesn't name is real data, not padding - but it's still not a COUNTED
+    class: it's excluded from `class_area_ha` and from Total Area, the same
+    treatment as any other legend-unlisted value (this is what makes
+    removing a class from the legend actually shrink Total Area by that
+    class's area, rather than just relabeling its pixels into a bucket that
+    still counted)."""
     h = w = 64
     arr = np.full((h, w), 1, dtype="uint16")
     arr[:10, :10] = 99  # a real, deliberate, unlisted class code - not padding
@@ -411,10 +407,11 @@ def test_genuinely_unlisted_real_value_still_reports_as_unclassified(tmp_path):
 
     legend = {"1": {"label": "Forest"}}
     stats = R.compute_stats(str(path), legend=legend, block=200)
-    assert "Unclassified" in stats.class_area_ha
+    assert "Unclassified" not in stats.class_area_ha
     pixel_ha = (10 * 10) / 10_000.0
-    expected_unclassified = round(100 * pixel_ha, 4)  # the 10x10 block of value 99
-    assert stats.class_area_ha["Unclassified"] == pytest.approx(expected_unclassified, abs=1e-6)
+    expected_forest = round((h * w - 100) * pixel_ha, 4)  # everything but the 10x10 block of 99
+    assert stats.class_area_ha["Forest"] == pytest.approx(expected_forest, abs=1e-6)
+    assert stats.total_area_ha == pytest.approx(expected_forest, abs=1e-6)
 
 
 # ============================================================ Wave: geometric padding fix

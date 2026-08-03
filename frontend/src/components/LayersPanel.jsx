@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import SymbologyPanel from "./SymbologyPanel.jsx";
+import ClassLegendEditor from "./ClassLegendEditor.jsx";
 import AddAdhocLayerDialog from "./AddAdhocLayerDialog.jsx";
 import { formatDate, formatNumber } from "../lib/format.js";
 import { apiFetch } from "../config.js";
@@ -82,6 +83,7 @@ export default function LayersPanel({
   onOpacityChange,
   onSymbologyChange,
   onRefreshLayers,
+  onLegendChanged,
   projectId,
 }) {
   const { user } = useAuth();
@@ -279,6 +281,10 @@ export default function LayersPanel({
             onChange={onSymbologyChange}
             hideTitle
           />
+
+          {openLayer.layer_kind === "raster" && openLayer.class_legend && user && canUpload(user.role) ? (
+            <ClassLegendEditor layer={openLayer} onSaved={onLegendChanged} />
+          ) : null}
 
           <label className="symbology-popover-opacity">
             <span>Opacity</span>

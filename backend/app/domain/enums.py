@@ -109,3 +109,4 @@ class AuditAction(StrEnum):
     ADD_WMS_DOMAIN = "add_wms_domain"
     REMOVE_WMS_DOMAIN = "remove_wms_domain"
     CREATE_EXTERNAL_LAYER = "create_external_layer"
+    UPDATE_CLASS_LEGEND = "update_class_legend"

@@ -185,7 +185,7 @@ class LayerRepository:
         # closes the gap for both.
         self.cur.execute(
             """
-            SELECT sl.layer_id, sl.dataset_id, sl.layer_kind, sl.cog_key,
+            SELECT sl.layer_id, sl.dataset_id, sl.layer_kind, sl.cog_key, sl.file_key,
                    sl.class_legend, p.project_id
             FROM spatial_layer sl
             JOIN dataset d ON d.dataset_id = sl.dataset_id
@@ -202,6 +202,19 @@ class LayerRepository:
             (cog_key, str(layer_id)),
         )
 
+    def update_legend(self, layer_id: UUID | str, class_legend: dict[str, Any]) -> None:
+        """Wave: editable class legend. Overwrites the persisted legend for an
+        already-ingested layer - tile rendering (TileService.get_render_context)
+        and the pixel-inspect popup both read this same column live on their
+        next request, so the change is immediately visible with no
+        re-ingestion. See ClassLegendService.update_legend, the only caller -
+        it also recomputes and re-persists this layer's KPIs in the same
+        transaction, so the legend and its area numbers never go out of sync."""
+        self.cur.execute(
+            "UPDATE spatial_layer SET class_legend = %s WHERE layer_id = %s",
+            (Jsonb(class_legend), str(layer_id)),
+        )
+
 
 class KpiRepository:
     def __init__(self, cur: psycopg.Cursor) -> None:
@@ -216,6 +229,28 @@ class KpiRepository:
               DO UPDATE SET value = EXCLUDED.value, unit = EXCLUDED.unit, computed_at = now()
             """,
             (str(dataset_id), metric_name, value, unit),
+        )
+
+    def for_dataset(self, dataset_id: UUID | str) -> dict[str, float]:
+        """Every current KPI value for one dataset, keyed by metric_name -
+        the "before" snapshot ClassLegendService.update_legend needs to audit
+        a legend edit: the layer's own already-persisted numbers (what every
+        dashboard was showing a moment ago), not a re-derivation of them."""
+        self.cur.execute(
+            "SELECT metric_name, value FROM kpi WHERE dataset_id = %s", (str(dataset_id),)
+        )
+        return {r["metric_name"]: float(r["value"]) for r in self.cur.fetchall()}
+
+    def delete_class_metrics(self, dataset_id: UUID | str) -> None:
+        """Wipes every per-class KPI row for this dataset (metric_name LIKE
+        'class_area_%') before a legend edit re-inserts fresh ones from the
+        new legend's own recomputed stats (see ClassLegendService.
+        update_legend, the only caller) - a class just removed from the
+        legend must not leave its old, now-stale area behind as an orphaned
+        row that would otherwise keep inflating portfolio_totals() forever."""
+        self.cur.execute(
+            "DELETE FROM kpi WHERE dataset_id = %s AND metric_name LIKE 'class_area_%%'",
+            (str(dataset_id),),
         )
 
     def for_project(self, project_id: UUID | str) -> list[dict[str, Any]]:

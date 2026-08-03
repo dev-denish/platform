@@ -547,6 +547,7 @@ export default function UploadPage() {
                   <ClassLegendBuilder
                     rows={form.class_legend_rows}
                     onChange={(rows) => update("class_legend_rows", rows)}
+                    file={form.file}
                   />
                   <span className="field-hint">
                     {isSatellite()

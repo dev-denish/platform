@@ -249,13 +249,19 @@ function initLayerState(layers) {
  * token itself is expired/rejected, `onRefreshLayers` resolves to `false` and
  * the banner is the correct, intended outcome - that session is genuinely
  * over and a real reload/re-login is required, not papered over.
+ *
+ * onLegendChanged (optional, Wave: editable class legend): passed through to
+ * LayersPanel/ClassLegendEditor, called after a legend PATCH succeeds. Unlike
+ * onRefreshLayers (just a fresh tile token), this is the caller's cue to
+ * re-fetch KPIs/evolution too - a legend edit changes Total Area and
+ * per-class numbers, not just which pixels render which color.
  */
 // Well under the 1h tile-token TTL, so a proactive refresh always lands with
 // margin to spare even if the tab was briefly backgrounded/throttled around
 // the scheduled tick.
 const PROACTIVE_REFRESH_INTERVAL_MS = 45 * 60 * 1000;
 
-export default function ProjectMap({ layers, onRefreshLayers, projectId }) {
+export default function ProjectMap({ layers, onRefreshLayers, onLegendChanged, projectId }) {
   const [layerState, setLayerState] = useState(() => initLayerState(layers));
   // Wave: map UI redesign. The Leaflet map instance (once mounted) and its
   // live zoom/center/hovered-position, both consumed by the toolbar above -
@@ -671,6 +677,7 @@ export default function ProjectMap({ layers, onRefreshLayers, projectId }) {
             onOpacityChange={setOpacity}
             onSymbologyChange={updateSymbology}
             onRefreshLayers={onRefreshLayers}
+            onLegendChanged={onLegendChanged}
             projectId={projectId}
           />
           <div className="map-canvas-wrap">

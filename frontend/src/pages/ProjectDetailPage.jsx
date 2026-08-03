@@ -136,6 +136,21 @@ export default function ProjectDetailPage() {
     setMembers(await apiFetch(`/projects/${projectId}/members`));
   }
 
+  // Wave: editable class legend. A legend edit changes this layer's Total
+  // Area and per-class KPI numbers, not just its tile colors (reloadLayers
+  // alone only mints a fresh tile token) - so Key Metrics and Landscape
+  // Evolution need a fresh read too, same "reload just what changed"
+  // pattern as reloadLayers/reloadMembers above.
+  async function reloadLayersAndMetrics() {
+    const [, kpisRes, evolutionRes] = await Promise.all([
+      reloadLayers(),
+      apiFetch(`/projects/${projectId}/kpis`),
+      apiFetch(`/projects/${projectId}/evolution`),
+    ]);
+    setKpis(kpisRes);
+    setEvolution(evolutionRes);
+  }
+
   async function load() {
     setLoading(true);
     setError(null);
@@ -279,7 +294,12 @@ export default function ProjectDetailPage() {
           <EmptyState title="No layers yet" detail="Ingested rasters will appear here with their extent and preview." />
         ) : (
           <>
-            <ProjectMap layers={layers.layers} onRefreshLayers={reloadLayers} projectId={projectId} />
+            <ProjectMap
+              layers={layers.layers}
+              onRefreshLayers={reloadLayers}
+              onLegendChanged={reloadLayersAndMetrics}
+              projectId={projectId}
+            />
             <div className="layer-grid">
               {layers.layers.map((l) => (
                 <div className="layer-card" key={l.layer_id}>

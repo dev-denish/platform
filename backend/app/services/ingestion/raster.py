@@ -158,15 +158,23 @@ def metric_key(label: str) -> str:
 
 
 def _bucket_by_legend(counts: dict[int, int], legend: Legend) -> dict[str, int]:
-    """Map raw pixel-value counts through the legend. A pixel value the legend
-    doesn't name isn't a real class - it's raw, unlabeled raster data - so it is
-    summed into one "Unclassified" bucket instead of being reported as its own
-    fake per-value class (the bug this fixes: a raw scene has thousands of
-    distinct values, none of which are meaningful "classes" on their own)."""
+    """Map raw pixel-value counts through the legend. A pixel value the
+    legend doesn't currently name is not a counted class - Wave: editable
+    class legend. Removing a value's legend entry must actually shrink Total
+    Area by that value's area (verified against a real ingested layer), not
+    just relabel its pixels into a fake "Unclassified" bucket that still
+    counted toward the total - so an unmatched value is dropped here
+    entirely, the same treatment `compute_stats`'s own geometric mask already
+    gives real padding. This makes the legend the single source of truth for
+    what's "real, counted data" on a classified layer: present in the legend
+    -> counted and rendered; absent -> excluded from area and (tile_renderer)
+    rendered transparent."""
     buckets: dict[str, int] = {}
     for v, c in counts.items():
         entry = legend.get(str(v)) if legend else None
-        label = _entry_label(entry) or "Unclassified"
+        label = _entry_label(entry)
+        if label is None:
+            continue
         buckets[label] = buckets.get(label, 0) + c
     return buckets
 
@@ -210,6 +218,41 @@ def _accumulate_counts(vrt, block: int) -> dict[int, int]:
         for v, c in zip(vals.tolist(), cnts.tolist(), strict=True):
             counts[int(v)] = counts.get(int(v), 0) + int(c)
     return counts
+
+
+def _is_nodata(arr: np.ndarray, nodata: float) -> np.ndarray:
+    """True where `arr` equals `nodata`, handling the float-NaN nodata
+    convention (`arr == nan` never matches, even for a genuine NaN, since NaN
+    compares unequal to everything including itself)."""
+    if isinstance(nodata, float) and math.isnan(nodata):
+        return np.isnan(arr)
+    return arr == nodata
+
+
+def scan_distinct_values(src_path: str, block: int = 2048) -> list[int]:
+    """Every distinct real value in band 1 of the raw uploaded file - the
+    Class Legend Builder's "Scan file" action (matches QGIS's "Classify"):
+    read what's actually in the band rather than guess or hardcode a class
+    list, so a genuine 0 (real land-cover data, not padding) surfaces as its
+    own value like any other.
+
+    Runs on the file AS UPLOADED, before reprojection - there is no geometric
+    mask yet at this point (`reproject_to_4326` is what produces one, during
+    ingest), so this respects the band's own `nodata` tag if the source
+    declares one, the only padding signal available pre-ingest (same as
+    QGIS's own unique-value classification). Windowed, so memory stays
+    O(block^2) regardless of raster size."""
+    with rasterio.open(src_path) as src:
+        nodata = src.nodata
+        values: set[int] = set()
+        for win in _iter_windows(src.width, src.height, block):
+            arr = src.read(1, window=win)
+            if nodata is not None:
+                arr = arr[~_is_nodata(arr, nodata)]
+            if arr.size == 0:
+                continue
+            values.update(int(v) for v in np.unique(arr).tolist())
+    return sorted(values)
 
 
 def _accumulate_band_stats(vrt, block: int) -> tuple[float, float, float, float, int]:
@@ -265,13 +308,18 @@ def compute_stats(src_path: str, legend: Legend, block: int = 2048) -> RasterSta
     """Area is always measured on an equal-area grid in metres.
 
     With a legend: per-class area in hectares, each pixel value mapped through
-    the legend to its label; any value the legend doesn't name is bucketed into
-    a single "Unclassified" total rather than reported as its own fake class.
+    the legend to its label; a value the legend doesn't currently name is
+    excluded entirely (see `_bucket_by_legend`) - Total Area for a classified
+    layer is the sum of its currently-legend-defined classes only, so editing
+    the legend (Wave: editable class legend) changes Total Area exactly the
+    way removing/adding a real class should.
 
     Without a legend: there is no classification to report areas for - the
     scene is raw/unclassified (e.g. a reflectance band), and a per-value area
     breakdown would just be its brightness histogram. Generic per-band
-    statistics (min/max/mean/stddev) are returned instead, in `band_stats`.
+    statistics (min/max/mean/stddev) are returned instead, in `band_stats`,
+    and Total Area there is still every real (non-padding) pixel - there's no
+    legend to bound it by.
     """
     has_legend = bool(legend)
     with rasterio.open(src_path) as src:
@@ -301,7 +349,7 @@ def compute_stats(src_path: str, legend: Legend, block: int = 2048) -> RasterSta
     if has_legend:
         buckets = _bucket_by_legend(counts, legend)
         class_area = {label: round(c * pixel_area_ha, 4) for label, c in sorted(buckets.items())}
-        total = round(sum(counts.values()) * pixel_area_ha, 4)
+        total = round(sum(buckets.values()) * pixel_area_ha, 4)
         return RasterStats(
             total_area_ha=total, area_crs=area_crs, class_area_ha=class_area, band_stats=None
         )
@@ -337,9 +385,17 @@ def _classified_rgba(arr: np.ndarray, legend: Legend, valid_mask: np.ndarray) ->
     from the SAME warp that produced `arr` (see render_preview) - wherever
     it's False, that pixel is warp-fill padding, geometrically, regardless
     of its raw value; a legend-defined class 0 (e.g. Water) renders normally
-    everywhere it's True."""
+    everywhere it's True.
+
+    Wave: editable class legend - a value with no CURRENT legend entry is
+    left at this array's zero-initialized (0, 0, 0, 0), i.e. transparent,
+    same as real padding - not given a fake DEFAULT_PALETTE color. Matches
+    `_bucket_by_legend`'s own area accounting: unmatched is excluded, not
+    relabeled."""
     rgba = np.zeros((*arr.shape, 4), dtype=np.uint8)
     for v in np.unique(arr).tolist():
+        if legend.get(str(int(v))) is None:
+            continue
         hexc = color_for_value(int(v), legend).lstrip("#")
         r, g, b = (int(hexc[i : i + 2], 16) for i in (0, 2, 4))
         rgba[arr == v] = (r, g, b, 235)

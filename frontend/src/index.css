@@ -1144,10 +1144,25 @@ a {
   gap: 8px;
 }
 
+.legend-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.legend-ramp-select {
+  min-width: 200px;
+}
+
+.field-hint-error {
+  color: #a8332f;
+}
+
 .legend-row {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .legend-row-pixel {
@@ -1652,7 +1667,12 @@ a {
    * sits behind the map canvas now that .layers-panel is a normal docked
    * sibling instead of a z-index:1000 floating overlay. */
   z-index: 1000;
-  width: 260px;
+  /* Wave: editable class legend widened this from 260px - a legend row
+   * (pixel value + class dropdown + color swatch + remove button) needs
+   * more room than the plain band/color controls this popover started
+   * with; .legend-row's own flex-wrap below is the fallback for whatever
+   * width doesn't fully fit. */
+  width: 340px;
   background: var(--surface);
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-lift);
@@ -1688,6 +1708,14 @@ a {
   border: none;
   padding: 0;
   margin-bottom: 0;
+}
+
+.class-legend-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
 }
 
 .symbology-popover-opacity {

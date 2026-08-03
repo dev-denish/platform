@@ -1,9 +1,12 @@
 /** Shared with the pixel-inspection popup (Wave D) - same "entry is either a
  * plain string or a {label, color} object" convention a persisted
- * class_legend uses everywhere else in this app. */
+ * class_legend uses everywhere else in this app. Mirrors the backend's own
+ * `_entry_label(entry) or "Unclassified"` fallback (raster.py's
+ * `_bucket_by_legend`) - a pixel value with no real legend entry is raw,
+ * unlabeled raster data, never shown as its bare integer. */
 export function legendEntryLabel(value, entry) {
-  if (typeof entry === "string") return entry || value;
-  return entry?.label || value;
+  const label = typeof entry === "string" ? entry : entry?.label;
+  return label && label.trim() ? label : "Unclassified";
 }
 
 export function legendEntryColor(entry) {

@@ -90,9 +90,20 @@ def _colormap_for_uint8(
     already tells rio-tiler which pixels are padding; `img.render()` renders
     a masked pixel fully transparent regardless of what the colormap dict
     says for its raw value (verified directly against a real COG), so a
-    colormap only ever needs to define real class colors."""
+    colormap only ever needs to define real class colors.
+
+    Wave: editable class legend - a value with no CURRENT entry in `legend`
+    maps to fully transparent (0, 0, 0, 0) here too, not a cycling
+    DEFAULT_PALETTE fallback color: removing a class from a layer's
+    persisted legend (see ClassLegendService) must make it render transparent
+    immediately, live, on the very next tile request - no re-ingestion, no
+    separate "hide this class" control. `overrides` never applies to an
+    unmatched value either - there's no real class there to override."""
     cmap: dict[int, tuple[int, int, int, int]] = {}
     for v in range(256):
+        if legend.get(str(v)) is None:
+            cmap[v] = (0, 0, 0, 0)
+            continue
         override = overrides.get(str(v)) if overrides else None
         hexc = (override or color_for_value(v, legend)).lstrip("#")
         r, g, b = (int(hexc[i : i + 2], 16) for i in (0, 2, 4))
