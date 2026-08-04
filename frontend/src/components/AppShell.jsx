@@ -1,8 +1,10 @@
+import { Suspense } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext.jsx";
 import { canManageUsers, canManageWmsSources, canUpload } from "../lib/roles.js";
 import { RoleBadge } from "./StatusBadge.jsx";
 import ChangePasswordButton from "./ChangePasswordButton.jsx";
+import Spinner from "./Spinner.jsx";
 
 export default function AppShell() {
   const { user, logout } = useAuth();
@@ -81,7 +83,15 @@ export default function AppShell() {
       </aside>
 
       <main className="shell-main">
-        <Outlet />
+        <Suspense
+          fallback={
+            <div className="full-screen-center">
+              <Spinner label="Loading…" />
+            </div>
+          }
+        >
+          <Outlet />
+        </Suspense>
       </main>
     </div>
   );

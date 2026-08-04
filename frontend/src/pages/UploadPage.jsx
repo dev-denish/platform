@@ -68,6 +68,8 @@ const REFERENCE_LIBRARY_PLACEHOLDER = "Reference Layer Library";
 
 export default function UploadPage() {
   const [step, setStep] = useState(1);
+  const [step1Open, setStep1Open] = useState(true);
+  const [step2Open, setStep2Open] = useState(true);
   const [form, setForm] = useState(INITIAL);
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
@@ -371,7 +373,14 @@ export default function UploadPage() {
       </ol>
 
       <section className="panel">
-        {step === 1 ? (
+        {step >= 1 ? (
+          <>
+            <button className="collapsible-header" aria-expanded={step1Open} onClick={() => setStep1Open((o) => !o)}>
+              <span>File &amp; project</span>
+              <span className={`collapsible-chevron${step1Open ? " collapsible-chevron-open" : ""}`} aria-hidden="true">▾</span>
+            </button>
+            <div className="collapsible-body" data-open={step1Open} inert={step1Open ? undefined : ""}>
+              <div className="collapsible-body-inner">
           <div className="form-grid">
             <label className="field field-wide">
               <span className="field-label">File</span>
@@ -458,14 +467,32 @@ export default function UploadPage() {
               </>
             ) : null}
             <div className="form-actions">
-              <button type="button" className="primary-button" disabled={!step1Valid()} onClick={() => setStep(2)}>
+              <button
+                type="button"
+                className="primary-button"
+                disabled={!step1Valid()}
+                onClick={() => {
+                  setStep1Open(false);
+                  setStep(2);
+                }}
+              >
                 Continue →
               </button>
             </div>
           </div>
+              </div>
+            </div>
+          </>
         ) : null}
 
-        {step === 2 ? (
+        {step >= 2 ? (
+          <>
+            <button className="collapsible-header" aria-expanded={step2Open} onClick={() => setStep2Open((o) => !o)}>
+              <span>Metadata</span>
+              <span className={`collapsible-chevron${step2Open ? " collapsible-chevron-open" : ""}`} aria-hidden="true">▾</span>
+            </button>
+            <div className="collapsible-body" data-open={step2Open} inert={step2Open ? undefined : ""}>
+              <div className="collapsible-body-inner">
           <div className="form-grid">
             <label className="field">
               <span className="field-label">Dataset type</span>
@@ -558,14 +585,32 @@ export default function UploadPage() {
               </>
             ) : null}
             <div className="form-actions">
-              <button type="button" className="ghost-button" onClick={() => setStep(1)}>
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={() => {
+                  setStep1Open(true);
+                  setStep(1);
+                }}
+              >
                 ← Back
               </button>
-              <button type="button" className="primary-button" disabled={!step2Valid()} onClick={() => setStep(3)}>
+              <button
+                type="button"
+                className="primary-button"
+                disabled={!step2Valid()}
+                onClick={() => {
+                  setStep2Open(false);
+                  setStep(3);
+                }}
+              >
                 Continue →
               </button>
             </div>
           </div>
+              </div>
+            </div>
+          </>
         ) : null}
 
         {step === 3 ? (
@@ -594,7 +639,15 @@ export default function UploadPage() {
             <ErrorBanner message={error} />
 
             <div className="form-actions">
-              <button type="button" className="ghost-button" onClick={() => setStep(2)} disabled={submitting}>
+              <button
+                type="button"
+                className="ghost-button"
+                disabled={submitting}
+                onClick={() => {
+                  setStep2Open(true);
+                  setStep(2);
+                }}
+              >
                 ← Back
               </button>
               <button type="button" className="primary-button" onClick={handleSubmit} disabled={submitting}>

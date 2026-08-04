@@ -2107,3 +2107,47 @@ a {
 .sample-data-banner svg {
   flex: none;
 }
+
+/* ---------------------------------------------------------- collapsible panel primitive */
+
+.collapsible-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  background: var(--bg-elevated);
+  border: none;
+  padding: 10px 16px;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.collapsible-chevron {
+  display: inline-block;
+  color: var(--text-faint);
+  transition: transform 0.15s ease;
+}
+
+.collapsible-chevron-open {
+  transform: rotate(180deg);
+}
+
+.collapsible-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  overflow: hidden;
+  transition: grid-template-rows 0.2s ease;
+}
+
+.collapsible-body[data-open="true"] {
+  grid-template-rows: 1fr;
+}
+
+.collapsible-body-inner {
+  min-height: 0;
+  overflow: hidden;
+}

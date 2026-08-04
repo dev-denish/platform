@@ -1,0 +1,114 @@
+# Ephemeral, isolated stack for the frontend E2E suite (Playwright).
+#
+# Why this exists: a prior QA run pointed Playwright's bulk-delete test
+# straight at docker-compose.yml's live `deploy-db-1`/`deploy-backend-1` and
+# permanently deleted the real admin account - there was no separate test
+# environment to point at instead. This file IS that separate environment.
+#
+# Isolation, concretely:
+#   - Distinct compose project name ("dmrv-qa") -> container names
+#     (dmrv-qa-test-db-1, etc.) can never collide with deploy's
+#     deploy-db-1/deploy-backend-1/deploy-redis-1.
+#   - tmpfs data dirs, no named volumes -> `docker compose down` (no -v even
+#     needed) leaves nothing behind. Nothing here is meant to survive a run.
+#   - DMRV_ENVIRONMENT=test on the backend, which is a real, validated config
+#     value (app/core/config.py's `Environment` literal) surfaced at
+#     GET /livez - this is what tests/e2e/global-setup.js's hard guard
+#     checks before running anything destructive. The live stack's backend
+#     must never be started with DMRV_ENVIRONMENT=test.
+#   - No .env required - every value below is a disposable default. Never
+#     reuse these credentials or this JWT secret for anything real.
+#
+# Run directly: docker compose -p dmrv-qa -f deploy/docker-compose.test.yml up -d --wait
+# Normally invoked automatically by playwright's globalSetup/globalTeardown.
+
+name: dmrv-qa
+
+services:
+  test-db:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_USER: dmrv_qa
+      POSTGRES_PASSWORD: dmrv_qa_ephemeral
+      POSTGRES_DB: dmrv_qa
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dmrv_qa -d dmrv_qa"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  test-redis:
+    image: redis:7-alpine
+    tmpfs:
+      - /data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  test-migrate:
+    build:
+      context: ../backend
+    command: ["sh", "-c", "alembic upgrade head"]
+    environment:
+      DMRV_ENVIRONMENT: test
+      DMRV_DB_HOST: test-db
+      DMRV_DB_USER: dmrv_qa
+      DMRV_DB_PASSWORD: dmrv_qa_ephemeral
+      DMRV_DB_NAME: dmrv_qa
+    depends_on:
+      test-db:
+        condition: service_healthy
+    restart: "no"
+
+  test-backend:
+    build:
+      context: ../backend
+    environment:
+      # Explicit and FIXED, deliberately not left to Settings' per-process
+      # auto-generate fallback (config.py's `secret_is_weak and not
+      # is_production_like` branch). Verified by running this stack directly:
+      # gunicorn forks WEB_CONCURRENCY (default 2) worker processes, and
+      # since get_settings() is only lru_cache'd PER PROCESS, each forked
+      # worker would generate its OWN random secret independently - a login
+      # handled by worker A gets a token worker B then rejects with "Invalid
+      # authentication token" on the very next request. Same class of bug as
+      # the rate-limiter's cross-worker inconsistency (fixed there via a
+      # shared Redis storage_uri) - here the fix is just: don't leave it
+      # per-worker-random in the first place.
+      DMRV_JWT_SECRET: dmrv-qa-ephemeral-secret-shared-across-workers-not-for-real-use
+      DMRV_ENVIRONMENT: test
+      DMRV_DB_HOST: test-db
+      DMRV_DB_USER: dmrv_qa
+      DMRV_DB_PASSWORD: dmrv_qa_ephemeral
+      DMRV_DB_NAME: dmrv_qa
+      DMRV_CORS_ALLOW_ORIGINS: http://localhost:5173
+      DMRV_STORAGE_BACKEND: local
+      DMRV_LOCAL_DATA_DIR: /var/lib/dmrv/data
+      DMRV_REDIS_URL: redis://test-redis:6379/0
+      DMRV_TASK_RUNNER_BACKEND: arq
+    tmpfs:
+      - /var/lib/dmrv/data
+      - /var/lib/dmrv/staging
+    ports:
+      # Host port intentionally different from anything deploy/docker-compose.yml
+      # exposes (8080), so the two stacks can run side by side without a
+      # collision - and so a hardcoded "is this 8080?" guard has something
+      # real to check.
+      - "8091:8001"
+    depends_on:
+      test-db:
+        condition: service_healthy
+      test-redis:
+        condition: service_healthy
+      test-migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+# No `worker` service: nothing in tests/e2e currently exercises the async
+# ingestion job path (upload flow isn't covered yet). Add one here, copying
+# deploy/docker-compose.yml's `worker` service verbatim onto this stack's
+# env vars, if/when an upload.spec.js needs it.

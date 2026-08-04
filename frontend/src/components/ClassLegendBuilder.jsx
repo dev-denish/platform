@@ -27,6 +27,10 @@ const RAMPS = {
     "#a6cee3", "#1f78b4", "#b2df8a", "#33a02c", "#fb9a99", "#e31a1c",
     "#fdbf6f", "#ff7f00", "#cab2d6", "#6a3d9a", "#ffff99", "#b15928",
   ],
+  lulc9: [
+    "#228b22", "#50aa2a", "#ee82ee", "#ffff00", "#ffd700",
+    "#7fff00", "#4682b4", "#b22222", "#d2b48c",
+  ],
 };
 
 const RAMP_OPTIONS = [
@@ -35,6 +39,7 @@ const RAMP_OPTIONS = [
   { key: "set2", label: "Qualitative — Set2" },
   { key: "dark2", label: "Qualitative — Dark2" },
   { key: "paired", label: "Qualitative — Paired" },
+  { key: "lulc9", label: "LULC (9-class)" },
 ];
 
 function hslToHex(h, s, l) {

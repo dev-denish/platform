@@ -22,6 +22,7 @@ import LandCoverPie from "../components/LandCoverPie.jsx";
 import PortfolioMap from "../components/PortfolioMap.jsx";
 import { formatDate, formatNumber, humanizeMetricName } from "../lib/format.js";
 import { classColor, DATASET_TYPE_COLORS } from "../lib/colors.js";
+import { useCollapse } from "../lib/useCollapse.js";
 
 // Cap on how many projects we fetch layer geometry for, to build the portfolio
 // map. Each project needs its own /layers call (the API has no bulk endpoint for
@@ -63,6 +64,13 @@ export default function DashboardPage() {
   const [mapLayers, setMapLayers] = useState([]);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
+
+  const [statsOpen, toggleStats] = useCollapse("collapse:dashboard:stats", true);
+  const [compositionOpen, toggleComposition] = useCollapse("collapse:dashboard:composition", true);
+  const [coverageOpen, toggleCoverage] = useCollapse("collapse:dashboard:coverage", true);
+  const [carbonTrendOpen, toggleCarbonTrend] = useCollapse("collapse:dashboard:carbon-trend", true);
+  const [verificationOpen, toggleVerification] = useCollapse("collapse:dashboard:verification", true);
+  const [recentProjectsOpen, toggleRecentProjects] = useCollapse("collapse:dashboard:recent-projects", true);
 
   useEffect(() => {
     load();
@@ -134,157 +142,193 @@ export default function DashboardPage() {
 
       <ErrorBanner message={error} onRetry={load} />
 
-      <section className="stat-grid stat-grid-lead">
-        <div className="stat-card stat-card-lead">
-          <span className="stat-sweep" aria-hidden="true" />
-          <KpiIcon d="M4 6 H20 M4 12 H20 M4 18 H14" />
-          <span className="stat-label">Projects tracked</span>
-          <span className="stat-value">{summary?.project_count ?? 0}</span>
-        </div>
-        <div className="stat-card stat-card-lead">
-          <span className="stat-sweep" aria-hidden="true" />
-          <KpiIcon d="M4 8 L12 4 L20 8 L20 16 L12 20 L4 16 Z" />
-          <span className="stat-label">Total measured area</span>
-          <span className="stat-value">
-            {totalArea != null ? formatNumber(totalArea) : "0"} <span className="stat-unit">ha</span>
-          </span>
-        </div>
-      </section>
-
       <section className="panel">
-        <div className="panel-header">
-          <h2 className="panel-title">Land cover composition</h2>
-        </div>
-
-        {classBreakdown.length === 0 ? (
-          <EmptyState
-            title="No land-cover data yet"
-            detail="Class-level breakdown appears once a dataset with a class legend is ingested."
-          />
-        ) : (
-          <div className="composition-grid">
-            <div className="composition-chart">
-              <LandCoverPie data={pieData} />
-              <Legend items={classLegendItems} />
+        <button className="collapsible-header" aria-expanded={statsOpen} onClick={toggleStats}>
+          <span>Portfolio snapshot</span>
+          <span className={`collapsible-chevron${statsOpen ? " collapsible-chevron-open" : ""}`} aria-hidden="true">▾</span>
+        </button>
+        <div className="collapsible-body" data-open={statsOpen} inert={statsOpen ? undefined : ""}>
+          <div className="collapsible-body-inner">
+            <div className="stat-grid stat-grid-lead">
+              <div className="stat-card stat-card-lead">
+                <span className="stat-sweep" aria-hidden="true" />
+                <KpiIcon d="M4 6 H20 M4 12 H20 M4 18 H14" />
+                <span className="stat-label">Projects tracked</span>
+                <span className="stat-value">{summary?.project_count ?? 0}</span>
+              </div>
+              <div className="stat-card stat-card-lead">
+                <span className="stat-sweep" aria-hidden="true" />
+                <KpiIcon d="M4 8 L12 4 L20 8 L20 16 L12 20 L4 16 Z" />
+                <span className="stat-label">Total measured area</span>
+                <span className="stat-value">
+                  {totalArea != null ? formatNumber(totalArea) : "0"} <span className="stat-unit">ha</span>
+                </span>
+              </div>
             </div>
-            <table className="data-table composition-table">
-              <thead>
-                <tr>
-                  <th>Class</th>
-                  <th>Area</th>
-                  <th>Share</th>
-                </tr>
-              </thead>
-              <tbody>
-                {classBreakdown
-                  .slice()
-                  .sort(([, a], [, b]) => b - a)
-                  .map(([metric, value]) => {
-                    const label = humanizeMetricName(metric);
-                    const share = classSum > 0 ? (value / classSum) * 100 : 0;
-                    return (
-                      <tr key={metric}>
-                        <td>
-                          <span className="legend-item">
-                            <span
-                              className="legend-swatch"
-                              style={{ background: classColor(label) }}
-                              aria-hidden="true"
-                            />
-                            {label}
-                          </span>
-                        </td>
-                        <td className="mono-cell">{formatNumber(value)} ha</td>
-                        <td className="mono-cell">{formatNumber(share, 1)}%</td>
-                      </tr>
-                    );
-                  })}
-              </tbody>
-            </table>
           </div>
-        )}
+        </div>
       </section>
 
       <section className="panel">
-        <div className="panel-header">
-          <h2 className="panel-title">Project coverage</h2>
+        <button className="collapsible-header" aria-expanded={compositionOpen} onClick={toggleComposition}>
+          <span>Land cover composition</span>
+          <span className={`collapsible-chevron${compositionOpen ? " collapsible-chevron-open" : ""}`} aria-hidden="true">▾</span>
+        </button>
+        <div className="collapsible-body" data-open={compositionOpen} inert={compositionOpen ? undefined : ""}>
+          <div className="collapsible-body-inner">
+            {classBreakdown.length === 0 ? (
+              <EmptyState
+                title="No land-cover data yet"
+                detail="Class-level breakdown appears once a dataset with a class legend is ingested."
+              />
+            ) : (
+              <div className="composition-grid">
+                <div className="composition-chart">
+                  <LandCoverPie data={pieData} />
+                  <Legend items={classLegendItems} />
+                </div>
+                <table className="data-table composition-table">
+                  <thead>
+                    <tr>
+                      <th>Class</th>
+                      <th>Area</th>
+                      <th>Share</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {classBreakdown
+                      .slice()
+                      .sort(([, a], [, b]) => b - a)
+                      .map(([metric, value]) => {
+                        const label = humanizeMetricName(metric);
+                        const share = classSum > 0 ? (value / classSum) * 100 : 0;
+                        return (
+                          <tr key={metric}>
+                            <td>
+                              <span className="legend-item">
+                                <span
+                                  className="legend-swatch"
+                                  style={{ background: classColor(label) }}
+                                  aria-hidden="true"
+                                />
+                                {label}
+                              </span>
+                            </td>
+                            <td className="mono-cell">{formatNumber(value)} ha</td>
+                            <td className="mono-cell">{formatNumber(share, 1)}%</td>
+                          </tr>
+                        );
+                      })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </div>
-        {mapLayers.length === 0 ? (
-          <EmptyState
-            title="No spatial layers yet"
-            detail="Ingested raster extents will appear here across your whole portfolio."
-          />
-        ) : (
-          <>
-            <PortfolioMap layers={mapLayers} />
-            <Legend items={typeLegendItems} title="Dataset type" />
-          </>
-        )}
+      </section>
+
+      <section className="panel">
+        <button className="collapsible-header" aria-expanded={coverageOpen} onClick={toggleCoverage}>
+          <span>Project coverage</span>
+          <span className={`collapsible-chevron${coverageOpen ? " collapsible-chevron-open" : ""}`} aria-hidden="true">▾</span>
+        </button>
+        <div className="collapsible-body" data-open={coverageOpen} inert={coverageOpen ? undefined : ""}>
+          <div className="collapsible-body-inner">
+            {mapLayers.length === 0 ? (
+              <EmptyState
+                title="No spatial layers yet"
+                detail="Ingested raster extents will appear here across your whole portfolio."
+              />
+            ) : (
+              <>
+                <PortfolioMap layers={mapLayers} />
+                <Legend items={typeLegendItems} title="Dataset type" />
+              </>
+            )}
+          </div>
+        </div>
       </section>
 
       <div className="dashboard-grid">
         <section className="panel panel-sample">
-          <div className="panel-header">
-            <h2 className="panel-title">Carbon removal trend</h2>
+          <button className="collapsible-header" aria-expanded={carbonTrendOpen} onClick={toggleCarbonTrend}>
+            <span>Carbon removal trend</span>
+            <span className={`collapsible-chevron${carbonTrendOpen ? " collapsible-chevron-open" : ""}`} aria-hidden="true">▾</span>
+          </button>
+          <div className="collapsible-body" data-open={carbonTrendOpen} inert={carbonTrendOpen ? undefined : ""}>
+            <div className="collapsible-body-inner">
+              <SampleDataBanner />
+              <CarbonTrendChart data={SAMPLE_CARBON_TREND} />
+            </div>
           </div>
-          <SampleDataBanner />
-          <CarbonTrendChart data={SAMPLE_CARBON_TREND} />
         </section>
 
         <section className="panel panel-sample">
-          <div className="panel-header">
-            <h2 className="panel-title">Verification status</h2>
+          <button className="collapsible-header" aria-expanded={verificationOpen} onClick={toggleVerification}>
+            <span>Verification status</span>
+            <span className={`collapsible-chevron${verificationOpen ? " collapsible-chevron-open" : ""}`} aria-hidden="true">▾</span>
+          </button>
+          <div className="collapsible-body" data-open={verificationOpen} inert={verificationOpen ? undefined : ""}>
+            <div className="collapsible-body-inner">
+              <SampleDataBanner />
+              <VerificationDonut data={SAMPLE_VERIFICATION_STATUS} />
+            </div>
           </div>
-          <SampleDataBanner />
-          <VerificationDonut data={SAMPLE_VERIFICATION_STATUS} />
         </section>
       </div>
 
       <section className="panel">
         <div className="panel-header">
-          <h2 className="panel-title">Recently updated projects</h2>
+          <button className="collapsible-header" aria-expanded={recentProjectsOpen} onClick={toggleRecentProjects}>
+            <span>Recently updated projects</span>
+            <span className={`collapsible-chevron${recentProjectsOpen ? " collapsible-chevron-open" : ""}`} aria-hidden="true">▾</span>
+          </button>
           <Link to="/projects" className="link-button">
             View all →
           </Link>
         </div>
 
-        {recent && recent.items.length === 0 ? (
-          <EmptyState
-            title="No projects yet"
-            detail="Once a dataset is ingested, its project will appear here."
-          />
-        ) : (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Project</th>
-                <th>Region</th>
-                <th>Status</th>
-                <th>Latest accuracy</th>
-                <th>Last processed</th>
-              </tr>
-            </thead>
-            <tbody>
-              {recent?.items.map((p) => (
-                <tr key={p.project_id}>
-                  <td>
-                    <Link to={`/projects/${p.project_id}`} className="table-link">
-                      {p.name}
-                    </Link>
-                  </td>
-                  <td className="mono-cell">{p.region ?? "—"}</td>
-                  <td>
-                    <StatusBadge status={p.status} />
-                  </td>
-                  <td className="mono-cell">
-                    {p.latest_accuracy != null ? `${formatNumber(p.latest_accuracy)}%` : "—"}
-                  </td>
-                  <td className="mono-cell">{formatDate(p.latest_processed)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
+        <div className="collapsible-body" data-open={recentProjectsOpen} inert={recentProjectsOpen ? undefined : ""}>
+          <div className="collapsible-body-inner">
+            {recent && recent.items.length === 0 ? (
+              <EmptyState
+                title="No projects yet"
+                detail="Once a dataset is ingested, its project will appear here."
+              />
+            ) : (
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Project</th>
+                    <th>Region</th>
+                    <th>Status</th>
+                    <th>Latest accuracy</th>
+                    <th>Last processed</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recent?.items.map((p) => (
+                    <tr key={p.project_id}>
+                      <td>
+                        <Link to={`/projects/${p.project_id}`} className="table-link">
+                          {p.name}
+                        </Link>
+                      </td>
+                      <td className="mono-cell">{p.region ?? "—"}</td>
+                      <td>
+                        <StatusBadge status={p.status} />
+                      </td>
+                      <td className="mono-cell">
+                        {p.latest_accuracy != null ? `${formatNumber(p.latest_accuracy)}%` : "—"}
+                      </td>
+                      <td className="mono-cell">{formatDate(p.latest_processed)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
       </section>
     </div>
   );

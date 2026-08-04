@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 import BasemapToggle from "./BasemapToggle.jsx";
 
 /**
@@ -48,7 +48,14 @@ function MeasureMenu({ mode, onSelect }) {
   );
 }
 
-export default function MapToolbar({
+/**
+ * memo'd - but note this DOES still re-render on every pointer move over the
+ * map, by design: lat/lon/zoom/scaleLabel are the live readout and genuinely
+ * change. The memo earns its keep on the OTHER re-renders (layer toggles,
+ * opacity slider, pixel popups) where none of its props changed at all. The
+ * mousemove cost is bounded by MapViewSync's rAF throttle, not by this memo.
+ */
+function MapToolbar({
   onZoomIn,
   onZoomOut,
   onExtent,
@@ -97,3 +104,5 @@ export default function MapToolbar({
     </div>
   );
 }
+
+export default memo(MapToolbar);

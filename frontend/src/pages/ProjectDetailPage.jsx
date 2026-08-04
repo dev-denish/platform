@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { apiFetch } from "../config.js";
 import { useAuth } from "../context/AuthContext.jsx";
+import { useCollapse } from "../lib/useCollapse.js";
 import Spinner from "../components/Spinner.jsx";
 import ErrorBanner from "../components/ErrorBanner.jsx";
 import EmptyState from "../components/EmptyState.jsx";
@@ -23,8 +24,11 @@ import { datedLayerGroups } from "../lib/timeline.js";
  * however many layers a project has - N layers is just N of these stacked,
  * each with its own small stat-grid, never a hardcoded layout.
  */
-function LayerMetricsSection({ layer, metrics }) {
-  const [expanded, setExpanded] = useState(true);
+function LayerMetricsSection({ layer, metrics, projectId }) {
+  const [expanded, toggleExpanded] = useCollapse(
+    `collapse:project:${projectId}:layer-metrics:${layer.layer_id}`,
+    true
+  );
   const entries = metrics ? Object.entries(metrics) : [];
 
   return (
@@ -32,7 +36,8 @@ function LayerMetricsSection({ layer, metrics }) {
       <button
         type="button"
         className="layer-metrics-header"
-        onClick={() => setExpanded((e) => !e)}
+        aria-expanded={expanded}
+        onClick={toggleExpanded}
       >
         <span className="layer-metrics-title">
           {layer.type}
@@ -96,6 +101,10 @@ export default function ProjectDetailPage() {
   const [deleting, setDeleting] = useState(false);
   const [addLayerOpen, setAddLayerOpen] = useState(false);
 
+  const [keyMetricsOpen, toggleKeyMetrics] = useCollapse(`collapse:project:${projectId}:key-metrics`, true);
+  const [evolutionOpen, toggleEvolution] = useCollapse(`collapse:project:${projectId}:evolution`, true);
+  const [datasetsOpen, toggleDatasets] = useCollapse(`collapse:project:${projectId}:datasets`, true);
+
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -119,15 +128,18 @@ export default function ProjectDetailPage() {
 
   // Re-fetches only the layers endpoint (not the whole page) - used by
   // ProjectMap to pick up a fresh signed tile token after the current one
-  // expires (see ProjectMap.jsx's tile-error handling).
-  async function reloadLayers() {
+  // expires (see ProjectMap.jsx's tile-error handling). Wrapped in
+  // useCallback so ProjectMap (memoized by a parallel wave) gets a stable
+  // function identity across this page's now-more-frequent re-renders
+  // (collapse toggles).
+  const reloadLayers = useCallback(async () => {
     try {
       setLayers(await apiFetch(`/projects/${projectId}/layers`));
       return true;
     } catch {
       return false;
     }
-  }
+  }, [projectId]);
 
   // Re-fetches only the members list - used by ProjectMembers after an
   // add/remove/role-change, same reload-just-this-section pattern as
@@ -141,7 +153,7 @@ export default function ProjectDetailPage() {
   // alone only mints a fresh tile token) - so Key Metrics and Landscape
   // Evolution need a fresh read too, same "reload just what changed"
   // pattern as reloadLayers/reloadMembers above.
-  async function reloadLayersAndMetrics() {
+  const reloadLayersAndMetrics = useCallback(async () => {
     const [, kpisRes, evolutionRes] = await Promise.all([
       reloadLayers(),
       apiFetch(`/projects/${projectId}/kpis`),
@@ -149,7 +161,7 @@ export default function ProjectDetailPage() {
     ]);
     setKpis(kpisRes);
     setEvolution(evolutionRes);
-  }
+  }, [projectId, reloadLayers]);
 
   async function load() {
     setLoading(true);
@@ -254,18 +266,23 @@ export default function ProjectDetailPage() {
       />
 
       <section className="panel">
-        <div className="panel-header">
-          <h2 className="panel-title">Key metrics</h2>
-        </div>
-        {orderedLayers.length === 0 ? (
-          <EmptyState title="No metrics yet" detail="Metrics appear once a dataset has been ingested." />
-        ) : (
-          <div className="layer-metrics-list">
-            {orderedLayers.map((l) => (
-              <LayerMetricsSection key={l.layer_id} layer={l} metrics={kpis?.layers?.[l.layer_id]} />
-            ))}
+        <button className="collapsible-header" aria-expanded={keyMetricsOpen} onClick={toggleKeyMetrics}>
+          <span>Key metrics</span>
+          <span className={`collapsible-chevron${keyMetricsOpen ? " collapsible-chevron-open" : ""}`} aria-hidden="true">▾</span>
+        </button>
+        <div className="collapsible-body" data-open={keyMetricsOpen} inert={keyMetricsOpen ? undefined : ""}>
+          <div className="collapsible-body-inner">
+            {orderedLayers.length === 0 ? (
+              <EmptyState title="No metrics yet" detail="Metrics appear once a dataset has been ingested." />
+            ) : (
+              <div className="layer-metrics-list">
+                {orderedLayers.map((l) => (
+                  <LayerMetricsSection key={l.layer_id} layer={l} metrics={kpis?.layers?.[l.layer_id]} projectId={projectId} />
+                ))}
+              </div>
+            )}
           </div>
-        )}
+        </div>
       </section>
 
       <section className="panel">
@@ -329,42 +346,52 @@ export default function ProjectDetailPage() {
       </section>
 
       <section className="panel">
-        <div className="panel-header">
-          <h2 className="panel-title">Landscape evolution</h2>
+        <button className="collapsible-header" aria-expanded={evolutionOpen} onClick={toggleEvolution}>
+          <span>Landscape evolution</span>
+          <span className={`collapsible-chevron${evolutionOpen ? " collapsible-chevron-open" : ""}`} aria-hidden="true">▾</span>
+        </button>
+        <div className="collapsible-body" data-open={evolutionOpen} inert={evolutionOpen ? undefined : ""}>
+          <div className="collapsible-body-inner">
+            <LandscapeEvolutionTable evolution={evolution} />
+          </div>
         </div>
-        <LandscapeEvolutionTable evolution={evolution} />
       </section>
 
       <section className="panel">
-        <div className="panel-header">
-          <h2 className="panel-title">Datasets</h2>
+        <button className="collapsible-header" aria-expanded={datasetsOpen} onClick={toggleDatasets}>
+          <span>Datasets</span>
+          <span className={`collapsible-chevron${datasetsOpen ? " collapsible-chevron-open" : ""}`} aria-hidden="true">▾</span>
+        </button>
+        <div className="collapsible-body" data-open={datasetsOpen} inert={datasetsOpen ? undefined : ""}>
+          <div className="collapsible-body-inner">
+            {detail.datasets.length === 0 ? (
+              <EmptyState title="No datasets yet" />
+            ) : (
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Type</th>
+                    <th>Source</th>
+                    <th>Accuracy</th>
+                    <th>Processed</th>
+                    <th>Loaded</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {detail.datasets.map((d) => (
+                    <tr key={d.dataset_id}>
+                      <td>{d.type}</td>
+                      <td className="mono-cell">{d.source ?? "—"}</td>
+                      <td className="mono-cell">{d.accuracy_score != null ? `${formatNumber(d.accuracy_score)}%` : "—"}</td>
+                      <td className="mono-cell">{formatDate(d.date_processed)}</td>
+                      <td className="mono-cell">{formatDate(d.loaded_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
         </div>
-        {detail.datasets.length === 0 ? (
-          <EmptyState title="No datasets yet" />
-        ) : (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Type</th>
-                <th>Source</th>
-                <th>Accuracy</th>
-                <th>Processed</th>
-                <th>Loaded</th>
-              </tr>
-            </thead>
-            <tbody>
-              {detail.datasets.map((d) => (
-                <tr key={d.dataset_id}>
-                  <td>{d.type}</td>
-                  <td className="mono-cell">{d.source ?? "—"}</td>
-                  <td className="mono-cell">{d.accuracy_score != null ? `${formatNumber(d.accuracy_score)}%` : "—"}</td>
-                  <td className="mono-cell">{formatDate(d.date_processed)}</td>
-                  <td className="mono-cell">{formatDate(d.loaded_at)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
       </section>
     </div>
   );

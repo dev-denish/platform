@@ -106,18 +106,41 @@ function ScrollZoomOnActivate() {
  * reach the map. EPSG:4326 always, same as everywhere else in this app (see
  * LayerOut.crs) - a metric reprojection only ever happens internally, inside
  * the measure-tool math (lib/measure.js).
+ *
+ * `mousemove` is rAF-throttled: the raw browser event can fire well over
+ * 60/sec (high-polling-rate mice), and every one of those used to be a
+ * setState -> re-render of the whole toolbar readout. Coalescing to one update
+ * per animation frame keeps the readout live (it still tracks the pointer) but
+ * never asks React to render faster than the screen can paint. Only mousemove
+ * needs this - zoomend/moveend/mouseout are already one-shot events.
  */
 function MapViewSync({ onReady, onChange }) {
   const map = useMap();
+  const rafRef = useRef(null);
+  const pendingPosRef = useRef(null);
   useEffect(() => {
     onReady(map);
     onChange((v) => ({ ...v, zoom: map.getZoom(), center: map.getCenter() }));
   }, [map, onReady, onChange]);
+  useEffect(() => () => {
+    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+  }, []);
   useMapEvents({
     mousemove(e) {
-      onChange((v) => ({ ...v, pos: e.latlng }));
+      pendingPosRef.current = e.latlng;
+      if (rafRef.current !== null) return;
+      rafRef.current = requestAnimationFrame(() => {
+        rafRef.current = null;
+        onChange((v) => ({ ...v, pos: pendingPosRef.current }));
+      });
     },
     mouseout() {
+      // Drop any frame still queued from the last mousemove, otherwise it
+      // lands AFTER this and re-shows a stale position the pointer has left.
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
       onChange((v) => ({ ...v, pos: null }));
     },
     zoomend() {
@@ -163,6 +186,17 @@ function MapClickRouter({ mode, onInspect, onMeasurePoint }) {
 }
 
 const MEASURE_COLOR = "#e0692f";
+
+// Hoisted out of renderLayer: react-leaflet's WMSTileLayer calls
+// layer.setParams() (which redraws - re-requests every tile) whenever this
+// object's REFERENCE changes, not its contents (see
+// @react-leaflet/core WMSTileLayer.js's `props.params !== prevProps.params`).
+// An inline `params={{...}}` literal is a new object every render, so any
+// unrelated re-render of ProjectMap (e.g. the mousemove-driven `mapView`
+// state on every animation frame while the cursor crosses the map) redrew
+// every WMS layer in a tight loop even though nothing about the request
+// actually changed. One shared constant fixes it for every WMS layer at once.
+const WMS_TILE_PARAMS = { layers: "_", format: "image/png", transparent: true };
 
 /** The in-progress polyline/polygon + vertex markers for whichever measure
  * tool is active - purely visual, the actual distance/area math lives in
@@ -384,9 +418,21 @@ export default function ProjectMap({ layers, onRefreshLayers, onLegendChanged, p
     });
   }, [layers]);
 
-  function updateSymbology(layerId, next) {
+  // These three are handed straight to the memoized <LayersPanel> - useCallback
+  // (empty deps: they only ever call the always-stable setState updaters) is
+  // what makes that React.memo actually skip re-renders instead of being a
+  // no-op on a fresh function identity every render.
+  const updateSymbology = useCallback((layerId, next) => {
     setSymbologyState((prev) => ({ ...prev, [layerId]: next }));
-  }
+  }, []);
+
+  const toggle = useCallback((layerId, visible) => {
+    setLayerState((prev) => ({ ...prev, [layerId]: { ...prev[layerId], visible } }));
+  }, []);
+
+  const setOpacity = useCallback((layerId, opacity) => {
+    setLayerState((prev) => ({ ...prev, [layerId]: { ...prev[layerId], opacity } }));
+  }, []);
 
   // Phase 3 Wave D: measure tools + pixel inspection. Mutually exclusive via
   // a single `measureMode` - "inspect" (default, click = pixel lookup) or
@@ -469,15 +515,16 @@ export default function ProjectMap({ layers, onRefreshLayers, onLegendChanged, p
     ];
   }, [boundsLayers, layers]);
 
+  // Toolbar zoom/Extent buttons live OUTSIDE <MapContainer> (see MapViewSync)
+  // so they drive the map through `mapRef` - memoized so a mousemove-driven
+  // toolbar re-render doesn't hand it three new function identities as well.
+  const zoomIn = useCallback(() => mapRef?.zoomIn(), [mapRef]);
+  const zoomOut = useCallback(() => mapRef?.zoomOut(), [mapRef]);
+  const fitExtent = useCallback(() => mapRef?.fitBounds(bounds, { padding: [24, 24] }), [mapRef, bounds]);
+
+  // Every hook above this line - `bounds` is the last one, and bailing out
+  // early must happen after all of them, never between two.
   if (!bounds) return null;
-
-  function toggle(layerId, visible) {
-    setLayerState((prev) => ({ ...prev, [layerId]: { ...prev[layerId], visible } }));
-  }
-
-  function setOpacity(layerId, opacity) {
-    setLayerState((prev) => ({ ...prev, [layerId]: { ...prev[layerId], opacity } }));
-  }
 
   // A real expired/invalid token fails EVERY tile of a layer, since they all
   // share the one signed token in the URL. Tiles at the edge of a layer's
@@ -564,7 +611,7 @@ export default function ProjectMap({ layers, onRefreshLayers, onLegendChanged, p
         <WMSTileLayer
           key={key ?? `${l.layer_id}-wms`}
           url={l.tile_url_template}
-          params={{ layers: "_", format: "image/png", transparent: true }}
+          params={WMS_TILE_PARAMS}
           opacity={opacity}
         />
       );
@@ -655,9 +702,9 @@ export default function ProjectMap({ layers, onRefreshLayers, onLegendChanged, p
       />
       <div className="map-frame" ref={mapFrameRef}>
         <MapToolbar
-          onZoomIn={() => mapRef?.zoomIn()}
-          onZoomOut={() => mapRef?.zoomOut()}
-          onExtent={() => mapRef?.fitBounds(bounds, { padding: [24, 24] })}
+          onZoomIn={zoomIn}
+          onZoomOut={zoomOut}
+          onExtent={fitExtent}
           measureMode={measureMode}
           onSelectMeasureMode={selectMeasureMode}
           basemapMode={basemapMode}

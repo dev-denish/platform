@@ -5,6 +5,7 @@ import ErrorBanner from "../components/ErrorBanner.jsx";
 import EmptyState from "../components/EmptyState.jsx";
 import ConfirmDialog from "../components/ConfirmDialog.jsx";
 import { formatDate } from "../lib/format.js";
+import { useCollapse } from "../lib/useCollapse.js";
 
 /**
  * Wave: multi-format layers (Part B). Administrator-only management of the
@@ -26,6 +27,9 @@ export default function WmsDomainsPage() {
 
   const [removeTarget, setRemoveTarget] = useState(null);
   const [removingId, setRemovingId] = useState(null);
+
+  const [mobileDefault] = useState(() => (window.innerWidth <= 640 ? false : true));
+  const [createFormOpen, toggleCreateForm] = useCollapse("collapse:wms-domains:create-form", mobileDefault);
 
   useEffect(() => {
     load();
@@ -110,30 +114,35 @@ export default function WmsDomainsPage() {
       />
 
       <section className="panel">
-        <div className="panel-header">
-          <h2 className="panel-title">Approve a domain</h2>
-        </div>
-        <form className="form-grid" onSubmit={handleAdd}>
-          <label className="field field-wide">
-            <span className="field-label">Domain</span>
-            <input
-              className="field-input"
-              value={newDomain}
-              onChange={(e) => setNewDomain(e.target.value)}
-              placeholder="e.g. mapserver.example.com"
-              disabled={adding}
-            />
-            <span className="field-hint">
-              A bare hostname only - no scheme, path, or port.
-            </span>
-          </label>
-          <ErrorBanner message={addError} />
-          <div className="form-actions">
-            <button type="submit" className="primary-button" disabled={adding || !newDomain.trim()}>
-              {adding ? "Adding…" : "Add domain"}
-            </button>
+        <button className="collapsible-header" aria-expanded={createFormOpen} onClick={toggleCreateForm}>
+          <span>Approve a domain</span>
+          <span className={`collapsible-chevron${createFormOpen ? " collapsible-chevron-open" : ""}`} aria-hidden="true">▾</span>
+        </button>
+        <div className="collapsible-body" data-open={createFormOpen} inert={createFormOpen ? undefined : ""}>
+          <div className="collapsible-body-inner">
+            <form className="form-grid" onSubmit={handleAdd}>
+              <label className="field field-wide">
+                <span className="field-label">Domain</span>
+                <input
+                  className="field-input"
+                  value={newDomain}
+                  onChange={(e) => setNewDomain(e.target.value)}
+                  placeholder="e.g. mapserver.example.com"
+                  disabled={adding}
+                />
+                <span className="field-hint">
+                  A bare hostname only - no scheme, path, or port.
+                </span>
+              </label>
+              <ErrorBanner message={addError} />
+              <div className="form-actions">
+                <button type="submit" className="primary-button" disabled={adding || !newDomain.trim()}>
+                  {adding ? "Adding…" : "Add domain"}
+                </button>
+              </div>
+            </form>
           </div>
-        </form>
+        </div>
       </section>
 
       <section className="panel">

@@ -12,6 +12,7 @@ import ResetPasswordDialog from "../components/ResetPasswordDialog.jsx";
 import { RoleBadge } from "../components/StatusBadge.jsx";
 import { formatDate } from "../lib/format.js";
 import { ROLES, canManageUsers } from "../lib/roles.js";
+import { useCollapse } from "../lib/useCollapse.js";
 
 const LIMIT = 50;
 const CREATE_ROLES = Object.values(ROLES);
@@ -55,6 +56,9 @@ export default function UsersPage() {
   const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const canDelete = currentUser && canManageUsers(currentUser.role);
+
+  const [mobileDefault] = useState(() => window.innerWidth <= 640 ? false : true);
+  const [createFormOpen, toggleCreateForm] = useCollapse("collapse:users:create-form", mobileDefault);
 
   useEffect(() => {
     load(offset);
@@ -337,54 +341,59 @@ export default function UsersPage() {
       ) : null}
 
       <section className="panel">
-        <div className="panel-header">
-          <h2 className="panel-title">Create user</h2>
-        </div>
-        <form className="form-grid" onSubmit={handleCreate}>
-          <label className="field">
-            <span className="field-label">Username</span>
-            <input
-              className="field-input"
-              value={form.username}
-              onChange={(e) => updateForm("username", e.target.value)}
-              disabled={creating}
-              autoComplete="off"
-            />
-          </label>
-          <label className="field">
-            <span className="field-label">Password</span>
-            <input
-              type="password"
-              className="field-input"
-              value={form.password}
-              onChange={(e) => updateForm("password", e.target.value)}
-              disabled={creating}
-              autoComplete="new-password"
-            />
-            <span className="field-hint">At least {MIN_PASSWORD_LENGTH} characters.</span>
-          </label>
-          <label className="field">
-            <span className="field-label">Role</span>
-            <select
-              className="field-input"
-              value={form.role}
-              onChange={(e) => updateForm("role", e.target.value)}
-              disabled={creating}
-            >
-              {CREATE_ROLES.map((r) => (
-                <option key={r} value={r}>
-                  {r}
-                </option>
-              ))}
-            </select>
-          </label>
-          <ErrorBanner message={createError} />
-          <div className="form-actions">
-            <button type="submit" className="primary-button" disabled={creating || !formValid()}>
-              {creating ? "Creating…" : "Create user"}
-            </button>
+        <button className="collapsible-header" aria-expanded={createFormOpen} onClick={toggleCreateForm}>
+          <span>Create user</span>
+          <span className={`collapsible-chevron${createFormOpen ? " collapsible-chevron-open" : ""}`} aria-hidden="true">▾</span>
+        </button>
+        <div className="collapsible-body" data-open={createFormOpen} inert={createFormOpen ? undefined : ""}>
+          <div className="collapsible-body-inner">
+            <form className="form-grid" onSubmit={handleCreate}>
+              <label className="field">
+                <span className="field-label">Username</span>
+                <input
+                  className="field-input"
+                  value={form.username}
+                  onChange={(e) => updateForm("username", e.target.value)}
+                  disabled={creating}
+                  autoComplete="off"
+                />
+              </label>
+              <label className="field">
+                <span className="field-label">Password</span>
+                <input
+                  type="password"
+                  className="field-input"
+                  value={form.password}
+                  onChange={(e) => updateForm("password", e.target.value)}
+                  disabled={creating}
+                  autoComplete="new-password"
+                />
+                <span className="field-hint">At least {MIN_PASSWORD_LENGTH} characters.</span>
+              </label>
+              <label className="field">
+                <span className="field-label">Role</span>
+                <select
+                  className="field-input"
+                  value={form.role}
+                  onChange={(e) => updateForm("role", e.target.value)}
+                  disabled={creating}
+                >
+                  {CREATE_ROLES.map((r) => (
+                    <option key={r} value={r}>
+                      {r}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <ErrorBanner message={createError} />
+              <div className="form-actions">
+                <button type="submit" className="primary-button" disabled={creating || !formValid()}>
+                  {creating ? "Creating…" : "Create user"}
+                </button>
+              </div>
+            </form>
           </div>
-        </form>
+        </div>
       </section>
 
       <section className="panel">

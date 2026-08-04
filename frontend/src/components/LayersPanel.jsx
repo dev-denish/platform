@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
+import { useCollapse } from "../lib/useCollapse.js";
 import SymbologyPanel from "./SymbologyPanel.jsx";
 import ClassLegendEditor from "./ClassLegendEditor.jsx";
 import AddAdhocLayerDialog from "./AddAdhocLayerDialog.jsx";
@@ -74,7 +75,7 @@ function featureCountFor(layer, vectorData) {
   return data?.features ? data.features.length : null;
 }
 
-export default function LayersPanel({
+function LayersPanel({
   layers,
   layerState,
   symbologyState,
@@ -87,9 +88,18 @@ export default function LayersPanel({
   projectId,
 }) {
   const { user } = useAuth();
-  const [expanded, setExpanded] = useState(true);
-  const [expandedGroups, setExpandedGroups] = useState(() =>
-    Object.fromEntries(GROUPS.map((g) => [g.key, true]))
+  // Shared collapsible primitive (sessionStorage-backed, so a collapsed
+  // group stays collapsed when you navigate away and come back). No projectId
+  // in the keys: this is per-browser-tab UI preference, not project data.
+  const [expanded, toggleExpanded] = useCollapse("collapse:layers-panel:root", true);
+  // One hook per entry of the module-level GROUPS const - a fixed-length list,
+  // so the hook COUNT and ORDER are identical on every render. Deliberately
+  // driven off GROUPS and not off `groupedLayers`, which is filtered by
+  // `layers.length > 0` further down: that filter changes length whenever a
+  // layer is added/removed, and calling a hook per filtered entry would shift
+  // hook order mid-session. Groups with no layers just don't render any UI.
+  const groupCollapse = Object.fromEntries(
+    GROUPS.map((g) => [g.key, useCollapse(`collapse:layers-panel:group:${g.key}`, true)])
   );
   // A single shared popover slot (like before) - only ever one of
   // gear/info open at a time, whichever layer/kind was last clicked.
@@ -127,10 +137,6 @@ export default function LayersPanel({
     return (layerState[layer.layer_id] ?? { visible: true }).visible;
   }
 
-  function toggleGroup(key) {
-    setExpandedGroups((prev) => ({ ...prev, [key]: !prev[key] }));
-  }
-
   function openPopoverFor(layerId, kind) {
     setOpenPopover((prev) => (prev?.layerId === layerId && prev?.kind === kind ? null : { layerId, kind }));
   }
@@ -139,11 +145,7 @@ export default function LayersPanel({
 
   return (
     <div className="layers-panel">
-      <button
-        type="button"
-        className={`layers-panel-header${expanded ? "" : " layers-panel-header-collapsed"}`}
-        onClick={() => setExpanded((e) => !e)}
-      >
+      <button type="button" className="layers-panel-header" aria-expanded={expanded} onClick={toggleExpanded}>
         <span className="layers-panel-title">Layers</span>
         <span className={`layers-panel-chevron${expanded ? " layers-panel-chevron-open" : ""}`} aria-hidden="true">
           ▾
@@ -165,105 +167,127 @@ export default function LayersPanel({
         }}
         onCancel={() => setAddLayerOpen(false)}
       />
-      {expanded ? (
-        <div className="layers-panel-groups">
-          {groupedLayers
-            .filter((g) => g.layers.length > 0)
-            .map((g) => (
-              <div className="layer-group" key={g.key}>
-                <button type="button" className="layer-group-header" onClick={() => toggleGroup(g.key)}>
-                  <span
-                    className={`layer-group-chevron${expandedGroups[g.key] ? " layer-group-chevron-open" : ""}`}
-                    aria-hidden="true"
-                  >
-                    ▾
-                  </span>
-                  {g.label}
-                </button>
-                {expandedGroups[g.key] ? (
-                  <ul className="layers-panel-list">
-                    {g.layers.map((l) => {
-                      const featureCount = featureCountFor(l, vectorData);
-                      return (
-                        <li className="layer-row" key={l.layer_id}>
-                          <input
-                            type="checkbox"
-                            className="layer-row-checkbox"
-                            checked={isChecked(l)}
-                            onChange={() => onToggleVisibility(l.layer_id, !isChecked(l))}
-                            aria-label={`Toggle ${l.type} ${l.date_processed ?? "undated"}`}
-                          />
-                          <span className="layer-row-body">
-                            <span className="layer-row-label">
-                              {/* Wave 3: an ad-hoc layer's meaningful name is
-                                  whatever display name it was added with
-                                  (stored in `source` - see
-                                  adhoc_layers.py) - not its generic internal
-                                  dataset type, which the uploader never saw. */}
-                              {l.is_adhoc ? l.source ?? "Untitled layer" : l.type}
-                              {l.date_processed ? ` · ${l.date_processed}` : ""}
-                            </span>
-                            {featureCount != null ? (
-                              <span className="layer-row-feature-count">{formatNumber(featureCount, 0)} features</span>
-                            ) : null}
-                          </span>
-                          {l.needs_reingestion ? (
-                            <span
-                              className="layer-row-warning"
-                              title="This layer predates a rendering fix and has no real padding mask - re-upload the source file to fix warp-fill artifacts."
-                            >
-                              ⚠
-                            </span>
-                          ) : null}
-                          <button
-                            type="button"
-                            className="layer-row-info"
-                            aria-label="Layer info"
-                            onClick={() => openPopoverFor(l.layer_id, "info")}
-                          >
-                            ⓘ
-                          </button>
-                          {l.layer_kind === "raster" && l.tile_url_template ? (
-                            <button
-                              type="button"
-                              className="layer-row-gear"
-                              aria-label="Visualization parameters"
-                              onClick={() => openPopoverFor(l.layer_id, "gear")}
-                            >
-                              ⚙
-                            </button>
-                          ) : null}
-                          {l.is_reference && user && canManageReferenceLayers(user.role) ? (
-                            <button
-                              type="button"
-                              className="layer-row-remove"
-                              aria-label="Remove this reference layer"
-                              disabled={removingId === l.layer_id}
-                              onClick={() => removeReferenceLayer(l.layer_id)}
-                            >
-                              ✕
-                            </button>
-                          ) : null}
-                          {l.is_adhoc && user && canUpload(user.role) ? (
-                            <button
-                              type="button"
-                              className="layer-row-remove"
-                              aria-label="Remove this added layer"
-                              disabled={removingId === l.layer_id}
-                              onClick={() => removeAdhocLayer(l.layer_id)}
-                            >
-                              ✕
-                            </button>
-                          ) : null}
-                        </li>
-                      );
-                    })}
-                  </ul>
-                ) : null}
-              </div>
-            ))}
+      {/* The shared `.collapsible-body` grid-rows animation, on the existing
+       * panel classes. `flex` is inline rather than in the stylesheet because
+       * this wrapper is now the flex child that has to fill the docked column
+       * when open (and take zero height when closed), and `.layers-panel-groups`
+       * inside it needs a bounded height to keep scrolling. */}
+      <div
+        className="collapsible-body"
+        data-open={expanded}
+        inert={expanded ? undefined : ""}
+        style={{ flex: expanded ? 1 : "none", minHeight: 0 }}
+      >
+        <div className="collapsible-body-inner">
+          <div className="layers-panel-groups" style={{ maxHeight: "100%" }}>
+            {groupedLayers
+              .filter((g) => g.layers.length > 0)
+              .map((g) => {
+                const [groupOpen, toggleGroup] = groupCollapse[g.key];
+                return (
+                  <div className="layer-group" key={g.key}>
+                    <button
+                      type="button"
+                      className="layer-group-header"
+                      aria-expanded={groupOpen}
+                      onClick={toggleGroup}
+                    >
+                      <span
+                        className={`layer-group-chevron${groupOpen ? " layer-group-chevron-open" : ""}`}
+                        aria-hidden="true"
+                      >
+                        ▾
+                      </span>
+                      {g.label}
+                    </button>
+                    <div className="collapsible-body" data-open={groupOpen} inert={groupOpen ? undefined : ""}>
+                      <div className="collapsible-body-inner">
+                        <ul className="layers-panel-list">
+                          {g.layers.map((l) => {
+                            const featureCount = featureCountFor(l, vectorData);
+                            return (
+                              <li className="layer-row" key={l.layer_id}>
+                                <input
+                                  type="checkbox"
+                                  className="layer-row-checkbox"
+                                  checked={isChecked(l)}
+                                  onChange={() => onToggleVisibility(l.layer_id, !isChecked(l))}
+                                  aria-label={`Toggle ${l.type} ${l.date_processed ?? "undated"}`}
+                                />
+                                <span className="layer-row-body">
+                                  <span className="layer-row-label">
+                                    {/* Wave 3: an ad-hoc layer's meaningful name is
+                                        whatever display name it was added with
+                                        (stored in `source` - see
+                                        adhoc_layers.py) - not its generic internal
+                                        dataset type, which the uploader never saw. */}
+                                    {l.is_adhoc ? l.source ?? "Untitled layer" : l.type}
+                                    {l.date_processed ? ` · ${l.date_processed}` : ""}
+                                  </span>
+                                  {featureCount != null ? (
+                                    <span className="layer-row-feature-count">{formatNumber(featureCount, 0)} features</span>
+                                  ) : null}
+                                </span>
+                                {l.needs_reingestion ? (
+                                  <span
+                                    className="layer-row-warning"
+                                    title="This layer predates a rendering fix and has no real padding mask - re-upload the source file to fix warp-fill artifacts."
+                                  >
+                                    ⚠
+                                  </span>
+                                ) : null}
+                                <button
+                                  type="button"
+                                  className="layer-row-info"
+                                  aria-label="Layer info"
+                                  onClick={() => openPopoverFor(l.layer_id, "info")}
+                                >
+                                  ⓘ
+                                </button>
+                                {l.layer_kind === "raster" && l.tile_url_template ? (
+                                  <button
+                                    type="button"
+                                    className="layer-row-gear"
+                                    aria-label="Visualization parameters"
+                                    onClick={() => openPopoverFor(l.layer_id, "gear")}
+                                  >
+                                    ⚙
+                                  </button>
+                                ) : null}
+                                {l.is_reference && user && canManageReferenceLayers(user.role) ? (
+                                  <button
+                                    type="button"
+                                    className="layer-row-remove"
+                                    aria-label="Remove this reference layer"
+                                    disabled={removingId === l.layer_id}
+                                    onClick={() => removeReferenceLayer(l.layer_id)}
+                                  >
+                                    ✕
+                                  </button>
+                                ) : null}
+                                {l.is_adhoc && user && canUpload(user.role) ? (
+                                  <button
+                                    type="button"
+                                    className="layer-row-remove"
+                                    aria-label="Remove this added layer"
+                                    disabled={removingId === l.layer_id}
+                                    onClick={() => removeAdhocLayer(l.layer_id)}
+                                  >
+                                    ✕
+                                  </button>
+                                ) : null}
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+          </div>
         </div>
-      ) : null}
+      </div>
 
       {openLayer && openPopover.kind === "gear" ? (
         <div className="symbology-popover">
@@ -342,3 +366,8 @@ export default function LayersPanel({
     </div>
   );
 }
+
+// Memoized: its callback props (onToggleVisibility / onOpacityChange /
+// onSymbologyChange) are useCallback-stabilized in ProjectMap, so a
+// mousemove-driven map re-render no longer re-renders this whole panel.
+export default memo(LayersPanel);
