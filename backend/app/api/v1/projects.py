@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, Query
 
 from app.api.deps import CurrentUserDep, get_project_service, require_role
 from app.domain.dtos import (
+    ActivityFeed,
     BulkDeleteRequest,
     BulkDeleteResult,
     CurrentUser,
@@ -76,6 +77,19 @@ def get_evolution(
     classified dated layers. `applicable=False` (not a 404/422) when fewer
     than 2 eligible dates exist - see ProjectService.get_evolution."""
     return svc.get_evolution(project_id, user)
+
+
+@router.get("/projects/{project_id}/activity", response_model=ActivityFeed)
+def get_activity(
+    project_id: UUID,
+    user: CurrentUserDep,
+    svc: Annotated[ProjectService, Depends(get_project_service)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> ActivityFeed:
+    """Recent-activity feed for this project's dashboard - same
+    membership/Administrator gate as every other project-scoped read here
+    (require_project_view, via ProjectService.get_activity)."""
+    return svc.get_activity(project_id, limit, user)
 
 
 @router.get("/summary")

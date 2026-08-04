@@ -27,9 +27,10 @@ class ReferenceLayerService:
 
     def remove(self, layer_id: UUID, actor: CurrentUser) -> None:
         with self.db.transaction() as cur:
-            dataset_id = LayerRepository(cur).dataset_id_for(layer_id)
-            if dataset_id is None:
+            layer = LayerRepository(cur).get(layer_id)
+            if layer is None:
                 raise NotFoundError("No such layer.")
+            dataset_id = layer["dataset_id"]
             removed = DatasetRepository(cur).soft_delete_reference(
                 dataset_id, deleted_by=actor.user_id
             )
@@ -42,4 +43,5 @@ class ReferenceLayerService:
                 actor_id=actor.user_id, actor_name=actor.username,
                 action=AuditAction.DELETE_DATASET, target=str(dataset_id),
                 detail=f"Removed reference layer {layer_id} (dataset {dataset_id}).",
+                project_id=layer["project_id"],
             )

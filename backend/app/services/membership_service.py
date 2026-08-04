@@ -81,6 +81,7 @@ class MembershipService:
                 action=AuditAction.ADD_PROJECT_MEMBER,
                 target=f"{project_id}:{target['user_id']}",
                 detail=f"Added {username} as {effective_role.value}.",
+                project_id=project_id,
             )
         return MemberOut(username=username, **row)
 
@@ -97,6 +98,7 @@ class MembershipService:
                 action=AuditAction.REMOVE_PROJECT_MEMBER,
                 target=f"{project_id}:{user_id}",
                 detail="Removed project member.",
+                project_id=project_id,
             )
 
     def update_role(
@@ -117,5 +119,6 @@ class MembershipService:
                 action=AuditAction.UPDATE_PROJECT_MEMBER_ROLE,
                 target=f"{project_id}:{user_id}",
                 detail=f"Changed role to {role.value}.",
+                project_id=project_id,
             )
         return MemberOut(username=target["username"], **row)

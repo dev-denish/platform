@@ -164,13 +164,6 @@ class LayerRepository:
         )
         return list(self.cur.fetchall())
 
-    def dataset_id_for(self, layer_id: UUID | str) -> UUID | None:
-        self.cur.execute(
-            "SELECT dataset_id FROM spatial_layer WHERE layer_id = %s", (str(layer_id),)
-        )
-        row = self.cur.fetchone()
-        return row["dataset_id"] if row else None
-
     def get_for_dataset(self, dataset_id: UUID | str) -> dict[str, Any] | None:
         """Phase 3: the ingest job needs the layer it just created (for its
         file_key, to convert to a COG) after `IngestionService.ingest()` has

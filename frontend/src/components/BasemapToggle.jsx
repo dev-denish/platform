@@ -1,9 +1,11 @@
+import { BASEMAPS } from "../lib/basemap.js";
+
 /**
- * GEE-style "Map"/"Satellite" basemap picker, now docked in the top toolbar
- * (Wave: map UI redesign) as a plain <select> instead of a pill toggle -
- * same two free tile sources as before (Esri World Imagery / Carto, see
- * ProjectMap.jsx), same props, just restyled to match the toolbar's other
- * controls.
+ * Basemap picker docked in the top toolbar - still the same plain <select> it
+ * became in the map UI redesign, now driven off lib/basemap.js's BASEMAPS list
+ * instead of two hardcoded options (Wave: map toolbar capabilities). A <select>
+ * IS the gallery at five entries: it's already a native dropdown with keyboard
+ * support, so no thumbnail-preview UI was built for it.
  */
 export default function BasemapToggle({ mode, onChange }) {
   return (
@@ -13,8 +15,11 @@ export default function BasemapToggle({ mode, onChange }) {
       onChange={(e) => onChange(e.target.value)}
       aria-label="Basemap"
     >
-      <option value="satellite">Satellite</option>
-      <option value="map">Map</option>
+      {BASEMAPS.map((b) => (
+        <option key={b.key} value={b.key}>
+          {b.label}
+        </option>
+      ))}
     </select>
   );
 }

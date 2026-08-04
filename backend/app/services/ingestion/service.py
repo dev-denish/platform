@@ -158,6 +158,7 @@ class IngestionService:
                     f"{meta.project_name} ({meta.dataset_type.value}); vector/{fmt}; "
                     f"{len(features)} feature(s); batch {batch_id}"
                 ),
+                project_id=project_id,
             )
 
         return IngestResult(
@@ -237,6 +238,7 @@ class IngestionService:
                         f"source CRS {src_crs}; area measured in {stats.area_crs}; "
                         f"batch {batch_id}"
                     ),
+                    project_id=project_id,
                 )
 
             # ---- 3. promote artifacts ONLY after commit (no orphans on failure)

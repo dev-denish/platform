@@ -10,7 +10,6 @@ import { MANAGE_USERS_ROLES, MANAGE_WMS_SOURCES_ROLES, UPLOAD_ROLES } from "./li
 
 // Code-split per shell route - AppShell wraps its <Outlet /> in the one
 // Suspense boundary these all render through (see AppShell.jsx).
-const DashboardPage = lazy(() => import("./pages/DashboardPage.jsx"));
 const ProjectsPage = lazy(() => import("./pages/ProjectsPage.jsx"));
 const ProjectDetailPage = lazy(() => import("./pages/ProjectDetailPage.jsx"));
 const UploadPage = lazy(() => import("./pages/UploadPage.jsx"));
@@ -25,7 +24,10 @@ export default function App() {
 
         <Route element={<ProtectedRoute />}>
           <Route element={<AppShell />}>
-            <Route index element={<DashboardPage />} />
+            {/* Redesign: Projects is the app's home page now - Dashboard moved
+                inside ProjectDetailPage (Dashboard/Maps toggle). "/projects"
+                stays a working path too, so an existing bookmark doesn't 404. */}
+            <Route index element={<ProjectsPage />} />
             <Route path="projects" element={<ProjectsPage />} />
             <Route path="projects/:projectId" element={<ProjectDetailPage />} />
             <Route element={<RoleRoute allow={UPLOAD_ROLES} />}>

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext.jsx";
 import ErrorBanner from "../components/ErrorBanner.jsx";
+import VnvLogo from "../components/VnvMark.jsx";
 
 export default function LoginPage() {
   const { login } = useAuth();
@@ -29,48 +30,51 @@ export default function LoginPage() {
   return (
     <div className="login-screen">
       <ContourField />
-      <div className="login-card">
-        <div className="login-brand">
-          <span className="shell-brand-mark" aria-hidden="true" />
-          <div>
-            <div className="shell-brand-name">dMRV</div>
-            <div className="shell-brand-sub">Analytical Platform</div>
+      <div className="login-content">
+        <VnvLogo size={40} className="login-vnv-logo" />
+        <div className="login-card">
+          <div className="login-brand">
+            <span className="shell-brand-mark" aria-hidden="true" />
+            <div>
+              <div className="shell-brand-name">dMRV</div>
+              <div className="shell-brand-sub">Analytical Platform</div>
+            </div>
           </div>
+
+          <h1 className="login-title">Sign in</h1>
+          <p className="login-subtitle">Verified land-cover, biomass, and carbon analytics.</p>
+
+          <form onSubmit={handleSubmit} className="login-form">
+            <label className="field">
+              <span className="field-label">Username</span>
+              <input
+                className="field-input"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                autoComplete="username"
+                autoFocus
+                required
+              />
+            </label>
+            <label className="field">
+              <span className="field-label">Password</span>
+              <input
+                className="field-input"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
+                required
+              />
+            </label>
+
+            <ErrorBanner message={error} />
+
+            <button type="submit" className="primary-button" disabled={submitting}>
+              {submitting ? "Signing in…" : "Sign in"}
+            </button>
+          </form>
         </div>
-
-        <h1 className="login-title">Sign in</h1>
-        <p className="login-subtitle">Verified land-cover, biomass, and carbon analytics.</p>
-
-        <form onSubmit={handleSubmit} className="login-form">
-          <label className="field">
-            <span className="field-label">Username</span>
-            <input
-              className="field-input"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              autoComplete="username"
-              autoFocus
-              required
-            />
-          </label>
-          <label className="field">
-            <span className="field-label">Password</span>
-            <input
-              className="field-input"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete="current-password"
-              required
-            />
-          </label>
-
-          <ErrorBanner message={error} />
-
-          <button type="submit" className="primary-button" disabled={submitting}>
-            {submitting ? "Signing in…" : "Sign in"}
-          </button>
-        </form>
       </div>
     </div>
   );

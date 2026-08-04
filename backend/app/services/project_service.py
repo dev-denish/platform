@@ -14,6 +14,8 @@ from app.core.errors import NotFoundError
 from app.core.security import create_tile_token
 from app.domain.authz import require_project_view
 from app.domain.dtos import (
+    ActivityFeed,
+    ActivityItem,
     BulkDeleteItemResult,
     CurrentUser,
     DatasetOut,
@@ -232,6 +234,18 @@ class ProjectService:
         ]
         return compute_evolution(project_id, own_layer_rows, kpi_rows)
 
+    def get_activity(self, project_id: UUID, limit: int, user: CurrentUser) -> ActivityFeed:
+        """Recent-activity feed for this project's dashboard: audit_log rows
+        already tagged with THIS project_id at write time (migration 0014) -
+        see AuditRepository.list_for_project's own docstring for why that's
+        read-time-join-free and for which actions never carry one (WMS
+        domain allow-list, user management, login - genuinely global, not
+        "this project's" activity)."""
+        with self.db.connection() as conn, conn.cursor() as cur:
+            require_project_view(cur, project_id, user)
+            rows = AuditRepository(cur).list_for_project(project_id, limit)
+        return ActivityFeed(items=[ActivityItem(**r) for r in rows])
+
     def _needs_reingestion(self, layer_kind: str, cog_key: str | None) -> bool:
         """True when this raster layer's stored COG predates the geometric
         padding-mask fix (raster.reproject_to_4326's `add_alpha`/`write_mask`)
@@ -334,6 +348,7 @@ class ProjectService:
                 actor_id=actor.user_id, actor_name=actor.username,
                 action=AuditAction.DELETE_PROJECT, target=str(project_id),
                 detail=f"Soft-deleted project {project_id}.",
+                project_id=project_id,
             )
 
     def bulk_delete_projects(
@@ -377,6 +392,7 @@ class ProjectService:
                     actor_id=actor.user_id, actor_name=actor.username,
                     action=AuditAction.DELETE_PROJECT, target=str(project_id),
                     detail=f"Soft-deleted project {project_id} (bulk delete).",
+                    project_id=project_id,
                 )
                 results.append(BulkDeleteItemResult(id=project_id, name=name, success=True))
         return results

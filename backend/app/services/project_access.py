@@ -62,6 +62,7 @@ def resolve_project_for_upload(
             action=AuditAction.ADD_PROJECT_MEMBER,
             target=f"{project_id}:{actor.user_id}",
             detail=f"Auto-added as first member ({actor.role.value}) on project creation.",
+            project_id=project_id,
         )
         return project_id
     role = ProjectMembershipRepository(cur).get_role(project_id, actor.user_id)

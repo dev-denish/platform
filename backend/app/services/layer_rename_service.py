@@ -33,5 +33,6 @@ class LayerRenameService:
                 actor_id=actor.user_id, actor_name=actor.username,
                 action=AuditAction.RENAME_LAYER, target=str(layer_id),
                 detail=f"Renamed layer {layer_id} to '{display_name}'.",
+                project_id=layer["project_id"],
             )
         return LayerRenameResult(layer_id=layer_id, display_name=display_name)

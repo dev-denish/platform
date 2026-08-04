@@ -1,20 +1,21 @@
 /* ============================================================
    dMRV Platform — design tokens
-   Direction: precise, evidentiary, instrument-grade. Cool graphite
-   canvas (hue 240, near-zero chroma - anodized-casing neutral, not
-   the generic climate-SaaS green), one cyan-teal "trace" accent
-   reserved for interactive/brand use, hairline rules over soft
-   shadow-cards, tabular numerics + IBM Plex Mono for anything
-   measured (coordinates, hectares, accuracy, timestamps) so data
-   reads as data, not prose. Verified/pending/flagged are semantic
-   status colors, not the brand accent - they mean something.
+   Direction: precise, evidentiary, instrument-grade. Warm off-white
+   canvas + graphite structural chrome (sidebar), one brand-orange
+   accent reserved for interactive/brand use (secondary purple used
+   sparingly, e.g. a second chart series - never a dominant surface),
+   hairline rules over soft shadow-cards, tabular numerics + IBM Plex
+   Mono for anything measured (coordinates, hectares, accuracy,
+   timestamps) so data reads as data, not prose. Verified/pending/
+   flagged are semantic status colors, not the brand accent - they
+   mean something.
    ============================================================ */
 
 :root {
-  --bg: oklch(97% 0.004 240);
-  --bg-elevated: oklch(94% 0.006 240);
+  --bg: oklch(97% 0.006 70);
+  --bg-elevated: oklch(94% 0.008 70);
   --surface: #ffffff;
-  --surface-hover: oklch(95.5% 0.005 240);
+  --surface-hover: oklch(95.5% 0.006 70);
   --border: oklch(88% 0.006 240);
   --border-strong: oklch(80% 0.008 240);
 
@@ -22,9 +23,18 @@
   --text-muted: oklch(42% 0.008 240);
   --text-faint: oklch(56% 0.008 240);
 
-  --accent: oklch(52% 0.14 195);
-  --accent-strong: oklch(42% 0.14 195);
-  --accent-wash: oklch(94% 0.03 195);
+  /* brand orange, replaces the old cyan-teal as the primary interactive
+     accent - same relationship pattern (accent / darker "strong" for hover-
+     emphasis / light "wash" tint for subtle backgrounds), just a new hue. */
+  --accent: oklch(66% 0.18 41);
+  --accent-strong: oklch(53% 0.18 41);
+  --accent-wash: oklch(95% 0.04 41);
+
+  /* secondary brand purple - sparing use only (e.g. a second chart series),
+     never a dominant surface. Not applied anywhere yet; consumed by
+     dashboard chart work next. */
+  --accent-secondary: oklch(47% 0.13 290);
+  --accent-secondary-wash: oklch(93% 0.03 290);
 
   --verified: oklch(45% 0.13 150);
   --verified-wash: oklch(94% 0.04 150);
@@ -42,7 +52,14 @@
   --sidebar-border: rgba(255, 255, 255, 0.08);
   --sidebar-text: oklch(72% 0.015 240);
   --sidebar-text-active: #ffffff;
-  --sidebar-active-bg: oklch(24% 0.02 240);
+  /* was a plain graphite tint keyed off the old teal-ish neutral; now a dim
+     wash of the new orange accent so the active-nav highlight still reads
+     as intentional against it, without turning the sidebar surface orange. */
+  --sidebar-active-bg: oklch(28% 0.05 40);
+
+  --header-height: 56px;
+  --sidebar-width: 240px;
+  --sidebar-width-collapsed: 60px;
 
   --font-display: "IBM Plex Sans", "Segoe UI", Roboto, -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif;
   --font-body: "IBM Plex Sans", "Segoe UI", Roboto, -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif;
@@ -114,7 +131,8 @@ a {
 /* the default focus ring is the same green as the sidebar's active-link
    background, so it's invisible for keyboard users tabbing through the
    dark sidebar — override to a light color there only. */
-.shell-sidebar :focus-visible {
+.shell-sidebar :focus-visible,
+.shell-header :focus-visible {
   outline: 2px solid var(--sidebar-text-active);
   outline-offset: 2px;
 }
@@ -151,9 +169,45 @@ a {
 /* ---------------------------------------------------------- shell */
 
 .shell {
-  display: grid;
-  grid-template-columns: 240px 1fr;
+  display: flex;
+  flex-direction: column;
   min-height: 100vh;
+}
+
+/* full-width structural chrome above sidebar+main, same dark graphite
+   family as the sidebar (not --surface) — it's part of the app's fixed
+   frame, not page content, so it stays visually welded to the sidebar. */
+.shell-header {
+  flex: none;
+  height: var(--header-height);
+  background: linear-gradient(160deg, var(--sidebar-bg) 0%, var(--sidebar-bg-elevated) 100%);
+  border-bottom: 1px solid var(--sidebar-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 20px;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.shell-header-user {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.shell-header-user-id {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.shell-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
 }
 
 .shell-sidebar {
@@ -161,10 +215,19 @@ a {
   border-right: none;
   display: flex;
   flex-direction: column;
+  flex: none;
+  width: var(--sidebar-width);
   padding: 24px 16px;
   position: sticky;
-  top: 0;
-  height: 100vh;
+  top: var(--header-height);
+  height: calc(100vh - var(--header-height));
+  overflow: hidden;
+  transition: width 0.2s ease, padding 0.2s ease;
+}
+
+.shell-sidebar-collapsed {
+  width: var(--sidebar-width-collapsed);
+  padding: 24px 10px;
 }
 
 .shell-brand {
@@ -174,6 +237,43 @@ a {
   padding: 0 8px 24px;
   margin-bottom: 8px;
   border-bottom: 1px solid var(--sidebar-border);
+}
+
+.shell-sidebar-collapsed .shell-brand {
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 0 20px;
+}
+
+.shell-brand-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar-toggle-btn {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: var(--radius-sm);
+  color: var(--sidebar-text);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.sidebar-toggle-btn:hover {
+  color: var(--sidebar-text-active);
+  border-color: var(--sidebar-text-active);
+}
+
+.sidebar-toggle-btn svg {
+  width: 14px;
+  height: 14px;
 }
 
 .shell-brand-mark {
@@ -258,13 +358,18 @@ a {
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
-.shell-user {
-  border-top: 1px solid var(--sidebar-border);
-  padding-top: 14px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+/* collapsed sidebar: icon-only. Labels/group headers hidden, links center
+   their icon; NavLink's native title="" attribute covers the label on
+   hover instead of a custom tooltip. */
+.shell-sidebar-collapsed .shell-brand-text,
+.shell-sidebar-collapsed .shell-nav-group-label,
+.shell-sidebar-collapsed .shell-nav-label {
+  display: none;
+}
+
+.shell-sidebar-collapsed .shell-nav-link {
+  justify-content: center;
+  padding: 9px;
 }
 
 .shell-user-name {
@@ -273,47 +378,53 @@ a {
   color: var(--sidebar-text-active);
 }
 
-/* Wave: password reset - "Change password" sits next to "Sign out", the
-   sidebar's existing spot for account-level actions. Stacked, not side by
-   side - the sidebar is narrow and two ghost-buttons in a row would wrap
-   awkwardly at this width. */
+/* Wave: password reset - "Change password" sits next to "Sign out" in the
+   header's account controls. */
 .shell-user-actions {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 6px;
+  align-items: center;
+  gap: 8px;
 }
 
-/* sidebar sits on a dark surface while the rest of the app is light —
-   the two shared controls that live inside it (sign-out, role pill)
+/* sidebar/header sit on a dark surface while the rest of the app is light —
+   the shared controls that live inside them (sign-out, role pill)
    need their contrast flipped locally rather than forking a new class. */
-.shell-sidebar .ghost-button {
+.shell-sidebar .ghost-button,
+.shell-header .ghost-button {
   color: var(--sidebar-text);
   border-color: rgba(255, 255, 255, 0.25);
 }
 
-.shell-sidebar .ghost-button:hover:not(:disabled) {
+.shell-sidebar .ghost-button:hover:not(:disabled),
+.shell-header .ghost-button:hover:not(:disabled) {
   color: var(--sidebar-text-active);
   border-color: var(--sidebar-text-active);
 }
 
-.shell-sidebar .role-badge {
+.shell-sidebar .role-badge,
+.shell-header .role-badge {
   color: var(--sidebar-text);
   border-color: rgba(255, 255, 255, 0.25);
 }
 
 .shell-main {
   min-width: 0;
+  flex: 1;
   padding: 32px 40px 64px;
 }
 
 @media (max-width: 860px) {
-  .shell {
-    grid-template-columns: 1fr;
+  .shell-header {
+    padding: 0 16px;
   }
-  .shell-sidebar {
+  .shell-body {
+    flex-direction: column;
+  }
+  .shell-sidebar,
+  .shell-sidebar-collapsed {
     position: relative;
     height: auto;
+    width: 100%;
     flex-direction: row;
     align-items: center;
     flex-wrap: wrap;
@@ -326,10 +437,6 @@ a {
   .shell-nav {
     flex-direction: row;
     margin-top: 0;
-  }
-  .shell-user {
-    border-top: none;
-    margin-left: auto;
   }
   .shell-main {
     padding: 24px 20px 48px;
@@ -385,6 +492,27 @@ a {
 
 /* ---------------------------------------------------------- buttons */
 
+/* iOS-style press feedback, applied once here rather than per-component.
+   Class-specific rules above/below (primary-button, danger-button, etc.)
+   already fold transform/opacity into their own `transition` so hover and
+   press animate together instead of snapping; this generic fallback covers
+   plain <button> elements and anything marked role="button" that doesn't
+   have its own button-family class. */
+button,
+[role="button"] {
+  transition: transform 0.12s ease-out, opacity 0.12s ease-out;
+}
+
+button:not(:disabled):active,
+.ghost-button:not(:disabled):active,
+.icon-button:not(:disabled):active,
+.map-toolbar-btn:not(:disabled):active,
+.pagination-btn:not(:disabled):active,
+[role="button"]:not(:disabled):active {
+  transform: scale(0.97);
+  opacity: 0.92;
+}
+
 .primary-button {
   display: inline-flex;
   align-items: center;
@@ -399,7 +527,7 @@ a {
   padding: 10px 18px;
   cursor: pointer;
   text-decoration: none;
-  transition: background 0.15s ease, transform 0.1s ease;
+  transition: background 0.15s ease, transform 0.12s ease-out, opacity 0.12s ease-out;
 }
 
 .primary-button:hover:not(:disabled) {
@@ -407,7 +535,8 @@ a {
 }
 
 .primary-button:active:not(:disabled) {
-  transform: translateY(1px);
+  transform: translateY(1px) scale(0.97);
+  opacity: 0.92;
 }
 
 .primary-button:disabled {
@@ -423,7 +552,7 @@ a {
   padding: 9px 16px;
   font-size: 13px;
   cursor: pointer;
-  transition: border-color 0.15s ease, color 0.15s ease;
+  transition: border-color 0.15s ease, color 0.15s ease, transform 0.12s ease-out, opacity 0.12s ease-out;
 }
 
 .ghost-button:hover:not(:disabled) {
@@ -449,7 +578,7 @@ a {
   border-radius: var(--radius-sm);
   padding: 10px 18px;
   cursor: pointer;
-  transition: background 0.15s ease, transform 0.1s ease;
+  transition: background 0.15s ease, transform 0.12s ease-out, opacity 0.12s ease-out;
 }
 
 .danger-button:hover:not(:disabled) {
@@ -457,7 +586,8 @@ a {
 }
 
 .danger-button:active:not(:disabled) {
-  transform: translateY(1px);
+  transform: translateY(1px) scale(0.97);
+  opacity: 0.92;
 }
 
 .danger-button:disabled {
@@ -585,9 +715,6 @@ a {
   gap: 6px;
   font-size: 12px;
   font-family: var(--font-mono);
-  padding: 3px 9px 3px 7px;
-  border-radius: 999px;
-  border: 1px solid var(--border-strong);
   white-space: nowrap;
 }
 
@@ -1029,6 +1156,7 @@ a {
   padding: 6px 12px;
   font-size: 13px;
   cursor: pointer;
+  transition: transform 0.12s ease-out, opacity 0.12s ease-out;
 }
 
 .pagination-btn:disabled {
@@ -1048,6 +1176,40 @@ a {
   font-variant-numeric: tabular-nums;
 }
 
+/* ---------------------------------------------------------- vnv logo */
+
+/* VNV company mark (radial petal burst + vertical wordmark) — distinct
+   from the dMRV product brand above. Wordmark defaults to a light-surface
+   color; the header sits on dark chrome so it flips there. */
+.vnv-logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.vnv-mark-petal {
+  fill: var(--accent);
+}
+
+.vnv-wordmark {
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.25;
+  letter-spacing: 0.01em;
+  color: var(--text-muted);
+}
+
+.shell-header .vnv-wordmark {
+  color: var(--sidebar-text);
+}
+
+.vnv-word-lead {
+  font-weight: 700;
+}
+
 /* ---------------------------------------------------------- login */
 
 .login-screen {
@@ -1058,6 +1220,15 @@ a {
   position: relative;
   overflow: hidden;
   background: radial-gradient(ellipse at 50% 0%, var(--accent-wash) 0%, var(--bg) 60%);
+}
+
+.login-content {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 22px;
 }
 
 .contour-field {
@@ -1355,6 +1526,10 @@ a {
   display: flex;
   align-items: center;
   gap: 6px;
+  /* Wave: map toolbar capabilities added five more controls here - wrap rather
+   * than overflow off the frame on a narrow window. */
+  flex-wrap: wrap;
+  row-gap: 6px;
 }
 
 .map-toolbar-btn {
@@ -1370,7 +1545,7 @@ a {
   color: var(--text-muted);
   font-size: 13px;
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.12s ease-out, opacity 0.12s ease-out;
 }
 
 .map-toolbar-btn-text {
@@ -1439,6 +1614,127 @@ a {
   white-space: nowrap;
 }
 
+/* Wave: map toolbar capabilities ------------------------------------------- */
+
+/* Compare / Views menus hold selects and named rows, not just short verbs. */
+.map-toolbar-menu-wide {
+  min-width: 200px;
+}
+
+.map-toolbar-menu-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 4px 8px;
+  color: var(--text-muted);
+}
+
+.map-toolbar-menu-field .map-toolbar-select {
+  max-width: 130px;
+}
+
+.map-toolbar-menu-empty {
+  padding: 6px 8px;
+  color: var(--text-faint);
+}
+
+.map-toolbar-menu-row {
+  display: flex;
+  align-items: center;
+}
+
+.map-toolbar-menu-row > button:first-child {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.map-toolbar-menu-remove {
+  flex: none;
+  color: var(--text-faint);
+}
+
+.map-toolbar-menu-remove:hover {
+  color: var(--accent-strong);
+}
+
+.map-toolbar-jump {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.map-toolbar-input {
+  width: 120px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.map-toolbar-input-invalid {
+  /* same red as .field-hint-error, the app's existing invalid-input color */
+  border-color: #a8332f;
+}
+
+/* The live coordinate readout is itself the copy button (click-to-copy) - it
+ * has to look like the plain text it replaced, not like a control. */
+.map-toolbar-copy {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.map-toolbar-copy:disabled {
+  cursor: default;
+}
+
+.map-toolbar-copy:hover:not(:disabled) {
+  color: var(--accent-strong);
+}
+
+.map-toolbar-copied {
+  color: var(--accent-strong);
+  font-weight: 600;
+}
+
+/* Draggable before/after divider - a sibling overlay above the Leaflet
+ * container (see ProjectMap's SwipeClip), so it must sit above the map's own
+ * panes but below the toolbar menus. */
+.map-swipe-divider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--accent);
+  z-index: 800;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.map-swipe-grip {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 26px;
+  height: 26px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px #ffffff;
+}
+
 /* The docked Layers column + the actual map, side by side, filling the rest
  * of .map-frame below the toolbar. */
 .map-body {
@@ -1504,7 +1800,7 @@ a {
   box-shadow: var(--shadow-card);
   color: var(--text-muted);
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.12s ease-out, opacity 0.12s ease-out;
 }
 
 .icon-button:hover {
@@ -2249,4 +2545,82 @@ a {
 .collapsible-body-inner {
   min-height: 0;
   overflow: hidden;
+}
+
+/* ---------------------------------------------------------- per-project dashboard tab (redesign Part B) */
+
+.page-header-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.dashboard-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.dashboard-toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.dataset-select-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text-faint);
+}
+
+/* Deliberately plain text, no pill/badge/dot - see redesign spec. */
+.data-quality-line {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.monitoring-list,
+.checklist-list,
+.activity-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 13.5px;
+}
+
+.checklist-yes {
+  color: var(--verified);
+}
+
+.checklist-no {
+  color: var(--text-faint);
+}
+
+.activity-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.activity-item:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.activity-text {
+  color: var(--text);
+}
+
+.activity-time {
+  flex: none;
+  color: var(--text-faint);
 }

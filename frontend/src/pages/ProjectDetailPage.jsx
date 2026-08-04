@@ -13,6 +13,7 @@ import ProjectMap from "../components/ProjectMap.jsx";
 import ProjectMembers from "../components/ProjectMembers.jsx";
 import LandscapeEvolutionTable from "../components/LandscapeEvolutionTable.jsx";
 import AddExternalLayerDialog from "../components/AddExternalLayerDialog.jsx";
+import ProjectDashboard from "../components/dashboard/ProjectDashboard.jsx";
 import { canDeleteProject, canUpload } from "../lib/roles.js";
 import { formatDate, formatNumber, humanizeMetricName } from "../lib/format.js";
 import { datedLayerGroups } from "../lib/timeline.js";
@@ -101,6 +102,11 @@ export default function ProjectDetailPage() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [addLayerOpen, setAddLayerOpen] = useState(false);
+
+  // Redesign: Dashboard/Maps toggle - Maps is the default so an existing
+  // user's first view of a project doesn't change. Persisted per-project via
+  // sessionStorage like every other collapse toggle on this page.
+  const [showDashboard, toggleTab] = useCollapse(`collapse:project:${projectId}:tab`, false);
 
   const [keyMetricsOpen, toggleKeyMetrics] = useCollapse(`collapse:project:${projectId}:key-metrics`, true);
   const [evolutionOpen, toggleEvolution] = useCollapse(`collapse:project:${projectId}:evolution`, true);
@@ -235,16 +241,34 @@ export default function ProjectDetailPage() {
             <span className="mono-cell">Started {formatDate(detail.start_date)}</span>
           </div>
         </div>
-        {user && canDeleteProject(user.role) ? (
-          <button
-            type="button"
-            className="danger-button"
-            disabled={deleting}
-            onClick={() => setConfirmOpen(true)}
-          >
-            {deleting ? "Deleting…" : "Delete project"}
-          </button>
-        ) : null}
+        <div className="page-header-actions">
+          <div className="symbology-toggle" role="group" aria-label="View">
+            <button
+              type="button"
+              className={`symbology-toggle-btn${!showDashboard ? " symbology-toggle-btn-active" : ""}`}
+              onClick={() => showDashboard && toggleTab()}
+            >
+              Maps
+            </button>
+            <button
+              type="button"
+              className={`symbology-toggle-btn${showDashboard ? " symbology-toggle-btn-active" : ""}`}
+              onClick={() => !showDashboard && toggleTab()}
+            >
+              Dashboard
+            </button>
+          </div>
+          {user && canDeleteProject(user.role) ? (
+            <button
+              type="button"
+              className="danger-button"
+              disabled={deleting}
+              onClick={() => setConfirmOpen(true)}
+            >
+              {deleting ? "Deleting…" : "Delete project"}
+            </button>
+          ) : null}
+        </div>
       </header>
 
       <ConfirmDialog
@@ -266,134 +290,151 @@ export default function ProjectDetailPage() {
         onChanged={reloadMembers}
       />
 
-      <section className="panel">
-        <button className="collapsible-header" aria-expanded={keyMetricsOpen} onClick={toggleKeyMetrics}>
-          <span>Key metrics</span>
-          <span className={`collapsible-chevron${keyMetricsOpen ? " collapsible-chevron-open" : ""}`} aria-hidden="true"><ChevronDown size={16} strokeWidth={2} className="icon" /></span>
-        </button>
-        <div className="collapsible-body" data-open={keyMetricsOpen} inert={keyMetricsOpen ? undefined : ""}>
-          <div className="collapsible-body-inner">
-            {orderedLayers.length === 0 ? (
-              <EmptyState title="No metrics yet" detail="Metrics appear once a dataset has been ingested." />
-            ) : (
-              <div className="layer-metrics-list">
-                {orderedLayers.map((l) => (
-                  <LayerMetricsSection key={l.layer_id} layer={l} metrics={kpis?.layers?.[l.layer_id]} projectId={projectId} />
+      {!showDashboard ? (
+        <section className="panel">
+          <div className="panel-header">
+            <h2 className="panel-title">Spatial layers</h2>
+            {user && canUpload(user.role) ? (
+              <button type="button" className="ghost-button" onClick={() => setAddLayerOpen(true)}>
+                + Add WMS/WFS layer
+              </button>
+            ) : null}
+          </div>
+
+          <AddExternalLayerDialog
+            open={addLayerOpen}
+            projectId={projectId}
+            projectName={detail.name}
+            region={detail.region}
+            onCreated={async () => {
+              setAddLayerOpen(false);
+              await reloadLayers();
+            }}
+            onCancel={() => setAddLayerOpen(false)}
+          />
+
+          {!layers || layers.layers.length === 0 ? (
+            <EmptyState title="No layers yet" detail="Ingested rasters will appear here with their extent and preview." />
+          ) : (
+            <>
+              <ProjectMap
+                layers={layers.layers}
+                onRefreshLayers={reloadLayers}
+                onLegendChanged={reloadLayersAndMetrics}
+                projectId={projectId}
+              />
+              <div className="layer-grid">
+                {layers.layers.map((l) => (
+                  <div className="layer-card" key={l.layer_id}>
+                    <div className="layer-preview">
+                      {l.preview_url ? (
+                        <img src={l.preview_url} alt={`${l.type} preview`} loading="lazy" />
+                      ) : (
+                        <div className="layer-preview-placeholder">{layerKindLabel(l.layer_kind)}</div>
+                      )}
+                    </div>
+                    <div className="layer-meta">
+                      <span className="layer-type">
+                        {l.is_adhoc ? l.source ?? "Untitled layer" : l.type}
+                        {l.is_adhoc ? <span className="layer-adhoc-badge"> Added</span> : null}
+                      </span>
+                      <span className="mono-cell">{l.crs}</span>
+                      <span className="mono-cell">
+                        {l.pixel_size_m != null ? `${l.pixel_size_m} m/px` : layerKindLabel(l.layer_kind)}
+                      </span>
+                      <span className="mono-cell">{l.date_processed ?? "undated"}</span>
+                    </div>
+                  </div>
                 ))}
               </div>
-            )}
-          </div>
-        </div>
-      </section>
+            </>
+          )}
+        </section>
+      ) : null}
 
-      <section className="panel">
-        <div className="panel-header">
-          <h2 className="panel-title">Spatial layers</h2>
-          {user && canUpload(user.role) ? (
-            <button type="button" className="ghost-button" onClick={() => setAddLayerOpen(true)}>
-              + Add WMS/WFS layer
-            </button>
-          ) : null}
-        </div>
-
-        <AddExternalLayerDialog
-          open={addLayerOpen}
-          projectId={projectId}
-          projectName={detail.name}
-          region={detail.region}
-          onCreated={async () => {
-            setAddLayerOpen(false);
-            await reloadLayers();
-          }}
-          onCancel={() => setAddLayerOpen(false)}
-        />
-
-        {!layers || layers.layers.length === 0 ? (
-          <EmptyState title="No layers yet" detail="Ingested rasters will appear here with their extent and preview." />
-        ) : (
-          <>
-            <ProjectMap
-              layers={layers.layers}
-              onRefreshLayers={reloadLayers}
-              onLegendChanged={reloadLayersAndMetrics}
+      {showDashboard ? (
+        <>
+          {layers ? (
+            <ProjectDashboard
               projectId={projectId}
+              projectName={detail.name}
+              layers={layers.layers}
+              kpis={kpis}
+              evolution={evolution}
+              members={members?.members}
             />
-            <div className="layer-grid">
-              {layers.layers.map((l) => (
-                <div className="layer-card" key={l.layer_id}>
-                  <div className="layer-preview">
-                    {l.preview_url ? (
-                      <img src={l.preview_url} alt={`${l.type} preview`} loading="lazy" />
-                    ) : (
-                      <div className="layer-preview-placeholder">{layerKindLabel(l.layer_kind)}</div>
-                    )}
+          ) : null}
+
+          <section className="panel">
+            <button className="collapsible-header" aria-expanded={keyMetricsOpen} onClick={toggleKeyMetrics}>
+              <span>Key metrics</span>
+              <span className={`collapsible-chevron${keyMetricsOpen ? " collapsible-chevron-open" : ""}`} aria-hidden="true"><ChevronDown size={16} strokeWidth={2} className="icon" /></span>
+            </button>
+            <div className="collapsible-body" data-open={keyMetricsOpen} inert={keyMetricsOpen ? undefined : ""}>
+              <div className="collapsible-body-inner">
+                {orderedLayers.length === 0 ? (
+                  <EmptyState title="No metrics yet" detail="Metrics appear once a dataset has been ingested." />
+                ) : (
+                  <div className="layer-metrics-list">
+                    {orderedLayers.map((l) => (
+                      <LayerMetricsSection key={l.layer_id} layer={l} metrics={kpis?.layers?.[l.layer_id]} projectId={projectId} />
+                    ))}
                   </div>
-                  <div className="layer-meta">
-                    <span className="layer-type">
-                      {l.is_adhoc ? l.source ?? "Untitled layer" : l.type}
-                      {l.is_adhoc ? <span className="layer-adhoc-badge"> Added</span> : null}
-                    </span>
-                    <span className="mono-cell">{l.crs}</span>
-                    <span className="mono-cell">
-                      {l.pixel_size_m != null ? `${l.pixel_size_m} m/px` : layerKindLabel(l.layer_kind)}
-                    </span>
-                    <span className="mono-cell">{l.date_processed ?? "undated"}</span>
-                  </div>
-                </div>
-              ))}
+                )}
+              </div>
             </div>
-          </>
-        )}
-      </section>
+          </section>
 
-      <section className="panel">
-        <button className="collapsible-header" aria-expanded={evolutionOpen} onClick={toggleEvolution}>
-          <span>Landscape evolution</span>
-          <span className={`collapsible-chevron${evolutionOpen ? " collapsible-chevron-open" : ""}`} aria-hidden="true"><ChevronDown size={16} strokeWidth={2} className="icon" /></span>
-        </button>
-        <div className="collapsible-body" data-open={evolutionOpen} inert={evolutionOpen ? undefined : ""}>
-          <div className="collapsible-body-inner">
-            <LandscapeEvolutionTable evolution={evolution} />
-          </div>
-        </div>
-      </section>
+          <section className="panel">
+            <button className="collapsible-header" aria-expanded={evolutionOpen} onClick={toggleEvolution}>
+              <span>Landscape evolution</span>
+              <span className={`collapsible-chevron${evolutionOpen ? " collapsible-chevron-open" : ""}`} aria-hidden="true"><ChevronDown size={16} strokeWidth={2} className="icon" /></span>
+            </button>
+            <div className="collapsible-body" data-open={evolutionOpen} inert={evolutionOpen ? undefined : ""}>
+              <div className="collapsible-body-inner">
+                <LandscapeEvolutionTable evolution={evolution} />
+              </div>
+            </div>
+          </section>
 
-      <section className="panel">
-        <button className="collapsible-header" aria-expanded={datasetsOpen} onClick={toggleDatasets}>
-          <span>Datasets</span>
-          <span className={`collapsible-chevron${datasetsOpen ? " collapsible-chevron-open" : ""}`} aria-hidden="true"><ChevronDown size={16} strokeWidth={2} className="icon" /></span>
-        </button>
-        <div className="collapsible-body" data-open={datasetsOpen} inert={datasetsOpen ? undefined : ""}>
-          <div className="collapsible-body-inner">
-            {detail.datasets.length === 0 ? (
-              <EmptyState title="No datasets yet" />
-            ) : (
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Type</th>
-                    <th>Source</th>
-                    <th>Accuracy</th>
-                    <th>Processed</th>
-                    <th>Loaded</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {detail.datasets.map((d) => (
-                    <tr key={d.dataset_id}>
-                      <td>{d.type}</td>
-                      <td className="mono-cell">{d.source ?? "—"}</td>
-                      <td className="mono-cell">{d.accuracy_score != null ? `${formatNumber(d.accuracy_score)}%` : "—"}</td>
-                      <td className="mono-cell">{formatDate(d.date_processed)}</td>
-                      <td className="mono-cell">{formatDate(d.loaded_at)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </div>
-      </section>
+          <section className="panel">
+            <button className="collapsible-header" aria-expanded={datasetsOpen} onClick={toggleDatasets}>
+              <span>Datasets</span>
+              <span className={`collapsible-chevron${datasetsOpen ? " collapsible-chevron-open" : ""}`} aria-hidden="true"><ChevronDown size={16} strokeWidth={2} className="icon" /></span>
+            </button>
+            <div className="collapsible-body" data-open={datasetsOpen} inert={datasetsOpen ? undefined : ""}>
+              <div className="collapsible-body-inner">
+                {detail.datasets.length === 0 ? (
+                  <EmptyState title="No datasets yet" />
+                ) : (
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Type</th>
+                        <th>Source</th>
+                        <th>Accuracy</th>
+                        <th>Processed</th>
+                        <th>Loaded</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {detail.datasets.map((d) => (
+                        <tr key={d.dataset_id}>
+                          <td>{d.type}</td>
+                          <td className="mono-cell">{d.source ?? "—"}</td>
+                          <td className="mono-cell">{d.accuracy_score != null ? `${formatNumber(d.accuracy_score)}%` : "—"}</td>
+                          <td className="mono-cell">{formatDate(d.date_processed)}</td>
+                          <td className="mono-cell">{formatDate(d.loaded_at)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+          </section>
+        </>
+      ) : null}
     </div>
   );
 }

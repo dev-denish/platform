@@ -162,6 +162,7 @@ class WmsService:
                 actor_id=actor.user_id, actor_name=actor.username,
                 action=AuditAction.CREATE_EXTERNAL_LAYER, target=str(layer_id),
                 detail=f"{service_kind.upper()} layer '{layer_name}' from {domain}.",
+                project_id=project_id,
             )
         return layer_id
 

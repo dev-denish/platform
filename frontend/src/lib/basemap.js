@@ -43,3 +43,69 @@ export const CARTO_BASEMAP_ATTRIBUTION =
  */
 export const BASEMAP_MAX_NATIVE_ZOOM = 18;
 export const CARTO_BASEMAP_MAX_NATIVE_ZOOM = 20;
+
+/**
+ * Basemap gallery (Wave: map toolbar capabilities) - the picker's whole option
+ * list, so adding a source is one entry here and nothing else. `satellite` and
+ * `map` are the two originals above, unchanged and still first so an existing
+ * session's saved mode keeps meaning what it meant.
+ *
+ * Every entry carries its OWN `maxNativeZoom`, confirmed the same way the two
+ * originals were (fetching real tile BYTES across zooms and locations, not
+ * just checking for a 200) - a source that 200s with a blank placeholder past
+ * its real depth is exactly the blank-tile bug the maxNativeZoom fix
+ * addressed:
+ *
+ * - OSM standard: real content through z19; z20+ is a hard HTTP 400 from the
+ *   tile server. maxNativeZoom 19.
+ * - Carto Dark (dark_all): same tile pyramid as the light_all "Map" entry -
+ *   substantive content through z20, thinning at z21. maxNativeZoom 20.
+ * - Esri World Topo Map: content stops at z17 and z18/19/20 all return the
+ *   identical 2521-byte "map data not available" placeholder (byte-identical
+ *   md5 across Mysuru/Suntikoppa/Madikeri/Bengaluru/Delhi - i.e. a 200 that
+ *   renders as nothing). maxNativeZoom 17, so Leaflet upscales the real z17
+ *   tile instead of showing that placeholder.
+ */
+export const BASEMAPS = [
+  {
+    key: "satellite",
+    label: "Satellite",
+    url: BASEMAP_URL,
+    attribution: BASEMAP_ATTRIBUTION,
+    maxNativeZoom: BASEMAP_MAX_NATIVE_ZOOM,
+  },
+  {
+    key: "map",
+    label: "Map (light)",
+    url: CARTO_BASEMAP_URL,
+    attribution: CARTO_BASEMAP_ATTRIBUTION,
+    maxNativeZoom: CARTO_BASEMAP_MAX_NATIVE_ZOOM,
+  },
+  {
+    key: "dark",
+    label: "Map (dark)",
+    url: "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+    attribution: CARTO_BASEMAP_ATTRIBUTION,
+    maxNativeZoom: 20,
+  },
+  {
+    key: "osm",
+    label: "Streets (OSM)",
+    url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    maxNativeZoom: 19,
+  },
+  {
+    key: "topo",
+    label: "Topographic",
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
+    attribution: "Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ, and the GIS User Community",
+    maxNativeZoom: 17,
+  },
+];
+
+/** Falls back to the first entry so an unknown/stale stored mode still renders
+ * a basemap rather than nothing. */
+export function basemapFor(key) {
+  return BASEMAPS.find((b) => b.key === key) ?? BASEMAPS[0];
+}

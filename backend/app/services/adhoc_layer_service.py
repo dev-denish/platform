@@ -46,4 +46,5 @@ class AdhocLayerService:
                 actor_id=actor.user_id, actor_name=actor.username,
                 action=AuditAction.DELETE_DATASET, target=str(layer["dataset_id"]),
                 detail=f"Removed ad-hoc layer {layer_id} (dataset {layer['dataset_id']}).",
+                project_id=layer["project_id"],
             )

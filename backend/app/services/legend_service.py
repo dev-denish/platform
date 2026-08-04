@@ -125,6 +125,7 @@ class ClassLegendService:
                     f"{after.get('total_area', 0.0)} ha; "
                     f"per-class before {before}; per-class after {after}"
                 ),
+                project_id=layer["project_id"],
             )
 
         return ClassLegendUpdateResult(

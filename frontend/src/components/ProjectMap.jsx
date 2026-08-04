@@ -16,19 +16,15 @@ import {
 } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
+import { toPng } from "html-to-image";
+import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { apiFetch, API_BASE } from "../config.js";
 import { DATASET_TYPE_COLORS } from "../lib/colors.js";
-import {
-  BASEMAP_URL,
-  BASEMAP_ATTRIBUTION,
-  BASEMAP_MAX_NATIVE_ZOOM,
-  CARTO_BASEMAP_URL,
-  CARTO_BASEMAP_ATTRIBUTION,
-  CARTO_BASEMAP_MAX_NATIVE_ZOOM,
-} from "../lib/basemap.js";
+import { basemapFor } from "../lib/basemap.js";
 import { initSymbologyState, buildTileUrl, legendEntryLabel, legendEntryColor } from "../lib/symbology.js";
 import { lineDistanceMeters, polygonAreaHectares, scaleRatioLabel } from "../lib/measure.js";
 import { formatNumber } from "../lib/format.js";
+import { useCollapse } from "../lib/useCollapse.js";
 import LayersPanel from "./LayersPanel.jsx";
 import MeasureTools from "./MeasureTools.jsx";
 import DrawTools from "./DrawTools.jsx";
@@ -171,6 +167,55 @@ function ScaleControl() {
     const control = L.control.scale({ position: "bottomright", metric: true, imperial: false }).addTo(map);
     return () => control.remove();
   }, [map]);
+  return null;
+}
+
+/**
+ * Before/after swipe comparison: clips the TOP ("after") tile layer to the
+ * right of the divider so the bottom ("before") layer shows through on the
+ * left. Only the top layer is clipped - the bottom one just renders whole.
+ *
+ * Hand-rolled rather than pulling in `leaflet-side-by-side`: that plugin is an
+ * L.Control that takes Leaflet layer INSTANCES and adds/removes them itself,
+ * which is exactly the imperative layer management react-leaflet's declarative
+ * <TileLayer> children own here - it would fight the framework for the same
+ * job. Its actual clipping technique is ~10 lines, reproduced below, and this
+ * file already hand-rolls the measure/draw click handling in the same spirit.
+ *
+ * The coordinate space is the subtle part (and the reason the plugin exists):
+ * a Leaflet layer container is an unsized `position:absolute` div inside a
+ * pane, so percentage/edge-relative clipping has no box to resolve against.
+ * Both the plugin and this compute the rectangle in LAYER-POINT pixels (which
+ * is what the container's origin is in) and re-apply it whenever the map
+ * moves, since the layer-point origin shifts with every pan/zoom.
+ */
+function SwipeClip({ layer, pct }) {
+  const map = useMap();
+  useEffect(() => {
+    if (!layer) return undefined;
+    function apply() {
+      // The container element is resolved per call, not captured once:
+      // react-leaflet hands the layer instance to our ref during the
+      // layout-effect phase, but Leaflet only creates that container when the
+      // layer is actually added to the map, in the passive-effect phase right
+      // after. `layeradd` below covers that gap without depending on which
+      // effect wins the race.
+      const el = layer.getContainer?.();
+      if (!el) return;
+      const size = map.getSize();
+      const nw = map.containerPointToLayerPoint([0, 0]);
+      const se = map.containerPointToLayerPoint([size.x, size.y]);
+      const x = nw.x + (size.x * pct) / 100;
+      el.style.clipPath = `polygon(${x}px ${nw.y}px, ${se.x}px ${nw.y}px, ${se.x}px ${se.y}px, ${x}px ${se.y}px)`;
+    }
+    apply();
+    map.on("move zoomend resize layeradd", apply);
+    return () => {
+      map.off("move zoomend resize layeradd", apply);
+      const el = layer.getContainer?.();
+      if (el) el.style.clipPath = "";
+    };
+  }, [map, layer, pct]);
   return null;
 }
 
@@ -420,6 +465,22 @@ export default function ProjectMap({ layers, onRefreshLayers, onLegendChanged, p
   // lib/basemap.js). Purely a display choice, unrelated to any layer's own
   // symbology/visibility state above.
   const [basemapMode, setBasemapMode] = useState("satellite");
+  const basemap = basemapFor(basemapMode);
+
+  // Wave: map toolbar capabilities. Compare mode: { before, after } layer ids,
+  // or null when off. `swipePct` is the divider's position across the map
+  // canvas (0 = far left, 100 = far right); `swipeLayer` is the real Leaflet
+  // TileLayer instance of the "after" side, captured by ref because SwipeClip
+  // clips its container element directly (see SwipeClip's docstring).
+  const [compare, setCompare] = useState(null);
+  const [swipePct, setSwipePct] = useState(50);
+  const [swipeLayer, setSwipeLayer] = useState(null);
+  const canvasRef = useRef(null);
+
+  // Whole-panel collapse (not LayersPanel's own internal accordion, which is
+  // untouched): hides the entire docked column to give the map its width back.
+  // sessionStorage-backed via the same useCollapse the panel's own groups use.
+  const [panelOpen, togglePanel] = useCollapse("collapse:map-layers-column", true);
 
   // Phase 3 Wave F: real browser Fullscreen API (not a CSS-only fake) on the
   // whole `.map-frame` card, so the map AND its overlaid chrome (toolbar,
@@ -601,8 +662,66 @@ export default function ProjectMap({ layers, onRefreshLayers, onLegendChanged, p
   const zoomOut = useCallback(() => mapRef?.zoomOut(), [mapRef]);
   const fitExtent = useCallback(() => mapRef?.fitBounds(bounds, { padding: [24, 24] }), [mapRef, bounds]);
 
-  // Every hook above this line - `bounds` is the last one, and bailing out
-  // early must happen after all of them, never between two.
+  // Toolbar's coordinate jump + saved-view bookmarks both land here. No zoom
+  // given (raw coordinate entry) = keep the current zoom unless it's zoomed
+  // way out, where landing at z7 on a point is useless.
+  const jumpTo = useCallback(
+    (lat, lon, zoom) => mapRef?.setView([lat, lon], zoom ?? Math.max(mapRef.getZoom(), 14)),
+    [mapRef]
+  );
+
+  // Wave: map toolbar capabilities - "Save image". Captures the Leaflet
+  // container itself (tiles, drawn shapes, popups, scale bar), not the whole
+  // frame, so the toolbar/Layers chrome around it stays out of the picture.
+  // html-to-image re-fetches each tile to inline it; every basemap this app
+  // offers sends `Access-Control-Allow-Origin: *` and our own tile endpoint is
+  // same-origin, so nothing taints the canvas.
+  const exportImage = useCallback(async () => {
+    if (!mapRef) return;
+    try {
+      const dataUrl = await toPng(mapRef.getContainer(), { backgroundColor: "#ffffff" });
+      const a = document.createElement("a");
+      a.href = dataUrl;
+      a.download = `map-${new Date().toISOString().slice(0, 10)}.png`;
+      a.click();
+    } catch {
+      // A user-initiated action that silently does nothing is worse than a
+      // blunt native alert - and this needs no layout of its own.
+      window.alert("Could not save this view as an image. Try again once all tiles have finished loading.");
+    }
+  }, [mapRef]);
+
+  // Leaflet caches its container size (same reason FullscreenInvalidate
+  // exists) - collapsing the Layers column changes the map's width without any
+  // event Leaflet listens to, so tell it to re-measure.
+  useEffect(() => {
+    if (mapRef) setTimeout(() => mapRef.invalidateSize(), 0);
+  }, [panelOpen, mapRef]);
+
+  // Dated raster layers are the only ones a before/after swipe is meaningful
+  // for (and the only kind that renders as a plain <TileLayer>, which is what
+  // SwipeClip clips). Oldest first, so the toolbar's defaults read
+  // oldest -> newest.
+  const compareOptions = useMemo(
+    () =>
+      layers
+        .filter((l) => l.layer_kind === "raster" && l.tile_url_template && l.date_processed)
+        .sort((a, b) => (a.date_processed < b.date_processed ? -1 : 1))
+        .map((l) => ({
+          layer_id: l.layer_id,
+          label: `${l.display_name ?? l.type} · ${l.date_processed}`,
+        })),
+    [layers]
+  );
+
+  // Compare mode needs at least two dated layers; if a layer disappears (or
+  // the project never had two), drop out rather than render half a comparison.
+  useEffect(() => {
+    if (compare && compareOptions.length < 2) setCompare(null);
+  }, [compare, compareOptions]);
+
+  // Every hook above this line - the compare-mode effect is the last one, and
+  // bailing out early must happen after all of them, never between two.
   if (!bounds) return null;
 
   // A real expired/invalid token fails EVERY tile of a layer, since they all
@@ -726,6 +845,39 @@ export default function ProjectMap({ layers, onRefreshLayers, onLegendChanged, p
     });
   }
 
+  /** One side of the swipe comparison. Only the "after" side gets a ref - it's
+   * the layer SwipeClip clips; the "before" side renders whole underneath. */
+  function renderCompareSide(layerId, side) {
+    const l = layers.find((x) => x.layer_id === layerId);
+    if (!l) return null;
+    const hasLegend = !!(l.class_legend && Object.keys(l.class_legend).length > 0);
+    return (
+      <TileLayer
+        key={`compare-${side}-${layerId}`}
+        ref={side === "after" ? setSwipeLayer : undefined}
+        url={buildTileUrl(l.tile_url_template, symbologyState[l.layer_id], hasLegend)}
+        maxZoom={22}
+      />
+    );
+  }
+
+  // Plain pointer events on the divider, not a Leaflet handler: the divider is
+  // a sibling overlay above the map container, and preventDefault on
+  // pointerdown keeps the gesture from also starting a map drag.
+  function startSwipeDrag(e) {
+    e.preventDefault();
+    const rect = canvasRef.current.getBoundingClientRect();
+    function move(ev) {
+      setSwipePct(Math.min(100, Math.max(0, ((ev.clientX - rect.left) / rect.width) * 100)));
+    }
+    function up() {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    }
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  }
+
   // Whichever layers are currently checked ARE the ones with a live tile
   // render - the same set drives both the Symbology gear popover's target
   // and Wave D's pixel-inspection targets, now naturally covering however
@@ -790,30 +942,57 @@ export default function ProjectMap({ layers, onRefreshLayers, onLegendChanged, p
           onSelectDrawMode={selectDrawMode}
           basemapMode={basemapMode}
           onBasemapChange={setBasemapMode}
+          compareOptions={compareOptions}
+          compare={compare}
+          onCompareChange={setCompare}
+          onExportImage={exportImage}
+          onJump={jumpTo}
+          projectId={projectId}
+          center={mapView.center}
           lat={(mapView.pos ?? mapView.center)?.lat}
           lon={(mapView.pos ?? mapView.center)?.lng}
           zoom={mapView.zoom}
           scaleLabel={mapView.zoom != null ? scaleRatioLabel(mapView.zoom, (mapView.pos ?? mapView.center)?.lat ?? 0) : null}
         />
         <div className="map-body">
-          <LayersPanel
-            layers={layers}
-            layerState={layerState}
-            symbologyState={symbologyState}
-            vectorData={vectorData}
-            onToggleVisibility={toggle}
-            onOpacityChange={setOpacity}
-            onSymbologyChange={updateSymbology}
-            onRefreshLayers={onRefreshLayers}
-            onLegendChanged={onLegendChanged}
-            projectId={projectId}
-          />
-          <div className="map-canvas-wrap">
+          {panelOpen ? (
+            <LayersPanel
+              layers={layers}
+              layerState={layerState}
+              symbologyState={symbologyState}
+              vectorData={vectorData}
+              onToggleVisibility={toggle}
+              onOpacityChange={setOpacity}
+              onSymbologyChange={updateSymbology}
+              onRefreshLayers={onRefreshLayers}
+              onLegendChanged={onLegendChanged}
+              projectId={projectId}
+            />
+          ) : null}
+          <div className="map-canvas-wrap" ref={canvasRef}>
             {/* Phase 3 Wave E: plain React overlays, siblings of
              * <MapContainer> (not react-leaflet children) - none of these
              * need Leaflet's map context, just `.map-canvas-wrap` itself as
              * the positioned ancestor. */}
             <div className="map-overlay-topleft">
+              {/* Whole-column show/hide. Lives here, not in LayersPanel: it
+               * has to stay reachable once that panel is gone. */}
+              {layers.length > 0 ? (
+                <button
+                  type="button"
+                  className="icon-button"
+                  onClick={togglePanel}
+                  aria-expanded={panelOpen}
+                  aria-label={panelOpen ? "Hide the Layers panel" : "Show the Layers panel"}
+                  title={panelOpen ? "Hide the Layers panel" : "Show the Layers panel"}
+                >
+                  {panelOpen ? (
+                    <PanelLeftClose size={16} strokeWidth={2} className="icon" />
+                  ) : (
+                    <PanelLeftOpen size={16} strokeWidth={2} className="icon" />
+                  )}
+                </button>
+              ) : null}
               <MeasureTools
                 mode={measureMode}
                 onClear={clearMeasurement}
@@ -834,6 +1013,17 @@ export default function ProjectMap({ layers, onRefreshLayers, onLegendChanged, p
             <div className="map-overlay-topright">
               <FullscreenToggle active={isFullscreen} onClick={toggleFullscreen} />
             </div>
+            {compare ? (
+              <div
+                className="map-swipe-divider"
+                style={{ left: `${swipePct}%` }}
+                role="separator"
+                aria-label="Drag to compare the two dates"
+                onPointerDown={startSwipeDrag}
+              >
+                <span className="map-swipe-grip" aria-hidden="true" />
+              </div>
+            ) : null}
             <MapContainer
               bounds={bounds}
               boundsOptions={{ padding: [24, 24] }}
@@ -875,12 +1065,32 @@ export default function ProjectMap({ layers, onRefreshLayers, onLegendChanged, p
                   </div>
                 </Popup>
               ) : null}
+              {/* `key` forces a real remount when the basemap changes.
+                * react-leaflet only pushes `url` (and opacity/zIndex) into an
+                * existing tile layer - `maxNativeZoom` is a construction-time
+                * option it never updates (confirmed in
+                * @react-leaflet/core's updateGridLayer/updateTileLayer), so
+                * without this the per-source native-zoom cap silently kept
+                * whichever basemap was mounted FIRST and the blank-tile bug
+                * came back the moment you switched sources. */}
               <TileLayer
-                attribution={basemapMode === "map" ? CARTO_BASEMAP_ATTRIBUTION : BASEMAP_ATTRIBUTION}
-                url={basemapMode === "map" ? CARTO_BASEMAP_URL : BASEMAP_URL}
-                maxNativeZoom={basemapMode === "map" ? CARTO_BASEMAP_MAX_NATIVE_ZOOM : BASEMAP_MAX_NATIVE_ZOOM}
+                key={basemap.key}
+                attribution={basemap.attribution}
+                url={basemap.url}
+                maxNativeZoom={basemap.maxNativeZoom}
               />
-              {renderGenericLayers(layers)}
+              {/* Compare mode replaces the normal layer stack with exactly the
+               * two chosen dates - anything else on top would sit over both
+               * sides of the swipe and make the comparison unreadable. */}
+              {compare ? (
+                <>
+                  {renderCompareSide(compare.before, "before")}
+                  {renderCompareSide(compare.after, "after")}
+                  <SwipeClip layer={swipeLayer} pct={swipePct} />
+                </>
+              ) : (
+                renderGenericLayers(layers)
+              )}
               {boundsLayers.map((l) => (
                 <Rectangle
                   key={l.layer_id}

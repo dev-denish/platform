@@ -89,6 +89,24 @@ export function storeUnit(mode, unitKey) {
 }
 
 /**
+ * "12.345, 67.89" -> { lat, lon }, or null if it isn't a usable coordinate
+ * pair. Backs the toolbar's jump-to-coordinates box (Wave: map toolbar
+ * capabilities) - raw entry only, deliberately not geocoding. Accepts comma
+ * and/or whitespace separators, rejects anything with the wrong number of
+ * values, a non-number, or an out-of-range lat/lon rather than sending the map
+ * somewhere meaningless. Lives here beside the rest of this file's
+ * coordinate math so it's testable without a DOM (see measure.check.mjs).
+ */
+export function parseLatLon(text) {
+  const parts = String(text).trim().split(/[,\s]+/).filter(Boolean);
+  if (parts.length !== 2) return null;
+  const [lat, lon] = parts.map(Number);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+  return { lat, lon };
+}
+
+/**
  * "1:8,407"-style ratio scale for the toolbar readout - the standard
  * web-Mercator formula (same one QGIS/ArcGIS web viewers use): ground
  * resolution at this zoom/latitude, divided by the OGC-standard assumed

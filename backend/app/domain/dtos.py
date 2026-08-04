@@ -278,6 +278,23 @@ class ProjectLayers(BaseModel):
     layers: list[LayerOut]
 
 
+class ActivityItem(BaseModel):
+    """One `audit_log` row already scoped to a single project - see
+    AuditRepository.list_for_project. `target`/`detail` are free-form
+    (their shape depends on `action`, same as everywhere else audit_log is
+    read), never re-interpreted here."""
+
+    actor_name: str
+    action: str
+    detail: str | None
+    target: str | None
+    created_at: datetime
+
+
+class ActivityFeed(BaseModel):
+    items: list[ActivityItem]
+
+
 class EvolutionChange(BaseModel):
     from_date: str
     to_date: str
