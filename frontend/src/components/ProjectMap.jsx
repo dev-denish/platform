@@ -18,7 +18,14 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { apiFetch, API_BASE } from "../config.js";
 import { DATASET_TYPE_COLORS } from "../lib/colors.js";
-import { BASEMAP_URL, BASEMAP_ATTRIBUTION, CARTO_BASEMAP_URL, CARTO_BASEMAP_ATTRIBUTION } from "../lib/basemap.js";
+import {
+  BASEMAP_URL,
+  BASEMAP_ATTRIBUTION,
+  BASEMAP_MAX_NATIVE_ZOOM,
+  CARTO_BASEMAP_URL,
+  CARTO_BASEMAP_ATTRIBUTION,
+  CARTO_BASEMAP_MAX_NATIVE_ZOOM,
+} from "../lib/basemap.js";
 import { initSymbologyState, buildTileUrl, legendEntryLabel, legendEntryColor } from "../lib/symbology.js";
 import { lineDistanceMeters, polygonAreaHectares, scaleRatioLabel } from "../lib/measure.js";
 import { formatNumber, formatHectares } from "../lib/format.js";
@@ -780,6 +787,7 @@ export default function ProjectMap({ layers, onRefreshLayers, onLegendChanged, p
               <TileLayer
                 attribution={basemapMode === "map" ? CARTO_BASEMAP_ATTRIBUTION : BASEMAP_ATTRIBUTION}
                 url={basemapMode === "map" ? CARTO_BASEMAP_URL : BASEMAP_URL}
+                maxNativeZoom={basemapMode === "map" ? CARTO_BASEMAP_MAX_NATIVE_ZOOM : BASEMAP_MAX_NATIVE_ZOOM}
               />
               {renderGenericLayers(layers)}
               {boundsLayers.map((l) => (

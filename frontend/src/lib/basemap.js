@@ -25,3 +25,21 @@ export const BASEMAP_ATTRIBUTION =
 export const CARTO_BASEMAP_URL = "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png";
 export const CARTO_BASEMAP_ATTRIBUTION =
   '&copy; <a href="https://carto.com/attributions">CARTO</a> &copy; OpenStreetMap contributors';
+
+/**
+ * Native max zoom for each basemap source, for Leaflet's `maxNativeZoom` -
+ * NOT the map's overall `maxZoom` (that stays 22, driven by the classified
+ * LULC/raster layers' own COG tiling). Past its native zoom, Leaflet keeps
+ * requesting the highest real tile and scales it up instead of asking the
+ * source for tiles that don't exist there.
+ *
+ * Esri World Imagery: 18, confirmed by direct testing - real submeter
+ * coverage runs out well before the service's published LOD table (which
+ * lists levels up to 23) outside flagship-metro imagery programs.
+ *
+ * Carto light_all: 20, confirmed by fetching actual tile bytes across zooms
+ * and locations - tile content is still substantive through z20, thins
+ * sharply at z21, and is a near-blank ~100-byte tile by z22.
+ */
+export const BASEMAP_MAX_NATIVE_ZOOM = 18;
+export const CARTO_BASEMAP_MAX_NATIVE_ZOOM = 20;

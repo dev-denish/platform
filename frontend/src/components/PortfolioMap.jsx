@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { MapContainer, TileLayer, Rectangle, Tooltip } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import { DATASET_TYPE_COLORS } from "../lib/colors.js";
+import { CARTO_BASEMAP_MAX_NATIVE_ZOOM } from "../lib/basemap.js";
 
 /** layers: [{ layer_id, type, bounds, date_processed, projectName }] */
 export default function PortfolioMap({ layers }) {
@@ -29,6 +30,7 @@ export default function PortfolioMap({ layers }) {
         <TileLayer
           attribution='&copy; <a href="https://carto.com/attributions">CARTO</a> &copy; OpenStreetMap contributors'
           url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+          maxNativeZoom={CARTO_BASEMAP_MAX_NATIVE_ZOOM}
         />
         {layers.map((l) => (
           <Rectangle
