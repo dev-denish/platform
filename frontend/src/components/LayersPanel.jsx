@@ -348,7 +348,13 @@ function LayersPanel({
             <dt>Date processed</dt>
             <dd>{formatDate(openLayer.date_processed)}</dd>
             <dt>Accuracy</dt>
-            <dd>{openLayer.accuracy_score != null ? `${formatNumber(openLayer.accuracy_score)}%` : "—"}</dd>
+            <dd>
+              {openLayer.accuracy_score != null ? (
+                <span className="verify-mark">{formatNumber(openLayer.accuracy_score)}%</span>
+              ) : (
+                "—"
+              )}
+            </dd>
             {openLayer.needs_reingestion ? (
               <>
                 <dt>Padding mask</dt>

@@ -1,50 +1,57 @@
 /* ============================================================
    dMRV Platform — design tokens
-   Direction: light, premium enterprise SaaS. White cards on a
-   faint green-tinted near-white canvas, forest-green sidebar and
-   accents, tabular numerics for anything measured (coordinates,
-   hectares, accuracy, timestamps) so data reads as data, not prose.
+   Direction: precise, evidentiary, instrument-grade. Cool graphite
+   canvas (hue 240, near-zero chroma - anodized-casing neutral, not
+   the generic climate-SaaS green), one cyan-teal "trace" accent
+   reserved for interactive/brand use, hairline rules over soft
+   shadow-cards, tabular numerics + IBM Plex Mono for anything
+   measured (coordinates, hectares, accuracy, timestamps) so data
+   reads as data, not prose. Verified/pending/flagged are semantic
+   status colors, not the brand accent - they mean something.
    ============================================================ */
 
 :root {
-  --bg: #f7faf8;
-  --bg-elevated: #eff5f1;
+  --bg: oklch(97% 0.004 240);
+  --bg-elevated: oklch(94% 0.006 240);
   --surface: #ffffff;
-  --surface-hover: #f2f7f4;
-  --border: #e5ece8;
-  --border-strong: #d3ded8;
+  --surface-hover: oklch(95.5% 0.005 240);
+  --border: oklch(88% 0.006 240);
+  --border-strong: oklch(80% 0.008 240);
 
-  --text: #101f1a;
-  --text-muted: #4c5d57;
-  --text-faint: #63756c;
+  --text: oklch(20% 0.008 240);
+  --text-muted: oklch(42% 0.008 240);
+  --text-faint: oklch(56% 0.008 240);
 
-  --accent: #0b6b46;
-  --accent-strong: #094f35;
-  --accent-wash: #eaf7f0;
+  --accent: oklch(52% 0.14 195);
+  --accent-strong: oklch(42% 0.14 195);
+  --accent-wash: oklch(94% 0.03 195);
 
-  --amber: #f5a623;
-  --amber-wash: rgba(245, 166, 35, 0.14);
+  --verified: oklch(45% 0.13 150);
+  --verified-wash: oklch(94% 0.04 150);
 
-  --clay: #ef5350;
-  --clay-wash: rgba(239, 83, 80, 0.1);
+  --amber: oklch(68% 0.15 75);
+  --amber-wash: oklch(94% 0.05 75);
 
-  --blue: #0c6fb0;
+  --clay: oklch(55% 0.18 25);
+  --clay-wash: oklch(93% 0.04 25);
 
-  --sidebar-bg: #083a2b;
-  --sidebar-bg-elevated: #072f23;
+  --blue: var(--accent);
+
+  --sidebar-bg: oklch(16% 0.012 240);
+  --sidebar-bg-elevated: oklch(13% 0.012 240);
   --sidebar-border: rgba(255, 255, 255, 0.08);
-  --sidebar-text: #b9d6c8;
+  --sidebar-text: oklch(72% 0.015 240);
   --sidebar-text-active: #ffffff;
-  --sidebar-active-bg: #0b6b46;
+  --sidebar-active-bg: oklch(24% 0.02 240);
 
-  --font-display: "Inter", "Segoe UI", Roboto, -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif;
-  --font-body: "Inter", "Segoe UI", Roboto, -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif;
+  --font-display: "IBM Plex Sans", "Segoe UI", Roboto, -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", Roboto, -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, monospace;
 
   --radius-sm: 8px;
   --radius-md: 14px;
-  --shadow-card: 0 4px 16px rgba(9, 38, 26, 0.06), 0 1px 3px rgba(9, 38, 26, 0.05);
-  --shadow-lift: 0 12px 32px rgba(9, 38, 26, 0.12);
+  --shadow-card: 0 0 0 1px var(--border);
+  --shadow-lift: 0 0 0 1px var(--border-strong), 0 8px 24px rgba(20, 30, 40, 0.08);
 
   /* Phase 3 Wave F: the GEE-style map toolbar/toggle containers sit directly
    * on top of imagery of unknown color, so a literal `transparent`
@@ -119,6 +126,28 @@ a {
   justify-content: center;
 }
 
+/* verification bracket: signature element for field-verified / ground-
+   truthed data, distinct from remote-sensing-only estimates - a small
+   corner-tick (survey-benchmark / focus-bracket) in the accent color,
+   not a decorative badge. Wrap the value: <span class="verify-mark">98%</span> */
+.verify-mark {
+  position: relative;
+  padding-left: 10px;
+}
+
+.verify-mark::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 2px;
+  bottom: 2px;
+  width: 6px;
+  border-left: 1.5px solid var(--accent);
+  border-top: 1.5px solid var(--accent);
+  border-bottom: 1.5px solid var(--accent);
+  border-radius: 2px 0 0 2px;
+}
+
 /* ---------------------------------------------------------- shell */
 
 .shell {
@@ -151,8 +180,20 @@ a {
   width: 22px;
   height: 22px;
   border-radius: 5px;
-  background: conic-gradient(from 210deg, var(--accent), #6bc896, var(--accent));
+  background: var(--accent);
+  position: relative;
   flex: none;
+}
+
+.shell-brand-mark::after {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 5px;
+  right: 9px;
+  bottom: 9px;
+  border-left: 1.5px solid var(--sidebar-bg);
+  border-top: 1.5px solid var(--sidebar-bg);
 }
 
 .shell-brand-name {
@@ -214,6 +255,7 @@ a {
 .shell-nav-link-active {
   background: var(--sidebar-active-bg);
   color: var(--sidebar-text-active);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 .shell-user {
@@ -1015,7 +1057,7 @@ a {
   justify-content: center;
   position: relative;
   overflow: hidden;
-  background: radial-gradient(ellipse at 50% 0%, #eaf7f0 0%, var(--bg) 60%);
+  background: radial-gradient(ellipse at 50% 0%, var(--accent-wash) 0%, var(--bg) 60%);
 }
 
 .contour-field {
@@ -1023,7 +1065,7 @@ a {
   inset: 0;
   width: 100%;
   height: 100%;
-  color: #c9decf;
+  color: var(--border-strong);
   opacity: 0.7;
 }
 
