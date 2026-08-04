@@ -1,4 +1,5 @@
 import { memo, useMemo, useState } from "react";
+import { AlertTriangle, ChevronDown, Info, Settings2, X } from "lucide-react";
 import { useCollapse } from "../lib/useCollapse.js";
 import SymbologyPanel from "./SymbologyPanel.jsx";
 import ClassLegendEditor from "./ClassLegendEditor.jsx";
@@ -6,7 +7,7 @@ import AddAdhocLayerDialog from "./AddAdhocLayerDialog.jsx";
 import { formatDate, formatNumber } from "../lib/format.js";
 import { apiFetch } from "../config.js";
 import { useAuth } from "../context/AuthContext.jsx";
-import { canManageReferenceLayers, canUpload } from "../lib/roles.js";
+import { canManageReferenceLayers, canRenameLayer, canUpload } from "../lib/roles.js";
 
 /**
  * The GEE Code Editor's "Layers" panel, now a docked left column beside the
@@ -67,6 +68,73 @@ function byDate(a, b) {
   if (!a.date_processed) return 1;
   if (!b.date_processed) return -1;
   return a.date_processed < b.date_processed ? -1 : a.date_processed > b.date_processed ? 1 : 0;
+}
+
+/**
+ * The one place a layer's name is decided, used by the row label and by the
+ * rename field's prefill so the two can't drift. An admin-set
+ * `display_name` (rename-a-layer) wins; with no override this is exactly the
+ * label shown before that field existed - an ad-hoc layer's meaningful name
+ * is whatever display name it was added with (stored in `source` - see
+ * adhoc_layers.py), not its generic internal dataset type, which the
+ * uploader never saw.
+ */
+function displayLabel(layer) {
+  return layer.display_name ?? (layer.is_adhoc ? layer.source ?? "Untitled layer" : layer.type);
+}
+
+/**
+ * Rename-a-layer: the info popover's editable name field, rendered only for
+ * an Administrator (everyone else gets the same value as plain text). The
+ * caller keys this on layer_id so switching layers remounts it with the new
+ * prefill - no effect needed to sync state to props. Save/error state
+ * follows ClassLegendEditor's saving/error + try-finally pattern.
+ */
+function LayerNameField({ layer, onRenamed }) {
+  const [value, setValue] = useState(() => displayLabel(layer));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  async function save() {
+    const trimmed = value.trim();
+    // Matches the backend's min_length=1 - a whitespace-only name would be a
+    // 422 and would also render as a nameless row.
+    if (!trimmed) {
+      setError("Enter a name.");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await apiFetch(`/layers/${layer.layer_id}/display-name`, {
+        method: "PATCH",
+        body: JSON.stringify({ display_name: trimmed }),
+      });
+      await onRenamed?.();
+    } catch (err) {
+      setError(err.message ?? "Could not rename this layer.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="layer-rename-field">
+      <input
+        type="text"
+        className="field-input"
+        aria-label="Layer name"
+        maxLength={256}
+        value={value}
+        disabled={saving}
+        onChange={(e) => setValue(e.target.value)}
+      />
+      <button type="button" className="ghost-button" disabled={saving} onClick={save}>
+        {saving ? "Saving…" : "Save"}
+      </button>
+      {error ? <span className="field-hint field-hint-error">{error}</span> : null}
+    </div>
+  );
 }
 
 function featureCountFor(layer, vectorData) {
@@ -148,7 +216,7 @@ function LayersPanel({
       <button type="button" className="layers-panel-header" aria-expanded={expanded} onClick={toggleExpanded}>
         <span className="layers-panel-title">Layers</span>
         <span className={`layers-panel-chevron${expanded ? " layers-panel-chevron-open" : ""}`} aria-hidden="true">
-          ▾
+          <ChevronDown size={16} strokeWidth={2} className="icon" />
         </span>
       </button>
       {expanded && user && canUpload(user.role) && projectId ? (
@@ -196,7 +264,7 @@ function LayersPanel({
                         className={`layer-group-chevron${groupOpen ? " layer-group-chevron-open" : ""}`}
                         aria-hidden="true"
                       >
-                        ▾
+                        <ChevronDown size={16} strokeWidth={2} className="icon" />
                       </span>
                       {g.label}
                     </button>
@@ -216,12 +284,7 @@ function LayersPanel({
                                 />
                                 <span className="layer-row-body">
                                   <span className="layer-row-label">
-                                    {/* Wave 3: an ad-hoc layer's meaningful name is
-                                        whatever display name it was added with
-                                        (stored in `source` - see
-                                        adhoc_layers.py) - not its generic internal
-                                        dataset type, which the uploader never saw. */}
-                                    {l.is_adhoc ? l.source ?? "Untitled layer" : l.type}
+                                    {displayLabel(l)}
                                     {l.date_processed ? ` · ${l.date_processed}` : ""}
                                   </span>
                                   {featureCount != null ? (
@@ -233,7 +296,7 @@ function LayersPanel({
                                     className="layer-row-warning"
                                     title="This layer predates a rendering fix and has no real padding mask - re-upload the source file to fix warp-fill artifacts."
                                   >
-                                    ⚠
+                                    <AlertTriangle size={14} strokeWidth={2} className="icon" aria-hidden="true" />
                                   </span>
                                 ) : null}
                                 <button
@@ -242,7 +305,7 @@ function LayersPanel({
                                   aria-label="Layer info"
                                   onClick={() => openPopoverFor(l.layer_id, "info")}
                                 >
-                                  ⓘ
+                                  <Info size={16} strokeWidth={2} className="icon" />
                                 </button>
                                 {l.layer_kind === "raster" && l.tile_url_template ? (
                                   <button
@@ -251,7 +314,7 @@ function LayersPanel({
                                     aria-label="Visualization parameters"
                                     onClick={() => openPopoverFor(l.layer_id, "gear")}
                                   >
-                                    ⚙
+                                    <Settings2 size={16} strokeWidth={2} className="icon" />
                                   </button>
                                 ) : null}
                                 {l.is_reference && user && canManageReferenceLayers(user.role) ? (
@@ -262,7 +325,7 @@ function LayersPanel({
                                     disabled={removingId === l.layer_id}
                                     onClick={() => removeReferenceLayer(l.layer_id)}
                                   >
-                                    ✕
+                                    <X size={16} strokeWidth={2} className="icon" />
                                   </button>
                                 ) : null}
                                 {l.is_adhoc && user && canUpload(user.role) ? (
@@ -273,7 +336,7 @@ function LayersPanel({
                                     disabled={removingId === l.layer_id}
                                     onClick={() => removeAdhocLayer(l.layer_id)}
                                   >
-                                    ✕
+                                    <X size={16} strokeWidth={2} className="icon" />
                                   </button>
                                 ) : null}
                               </li>
@@ -299,31 +362,38 @@ function LayersPanel({
             <span className="symbology-popover-subtitle">visualization parameters</span>
           </div>
 
-          <SymbologyPanel
-            layer={openLayer}
-            symbology={symbologyState[openLayer.layer_id]}
-            onChange={onSymbologyChange}
-            hideTitle
-          />
-
-          {openLayer.layer_kind === "raster" && openLayer.class_legend && user && canUpload(user.role) ? (
-            <ClassLegendEditor layer={openLayer} onSaved={onLegendChanged} />
-          ) : null}
-
-          <label className="symbology-popover-opacity">
-            <span>Opacity</span>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.05"
-              value={(layerState[openLayer.layer_id] ?? { opacity: 1 }).opacity}
-              onChange={(e) => onOpacityChange(openLayer.layer_id, Number(e.target.value))}
+          {/* Only the middle content scrolls (see .symbology-popover-scroll) -
+           * a 9-class LULC legend opened in ClassLegendEditor grows this
+           * popover past the map frame, which clips it. Header and footer stay
+           * outside the wrapper so the layer name and Close/Apply are always
+           * visible. */}
+          <div className="symbology-popover-scroll">
+            <SymbologyPanel
+              layer={openLayer}
+              symbology={symbologyState[openLayer.layer_id]}
+              onChange={onSymbologyChange}
+              hideTitle
             />
-            <span className="symbology-popover-opacity-value">
-              {(layerState[openLayer.layer_id] ?? { opacity: 1 }).opacity.toFixed(2)}
-            </span>
-          </label>
+
+            {openLayer.layer_kind === "raster" && openLayer.class_legend && user && canUpload(user.role) ? (
+              <ClassLegendEditor layer={openLayer} onSaved={onLegendChanged} />
+            ) : null}
+
+            <label className="symbology-popover-opacity">
+              <span>Opacity</span>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.05"
+                value={(layerState[openLayer.layer_id] ?? { opacity: 1 }).opacity}
+                onChange={(e) => onOpacityChange(openLayer.layer_id, Number(e.target.value))}
+              />
+              <span className="symbology-popover-opacity-value">
+                {(layerState[openLayer.layer_id] ?? { opacity: 1 }).opacity.toFixed(2)}
+              </span>
+            </label>
+          </div>
 
           <div className="symbology-popover-footer">
             <button type="button" className="ghost-button" onClick={() => setOpenPopover(null)}>
@@ -343,6 +413,14 @@ function LayersPanel({
             <span className="symbology-popover-subtitle">layer info</span>
           </div>
           <dl className="layer-info-fields">
+            <dt>Name</dt>
+            <dd>
+              {user && canRenameLayer(user.role) ? (
+                <LayerNameField key={openLayer.layer_id} layer={openLayer} onRenamed={onRefreshLayers} />
+              ) : (
+                displayLabel(openLayer)
+              )}
+            </dd>
             <dt>Source</dt>
             <dd>{openLayer.source ?? "—"}</dd>
             <dt>Date processed</dt>
@@ -358,7 +436,10 @@ function LayersPanel({
             {openLayer.needs_reingestion ? (
               <>
                 <dt>Padding mask</dt>
-                <dd>⚠ Needs re-upload (predates the padding-mask fix)</dd>
+                <dd>
+                  <AlertTriangle size={14} strokeWidth={2} className="icon" aria-hidden="true" /> Needs re-upload
+                  (predates the padding-mask fix)
+                </dd>
               </>
             ) : null}
           </dl>

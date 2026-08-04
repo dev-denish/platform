@@ -53,6 +53,18 @@ export function canManageReferenceLayers(role) {
   return MANAGE_REFERENCE_LAYERS_ROLES.has(role);
 }
 
+// Rename-a-layer. Administrator-only, mirrors
+// app.domain.enums.RENAME_LAYER_ROLES - a separate named capability from
+// MANAGE_REFERENCE_LAYERS_ROLES even though identical today, same
+// one-named-capability-per-concept convention as MANAGE_USERS_ROLES above.
+// Note this is NARROWER than canUpload: a GIS Associate can upload and edit
+// a layer's classes but not relabel it for everyone else.
+export const RENAME_LAYER_ROLES = new Set([ROLES.ADMINISTRATOR]);
+
+export function canRenameLayer(role) {
+  return RENAME_LAYER_ROLES.has(role);
+}
+
 // Wave: project-level RBAC. Mirrors app.domain.enums.PROJECT_ROLES -
 // Administrator is global-only, never a valid project-membership role (an
 // Administrator already bypasses membership checks entirely).

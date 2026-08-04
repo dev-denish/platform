@@ -86,6 +86,15 @@ class DatasetRepository:
         )
         return self.cur.rowcount > 0
 
+    def rename(self, dataset_id: UUID | str, display_name: str) -> None:
+        """Rename-a-layer (Administrator-only). `display_name` lives here on
+        `dataset`, not on `spatial_layer` - see LayerRenameService, the only
+        caller."""
+        self.cur.execute(
+            "UPDATE dataset SET display_name = %s WHERE dataset_id = %s",
+            (display_name, str(dataset_id)),
+        )
+
 
 class LayerRepository:
     def __init__(self, cur: psycopg.Cursor) -> None:
@@ -145,7 +154,7 @@ class LayerRepository:
             SELECT sl.layer_id, sl.layer_kind, sl.crs, sl.bbox_minx, sl.bbox_miny,
                    sl.bbox_maxx, sl.bbox_maxy, sl.pixel_size_m, sl.preview_key,
                    sl.cog_key, sl.band_count, sl.class_legend, d.type, d.date_processed,
-                   d.source, d.accuracy_score, d.is_reference, d.is_adhoc
+                   d.source, d.display_name, d.accuracy_score, d.is_reference, d.is_adhoc
             FROM spatial_layer sl
             JOIN dataset d ON d.dataset_id = sl.dataset_id
             WHERE d.deleted_at IS NULL AND (d.project_id = %s OR d.is_reference = true)

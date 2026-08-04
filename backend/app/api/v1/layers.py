@@ -13,11 +13,19 @@ from fastapi import APIRouter, Depends
 from app.api.deps import (
     CurrentUserDep,
     get_class_legend_service,
+    get_layer_rename_service,
     get_vector_layer_service,
     require_role,
 )
-from app.domain.dtos import ClassLegendUpdateResult, CurrentUser, UpdateClassLegendRequest
-from app.domain.enums import UPLOAD_ROLES
+from app.domain.dtos import (
+    ClassLegendUpdateResult,
+    CurrentUser,
+    LayerRenameResult,
+    RenameLayerRequest,
+    UpdateClassLegendRequest,
+)
+from app.domain.enums import RENAME_LAYER_ROLES, UPLOAD_ROLES
+from app.services.layer_rename_service import LayerRenameService
 from app.services.legend_service import ClassLegendService
 from app.services.vector_layer_service import VectorLayerService
 
@@ -46,3 +54,16 @@ def update_class_legend(
     specific layer belongs to, same two-tier pattern as
     IngestionService/AdhocLayerService."""
     return svc.update_legend(layer_id, body.class_legend, user)
+
+
+@router.patch("/layers/{layer_id}/display-name", response_model=LayerRenameResult)
+def rename_layer(
+    layer_id: UUID,
+    body: RenameLayerRequest,
+    user: Annotated[CurrentUser, Depends(require_role(*RENAME_LAYER_ROLES))],
+    svc: Annotated[LayerRenameService, Depends(get_layer_rename_service)],
+) -> LayerRenameResult:
+    """Rename-a-layer: sets a cosmetic display_name override, shown by the
+    frontend instead of the raw type/source label. Administrator-only,
+    global gate - no project-tier fallback (see RENAME_LAYER_ROLES)."""
+    return svc.rename(layer_id, body.display_name, user)

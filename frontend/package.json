@@ -11,8 +11,10 @@
   "dependencies": {
     "@fontsource/ibm-plex-mono": "^5.1.0",
     "@fontsource/ibm-plex-sans": "^5.1.0",
+    "@mapbox/shp-write": "^0.4.3",
     "@turf/area": "^7.3.5",
     "leaflet": "^1.9.4",
+    "lucide-react": "^1.28.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-leaflet": "^4.2.1",

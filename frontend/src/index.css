@@ -1701,6 +1701,31 @@ a {
   font-family: var(--font-mono);
 }
 
+/* Rename-a-layer (Administrator-only), inside the info popover's dd - the
+ * shared .field-input at its page-form size is too tall/wide for a 340px
+ * popover row, so trim it here rather than add another input class. */
+.layer-rename-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.layer-rename-field .field-input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  /* not the mono face .layer-info-fields dd would otherwise pass down - this
+   * is an editable name, not a data readout. */
+  font-family: var(--font-body);
+  font-size: 12.5px;
+}
+
+.layer-rename-field .ghost-button {
+  padding: 5px 10px;
+  font-size: 12.5px;
+}
+
 .symbology-popover {
   position: absolute;
   top: 0;
@@ -1723,6 +1748,20 @@ a {
   flex-direction: column;
   gap: 10px;
   font-size: 12.5px;
+}
+
+/* The popover's middle content only (band/color controls + class legend editor
+ * + opacity) - a many-class legend (e.g. a 9-class LULC ramp) used to grow the
+ * popover past .map-frame's fixed height, which clips it with no way to reach
+ * the rest. Header and footer sit outside this wrapper and stay pinned.
+ * flex column + gap repeats .symbology-popover's own so wrapping these three
+ * in one element doesn't collapse the spacing between them. */
+.symbology-popover-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  max-height: 60vh;
 }
 
 .symbology-popover-header {
@@ -1797,7 +1836,11 @@ a {
   background: var(--bg-elevated);
 }
 
-.measure-tools {
+/* .draw-tools is the same floating-over-the-map chrome as the measure readout
+ * (they're mutually exclusive tools sharing this overlay slot) - one rule, not
+ * a copy. */
+.measure-tools,
+.draw-tools {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -1810,6 +1853,10 @@ a {
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-card);
   padding: 6px 8px;
+}
+
+.draw-tools-input {
+  width: 150px;
 }
 
 .measure-result {
@@ -2166,6 +2213,16 @@ a {
   font-weight: 600;
   font-size: 14px;
   color: var(--text);
+}
+
+/* Shared wrapper for lucide-react icons used as decorative glyphs (never
+ * the accessible label - that's the button's own aria-label/title).
+ * inline-flex keeps the svg's own width/height from collapsing its box;
+ * flex-shrink:0 stops it squeezing in tight flex rows (layer-row, etc). */
+.icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  vertical-align: -3px;
 }
 
 .collapsible-chevron {

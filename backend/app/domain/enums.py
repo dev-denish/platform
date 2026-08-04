@@ -63,6 +63,16 @@ MANAGE_WMS_SOURCES_ROLES: frozenset[Role] = frozenset({Role.ADMINISTRATOR})
 # take away) this codebase already applies to the WMS/WFS allow-list.
 MANAGE_REFERENCE_LAYERS_ROLES: frozenset[Role] = frozenset({Role.ADMINISTRATOR})
 
+# Rename-a-layer (display_name override). Administrator only, global gate -
+# unlike UPLOAD_ROLES/ClassLegendService there is no project-tier fallback
+# here: this is a purely cosmetic label edit, not a data-modifying action a
+# project's own GIS Associate needs day-to-day, so it doesn't get the same
+# two-tier check IngestionService/ClassLegendService apply. A separate
+# constant from MANAGE_REFERENCE_LAYERS_ROLES even though identical today,
+# matching this codebase's one-named-capability-per-concept convention (see
+# MANAGE_USERS_ROLES above).
+RENAME_LAYER_ROLES: frozenset[Role] = frozenset({Role.ADMINISTRATOR})
+
 
 class LayerKind(StrEnum):
     RASTER = "raster"
@@ -110,3 +120,4 @@ class AuditAction(StrEnum):
     REMOVE_WMS_DOMAIN = "remove_wms_domain"
     CREATE_EXTERNAL_LAYER = "create_external_layer"
     UPDATE_CLASS_LEGEND = "update_class_legend"
+    RENAME_LAYER = "rename_layer"

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ChevronDown } from "lucide-react";
 import { apiFetch } from "../config.js";
 import ErrorBanner from "./ErrorBanner.jsx";
 import EmptyState from "./EmptyState.jsx";
@@ -79,7 +80,9 @@ export default function ProjectMembers({ projectId, members, currentUser, onChan
     <section className="panel">
       <button className="collapsible-header" aria-expanded={open} onClick={toggleOpen}>
         <span>Members</span>
-        <span className={`collapsible-chevron${open ? " collapsible-chevron-open" : ""}`} aria-hidden="true">▾</span>
+        <span className={`collapsible-chevron${open ? " collapsible-chevron-open" : ""}`} aria-hidden="true">
+          <ChevronDown size={16} strokeWidth={2} className="icon" />
+        </span>
       </button>
       <div className="collapsible-body" data-open={open} inert={open ? undefined : ""}>
         <div className="collapsible-body-inner">

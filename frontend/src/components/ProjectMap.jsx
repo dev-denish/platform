@@ -28,9 +28,10 @@ import {
 } from "../lib/basemap.js";
 import { initSymbologyState, buildTileUrl, legendEntryLabel, legendEntryColor } from "../lib/symbology.js";
 import { lineDistanceMeters, polygonAreaHectares, scaleRatioLabel } from "../lib/measure.js";
-import { formatNumber, formatHectares } from "../lib/format.js";
+import { formatNumber } from "../lib/format.js";
 import LayersPanel from "./LayersPanel.jsx";
 import MeasureTools from "./MeasureTools.jsx";
+import DrawTools from "./DrawTools.jsx";
 import MapToolbar from "./MapToolbar.jsx";
 import FullscreenToggle from "./FullscreenToggle.jsx";
 import ErrorBanner from "./ErrorBanner.jsx";
@@ -182,10 +183,13 @@ function ScaleControl() {
  * on the same Leaflet map - no conflict with that component's own click
  * handling, which still runs too.
  */
-function MapClickRouter({ mode, onInspect, onMeasurePoint }) {
+function MapClickRouter({ mode, drawMode, onInspect, onMeasurePoint, onDrawPoint }) {
   useMapEvents({
     click(e) {
-      if (mode === "inspect") onInspect(e.latlng);
+      // Draw wins while it's active: selecting a draw mode already forces
+      // measure back to "inspect" (selectDrawMode), so these never overlap.
+      if (drawMode !== "none") onDrawPoint(e.latlng);
+      else if (mode === "inspect") onInspect(e.latlng);
       else onMeasurePoint(e.latlng);
     },
   });
@@ -193,6 +197,10 @@ function MapClickRouter({ mode, onInspect, onMeasurePoint }) {
 }
 
 const MEASURE_COLOR = "#e0692f";
+// Deliberately not the measure orange (which an upcoming redesign reserves as
+// the primary accent) - a drawn shape must stay tellable-apart from an
+// in-progress measurement. No violet token exists in index.css yet.
+const DRAW_COLOR = "#7c3aed";
 
 // Hoisted out of renderLayer: react-leaflet's WMSTileLayer calls
 // layer.setParams() (which redraws - re-requests every tile) whenever this
@@ -223,6 +231,35 @@ function MeasureDrawing({ mode, points }) {
           center={p}
           radius={4}
           pathOptions={{ color: MEASURE_COLOR, weight: 2, fillColor: "#fff", fillOpacity: 1 }}
+        />
+      ))}
+    </>
+  );
+}
+
+/** Same purely-visual job as MeasureDrawing, for the draw tool's shape (in
+ * progress or finished) - a lone vertex is just the marker, no line yet. */
+function DrawDrawing({ mode, points }) {
+  if (mode === "none" || points.length === 0) return null;
+  // interactive: false on every piece - a Leaflet path consumes the click that
+  // hits it instead of letting it reach the map, so once the polygon had a fill
+  // (3+ vertices) any further click INSIDE the shape silently added no vertex.
+  return (
+    <>
+      {mode === "polygon" && points.length >= 3 ? (
+        <Polygon
+          positions={points}
+          pathOptions={{ color: DRAW_COLOR, weight: 2, fillOpacity: 0.15, interactive: false }}
+        />
+      ) : points.length >= 2 ? (
+        <Polyline positions={points} pathOptions={{ color: DRAW_COLOR, weight: 3, interactive: false }} />
+      ) : null}
+      {points.map((p, i) => (
+        <CircleMarker
+          key={i}
+          center={p}
+          radius={4}
+          pathOptions={{ color: DRAW_COLOR, weight: 2, fillColor: "#fff", fillOpacity: 1, interactive: false }}
         />
       ))}
     </>
@@ -448,10 +485,43 @@ export default function ProjectMap({ layers, onRefreshLayers, onLegendChanged, p
   const [measurePoints, setMeasurePoints] = useState([]);
   const [pixelPopup, setPixelPopup] = useState(null); // { latlng, loading, rows: [{layer, values?, error?}] }
 
+  // Draw tools: point/line/polygon vertices collected by the same click
+  // gesture the measure tools use, so the two are mutually exclusive - picking
+  // either one resets the other, same convention selectMeasureMode already had
+  // for pixel inspection.
+  const [drawMode, setDrawMode] = useState("none");
+  const [drawPoints, setDrawPoints] = useState([]);
+  const [drawFinished, setDrawFinished] = useState(false);
+
+  function resetDraw(nextMode) {
+    setDrawMode(nextMode);
+    setDrawPoints([]);
+    setDrawFinished(false);
+  }
+
   function selectMeasureMode(nextMode) {
     setMeasureMode(nextMode);
     setMeasurePoints([]);
     setPixelPopup(null);
+    resetDraw("none");
+  }
+
+  function selectDrawMode(nextMode) {
+    setMeasureMode("inspect");
+    setMeasurePoints([]);
+    setPixelPopup(null);
+    resetDraw(nextMode);
+  }
+
+  function addDrawPoint(latlng) {
+    if (drawFinished) return;
+    // A point needs no Finish - the single click IS the whole shape.
+    if (drawMode === "point") {
+      setDrawPoints([latlng]);
+      setDrawFinished(true);
+      return;
+    }
+    setDrawPoints((prev) => [...prev, latlng]);
   }
 
   function addMeasurePoint(latlng) {
@@ -462,12 +532,14 @@ export default function ProjectMap({ layers, onRefreshLayers, onLegendChanged, p
     setMeasurePoints([]);
   }
 
+  // Raw base-unit value (meters / hectares); MeasureTools formats it in
+  // whichever unit the user picked there.
   const measureResult = useMemo(() => {
     if (measureMode === "distance" && measurePoints.length >= 2) {
-      return `${formatNumber(lineDistanceMeters(measurePoints), 1)} m`;
+      return lineDistanceMeters(measurePoints);
     }
     if (measureMode === "area" && measurePoints.length >= 3) {
-      return formatHectares(polygonAreaHectares(measurePoints));
+      return polygonAreaHectares(measurePoints);
     }
     return null;
   }, [measureMode, measurePoints]);
@@ -714,6 +786,8 @@ export default function ProjectMap({ layers, onRefreshLayers, onLegendChanged, p
           onExtent={fitExtent}
           measureMode={measureMode}
           onSelectMeasureMode={selectMeasureMode}
+          drawMode={drawMode}
+          onSelectDrawMode={selectDrawMode}
           basemapMode={basemapMode}
           onBasemapChange={setBasemapMode}
           lat={(mapView.pos ?? mapView.center)?.lat}
@@ -746,6 +820,16 @@ export default function ProjectMap({ layers, onRefreshLayers, onLegendChanged, p
                 result={measureResult}
                 pointCount={measurePoints.length}
               />
+              <DrawTools
+                mode={drawMode}
+                points={drawPoints}
+                finished={drawFinished}
+                onFinish={() => setDrawFinished(true)}
+                onReset={() => resetDraw(drawMode)}
+                onCancel={() => resetDraw("none")}
+                projectId={projectId}
+                onRefreshLayers={onRefreshLayers}
+              />
             </div>
             <div className="map-overlay-topright">
               <FullscreenToggle active={isFullscreen} onClick={toggleFullscreen} />
@@ -762,8 +846,15 @@ export default function ProjectMap({ layers, onRefreshLayers, onLegendChanged, p
               <FullscreenInvalidate />
               <MapViewSync onReady={setMapRef} onChange={setMapView} />
               <ScaleControl />
-              <MapClickRouter mode={measureMode} onInspect={inspectPixel} onMeasurePoint={addMeasurePoint} />
+              <MapClickRouter
+                mode={measureMode}
+                drawMode={drawMode}
+                onInspect={inspectPixel}
+                onMeasurePoint={addMeasurePoint}
+                onDrawPoint={addDrawPoint}
+              />
               <MeasureDrawing mode={measureMode} points={measurePoints} />
+              <DrawDrawing mode={drawMode} points={drawPoints} />
               {pixelPopup ? (
                 <Popup position={pixelPopup.latlng} eventHandlers={{ remove: () => setPixelPopup(null) }}>
                   <div className="pixel-popup">

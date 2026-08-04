@@ -192,6 +192,7 @@ class ProjectService:
                 band_count=self._band_count(r["band_count"], r["cog_key"]),
                 class_legend=r["class_legend"],
                 source=r["source"],
+                display_name=r["display_name"],
                 accuracy_score=(
                     float(r["accuracy_score"]) if r["accuracy_score"] is not None else None
                 ),

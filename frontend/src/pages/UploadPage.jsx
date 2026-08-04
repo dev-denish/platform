@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
+import { ArrowLeft, ArrowRight, Check, ChevronDown } from "lucide-react";
 import { apiFetch } from "../config.js";
 import ErrorBanner from "../components/ErrorBanner.jsx";
 import Spinner from "../components/Spinner.jsx";
@@ -345,7 +346,7 @@ export default function UploadPage() {
           <div className="form-actions">
             {ingest?.project_id ? (
               <Link to={`/projects/${ingest.project_id}`} className="primary-button">
-                View project →
+                View project <ArrowRight size={14} strokeWidth={2} className="icon" aria-hidden="true" />
               </Link>
             ) : null}
             <button type="button" className="ghost-button" onClick={resetToStart}>
@@ -377,7 +378,7 @@ export default function UploadPage() {
           <>
             <button className="collapsible-header" aria-expanded={step1Open} onClick={() => setStep1Open((o) => !o)}>
               <span>File &amp; project</span>
-              <span className={`collapsible-chevron${step1Open ? " collapsible-chevron-open" : ""}`} aria-hidden="true">▾</span>
+              <span className={`collapsible-chevron${step1Open ? " collapsible-chevron-open" : ""}`} aria-hidden="true"><ChevronDown size={16} strokeWidth={2} className="icon" /></span>
             </button>
             <div className="collapsible-body" data-open={step1Open} inert={step1Open ? undefined : ""}>
               <div className="collapsible-body-inner">
@@ -476,7 +477,7 @@ export default function UploadPage() {
                   setStep(2);
                 }}
               >
-                Continue →
+                Continue <ArrowRight size={14} strokeWidth={2} className="icon" aria-hidden="true" />
               </button>
             </div>
           </div>
@@ -489,7 +490,7 @@ export default function UploadPage() {
           <>
             <button className="collapsible-header" aria-expanded={step2Open} onClick={() => setStep2Open((o) => !o)}>
               <span>Metadata</span>
-              <span className={`collapsible-chevron${step2Open ? " collapsible-chevron-open" : ""}`} aria-hidden="true">▾</span>
+              <span className={`collapsible-chevron${step2Open ? " collapsible-chevron-open" : ""}`} aria-hidden="true"><ChevronDown size={16} strokeWidth={2} className="icon" /></span>
             </button>
             <div className="collapsible-body" data-open={step2Open} inert={step2Open ? undefined : ""}>
               <div className="collapsible-body-inner">
@@ -593,7 +594,7 @@ export default function UploadPage() {
                   setStep(1);
                 }}
               >
-                ← Back
+                <ArrowLeft size={14} strokeWidth={2} className="icon" aria-hidden="true" /> Back
               </button>
               <button
                 type="button"
@@ -604,7 +605,7 @@ export default function UploadPage() {
                   setStep(3);
                 }}
               >
-                Continue →
+                Continue <ArrowRight size={14} strokeWidth={2} className="icon" aria-hidden="true" />
               </button>
             </div>
           </div>
@@ -648,7 +649,7 @@ export default function UploadPage() {
                   setStep(2);
                 }}
               >
-                ← Back
+                <ArrowLeft size={14} strokeWidth={2} className="icon" aria-hidden="true" /> Back
               </button>
               <button type="button" className="primary-button" onClick={handleSubmit} disabled={submitting}>
                 {submitting ? "Ingesting…" : "Submit for ingestion"}
@@ -664,7 +665,7 @@ export default function UploadPage() {
 function StepTab({ n, label, active, done }) {
   return (
     <li className={`step-tab ${active ? "step-tab-active" : ""} ${done ? "step-tab-done" : ""}`}>
-      <span className="step-tab-number">{done ? "✓" : n}</span>
+      <span className="step-tab-number">{done ? <Check size={14} strokeWidth={2} className="icon" /> : n}</span>
       {label}
     </li>
   );

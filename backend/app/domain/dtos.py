@@ -247,6 +247,12 @@ class LayerOut(BaseModel):
     # project has no such match. Reading them here instead is both simpler
     # and correct everywhere.
     source: str | None = None
+    # Optional admin-set override for how this layer's name is displayed
+    # (rename-a-layer). None means "no override" - the frontend falls back
+    # to its existing type/source-based label, exactly as before this field
+    # existed. Distinct from `source`/`type`: this never replaces or aliases
+    # either, it's a purely cosmetic display label layered on top.
+    display_name: str | None = None
     accuracy_score: float | None = None
     # True for a layer visible on every project's Layers panel (Wave:
     # Reference Layer Library), not just the one it's nominally attached to -
@@ -444,6 +450,15 @@ class ClassLegendUpdateResult(BaseModel):
     # None only if the new legend is empty - the layer reports as unclassified
     # (band_stats) instead, same as a fresh upload with no legend at all.
     class_area_ha: dict[str, float] | None
+
+
+class RenameLayerRequest(BaseModel):
+    display_name: str = Field(min_length=1, max_length=256)
+
+
+class LayerRenameResult(BaseModel):
+    layer_id: UUID
+    display_name: str
 
 
 class JobOut(BaseModel):

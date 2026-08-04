@@ -27,6 +27,7 @@ from app.services.auth_service import AuthService
 from app.services.ingestion.service import IngestionService
 from app.services.ingestion.storage import Storage
 from app.services.jobs_service import JobService
+from app.services.layer_rename_service import LayerRenameService
 from app.services.legend_service import ClassLegendService
 from app.services.membership_service import MembershipService
 from app.services.project_service import ProjectService
@@ -117,6 +118,10 @@ def get_class_legend_service(
     storage: Annotated[Storage, Depends(get_storage)],
 ) -> ClassLegendService:
     return ClassLegendService(db, settings, storage)
+
+
+def get_layer_rename_service(db: Annotated[Database, Depends(get_db)]) -> LayerRenameService:
+    return LayerRenameService(db)
 
 
 def get_tile_service(

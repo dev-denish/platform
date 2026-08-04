@@ -1,3 +1,5 @@
+import { ArrowLeft, ArrowRight } from "lucide-react";
+
 export default function Pagination({ total, limit, offset, onChange }) {
   if (total <= limit) return null;
   const page = Math.floor(offset / limit) + 1;
@@ -13,7 +15,7 @@ export default function Pagination({ total, limit, offset, onChange }) {
         disabled={!canPrev}
         onClick={() => onChange(Math.max(0, offset - limit))}
       >
-        ← Previous
+        <ArrowLeft size={14} strokeWidth={2} className="icon" aria-hidden="true" /> Previous
       </button>
       <span className="pagination-status">
         Page {page} of {pageCount} · {total} total
@@ -24,7 +26,7 @@ export default function Pagination({ total, limit, offset, onChange }) {
         disabled={!canNext}
         onClick={() => onChange(offset + limit)}
       >
-        Next →
+        Next <ArrowRight size={14} strokeWidth={2} className="icon" aria-hidden="true" />
       </button>
     </div>
   );

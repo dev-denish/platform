@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { ArrowRight, ChevronDown } from "lucide-react";
 import {
   Area,
   AreaChart,
@@ -145,7 +146,7 @@ export default function DashboardPage() {
       <section className="panel">
         <button className="collapsible-header" aria-expanded={statsOpen} onClick={toggleStats}>
           <span>Portfolio snapshot</span>
-          <span className={`collapsible-chevron${statsOpen ? " collapsible-chevron-open" : ""}`} aria-hidden="true">▾</span>
+          <span className={`collapsible-chevron${statsOpen ? " collapsible-chevron-open" : ""}`} aria-hidden="true"><ChevronDown size={16} strokeWidth={2} className="icon" /></span>
         </button>
         <div className="collapsible-body" data-open={statsOpen} inert={statsOpen ? undefined : ""}>
           <div className="collapsible-body-inner">
@@ -172,7 +173,7 @@ export default function DashboardPage() {
       <section className="panel">
         <button className="collapsible-header" aria-expanded={compositionOpen} onClick={toggleComposition}>
           <span>Land cover composition</span>
-          <span className={`collapsible-chevron${compositionOpen ? " collapsible-chevron-open" : ""}`} aria-hidden="true">▾</span>
+          <span className={`collapsible-chevron${compositionOpen ? " collapsible-chevron-open" : ""}`} aria-hidden="true"><ChevronDown size={16} strokeWidth={2} className="icon" /></span>
         </button>
         <div className="collapsible-body" data-open={compositionOpen} inert={compositionOpen ? undefined : ""}>
           <div className="collapsible-body-inner">
@@ -230,7 +231,7 @@ export default function DashboardPage() {
       <section className="panel">
         <button className="collapsible-header" aria-expanded={coverageOpen} onClick={toggleCoverage}>
           <span>Project coverage</span>
-          <span className={`collapsible-chevron${coverageOpen ? " collapsible-chevron-open" : ""}`} aria-hidden="true">▾</span>
+          <span className={`collapsible-chevron${coverageOpen ? " collapsible-chevron-open" : ""}`} aria-hidden="true"><ChevronDown size={16} strokeWidth={2} className="icon" /></span>
         </button>
         <div className="collapsible-body" data-open={coverageOpen} inert={coverageOpen ? undefined : ""}>
           <div className="collapsible-body-inner">
@@ -253,7 +254,7 @@ export default function DashboardPage() {
         <section className="panel panel-sample">
           <button className="collapsible-header" aria-expanded={carbonTrendOpen} onClick={toggleCarbonTrend}>
             <span>Carbon removal trend</span>
-            <span className={`collapsible-chevron${carbonTrendOpen ? " collapsible-chevron-open" : ""}`} aria-hidden="true">▾</span>
+            <span className={`collapsible-chevron${carbonTrendOpen ? " collapsible-chevron-open" : ""}`} aria-hidden="true"><ChevronDown size={16} strokeWidth={2} className="icon" /></span>
           </button>
           <div className="collapsible-body" data-open={carbonTrendOpen} inert={carbonTrendOpen ? undefined : ""}>
             <div className="collapsible-body-inner">
@@ -266,7 +267,7 @@ export default function DashboardPage() {
         <section className="panel panel-sample">
           <button className="collapsible-header" aria-expanded={verificationOpen} onClick={toggleVerification}>
             <span>Verification status</span>
-            <span className={`collapsible-chevron${verificationOpen ? " collapsible-chevron-open" : ""}`} aria-hidden="true">▾</span>
+            <span className={`collapsible-chevron${verificationOpen ? " collapsible-chevron-open" : ""}`} aria-hidden="true"><ChevronDown size={16} strokeWidth={2} className="icon" /></span>
           </button>
           <div className="collapsible-body" data-open={verificationOpen} inert={verificationOpen ? undefined : ""}>
             <div className="collapsible-body-inner">
@@ -281,10 +282,10 @@ export default function DashboardPage() {
         <div className="panel-header">
           <button className="collapsible-header" aria-expanded={recentProjectsOpen} onClick={toggleRecentProjects}>
             <span>Recently updated projects</span>
-            <span className={`collapsible-chevron${recentProjectsOpen ? " collapsible-chevron-open" : ""}`} aria-hidden="true">▾</span>
+            <span className={`collapsible-chevron${recentProjectsOpen ? " collapsible-chevron-open" : ""}`} aria-hidden="true"><ChevronDown size={16} strokeWidth={2} className="icon" /></span>
           </button>
           <Link to="/projects" className="link-button">
-            View all →
+            View all <ArrowRight size={14} strokeWidth={2} className="icon" aria-hidden="true" />
           </Link>
         </div>
 

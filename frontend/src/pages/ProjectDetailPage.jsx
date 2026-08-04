@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
+import { ChevronDown } from "lucide-react";
 import { apiFetch } from "../config.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useCollapse } from "../lib/useCollapse.js";
@@ -44,7 +45,7 @@ function LayerMetricsSection({ layer, metrics, projectId }) {
           {layer.date_processed ? ` · ${layer.date_processed}` : ""}
         </span>
         <span className={`layer-metrics-chevron${expanded ? " layer-metrics-chevron-open" : ""}`} aria-hidden="true">
-          ▾
+          <ChevronDown size={16} strokeWidth={2} className="icon" />
         </span>
       </button>
       {expanded ? (
@@ -268,7 +269,7 @@ export default function ProjectDetailPage() {
       <section className="panel">
         <button className="collapsible-header" aria-expanded={keyMetricsOpen} onClick={toggleKeyMetrics}>
           <span>Key metrics</span>
-          <span className={`collapsible-chevron${keyMetricsOpen ? " collapsible-chevron-open" : ""}`} aria-hidden="true">▾</span>
+          <span className={`collapsible-chevron${keyMetricsOpen ? " collapsible-chevron-open" : ""}`} aria-hidden="true"><ChevronDown size={16} strokeWidth={2} className="icon" /></span>
         </button>
         <div className="collapsible-body" data-open={keyMetricsOpen} inert={keyMetricsOpen ? undefined : ""}>
           <div className="collapsible-body-inner">
@@ -348,7 +349,7 @@ export default function ProjectDetailPage() {
       <section className="panel">
         <button className="collapsible-header" aria-expanded={evolutionOpen} onClick={toggleEvolution}>
           <span>Landscape evolution</span>
-          <span className={`collapsible-chevron${evolutionOpen ? " collapsible-chevron-open" : ""}`} aria-hidden="true">▾</span>
+          <span className={`collapsible-chevron${evolutionOpen ? " collapsible-chevron-open" : ""}`} aria-hidden="true"><ChevronDown size={16} strokeWidth={2} className="icon" /></span>
         </button>
         <div className="collapsible-body" data-open={evolutionOpen} inert={evolutionOpen ? undefined : ""}>
           <div className="collapsible-body-inner">
@@ -360,7 +361,7 @@ export default function ProjectDetailPage() {
       <section className="panel">
         <button className="collapsible-header" aria-expanded={datasetsOpen} onClick={toggleDatasets}>
           <span>Datasets</span>
-          <span className={`collapsible-chevron${datasetsOpen ? " collapsible-chevron-open" : ""}`} aria-hidden="true">▾</span>
+          <span className={`collapsible-chevron${datasetsOpen ? " collapsible-chevron-open" : ""}`} aria-hidden="true"><ChevronDown size={16} strokeWidth={2} className="icon" /></span>
         </button>
         <div className="collapsible-body" data-open={datasetsOpen} inert={datasetsOpen ? undefined : ""}>
           <div className="collapsible-body-inner">

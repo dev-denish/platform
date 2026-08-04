@@ -1,4 +1,5 @@
 import { memo, useState } from "react";
+import { ChevronDown, Minus, Plus } from "lucide-react";
 import BasemapToggle from "./BasemapToggle.jsx";
 
 /**
@@ -20,7 +21,7 @@ function MeasureMenu({ mode, onSelect }) {
         className={`map-toolbar-btn map-toolbar-btn-text${active ? " map-toolbar-btn-active" : ""}`}
         onClick={() => setOpen((o) => !o)}
       >
-        Measure ▾
+        Measure <ChevronDown size={14} strokeWidth={2} className="icon" aria-hidden="true" />
       </button>
       {open ? (
         <div className="map-toolbar-menu">
@@ -48,6 +49,44 @@ function MeasureMenu({ mode, onSelect }) {
   );
 }
 
+/** Same dropdown shape as MeasureMenu - point/line/polygon draw modes, which
+ * share the map-click gesture with the measure tools and so are mutually
+ * exclusive with them (ProjectMap's selectDrawMode/selectMeasureMode). */
+function DrawMenu({ mode, onSelect }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="map-toolbar-dropdown">
+      <button
+        type="button"
+        className={`map-toolbar-btn map-toolbar-btn-text${mode !== "none" ? " map-toolbar-btn-active" : ""}`}
+        onClick={() => setOpen((o) => !o)}
+      >
+        Draw <ChevronDown size={14} strokeWidth={2} className="icon" aria-hidden="true" />
+      </button>
+      {open ? (
+        <div className="map-toolbar-menu">
+          {[
+            ["point", "Point"],
+            ["line", "Line"],
+            ["polygon", "Polygon"],
+          ].map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => {
+                onSelect(value);
+                setOpen(false);
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 /**
  * memo'd - but note this DOES still re-render on every pointer move over the
  * map, by design: lat/lon/zoom/scaleLabel are the live readout and genuinely
@@ -61,6 +100,8 @@ function MapToolbar({
   onExtent,
   measureMode,
   onSelectMeasureMode,
+  drawMode,
+  onSelectDrawMode,
   basemapMode,
   onBasemapChange,
   lat,
@@ -72,18 +113,19 @@ function MapToolbar({
     <div className="map-toolbar">
       <div className="map-toolbar-group">
         <button type="button" className="map-toolbar-btn" onClick={onZoomIn} aria-label="Zoom in" title="Zoom in">
-          +
+          <Plus size={18} strokeWidth={2} className="icon" />
         </button>
         <button type="button" className="map-toolbar-btn" onClick={onZoomOut} aria-label="Zoom out" title="Zoom out">
-          −
+          <Minus size={18} strokeWidth={2} className="icon" />
         </button>
         <button type="button" className="map-toolbar-btn map-toolbar-btn-text" onClick={onExtent}>
           Extent
         </button>
         <MeasureMenu mode={measureMode} onSelect={onSelectMeasureMode} />
+        <DrawMenu mode={drawMode} onSelect={onSelectDrawMode} />
         <button
           type="button"
-          className={`map-toolbar-btn map-toolbar-btn-text${measureMode === "inspect" ? " map-toolbar-btn-active" : ""}`}
+          className={`map-toolbar-btn map-toolbar-btn-text${measureMode === "inspect" && drawMode === "none" ? " map-toolbar-btn-active" : ""}`}
           onClick={() => onSelectMeasureMode("inspect")}
         >
           Identify

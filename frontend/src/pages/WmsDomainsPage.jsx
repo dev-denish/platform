@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ChevronDown } from "lucide-react";
 import { apiFetch } from "../config.js";
 import Spinner from "../components/Spinner.jsx";
 import ErrorBanner from "../components/ErrorBanner.jsx";
@@ -116,7 +117,7 @@ export default function WmsDomainsPage() {
       <section className="panel">
         <button className="collapsible-header" aria-expanded={createFormOpen} onClick={toggleCreateForm}>
           <span>Approve a domain</span>
-          <span className={`collapsible-chevron${createFormOpen ? " collapsible-chevron-open" : ""}`} aria-hidden="true">▾</span>
+          <span className={`collapsible-chevron${createFormOpen ? " collapsible-chevron-open" : ""}`} aria-hidden="true"><ChevronDown size={16} strokeWidth={2} className="icon" /></span>
         </button>
         <div className="collapsible-body" data-open={createFormOpen} inert={createFormOpen ? undefined : ""}>
           <div className="collapsible-body-inner">

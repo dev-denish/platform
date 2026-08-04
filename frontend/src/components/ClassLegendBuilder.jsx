@@ -8,6 +8,7 @@
  * change.
  */
 import { useState } from "react";
+import { Trash2 } from "lucide-react";
 import { apiFetch } from "../config.js";
 import { classColor } from "../lib/colors.js";
 
@@ -315,7 +316,7 @@ export default function ClassLegendBuilder({ rows, onChange, file }) {
               aria-label="Remove class"
               title="Remove class"
             >
-              🗑
+              <Trash2 size={16} strokeWidth={2} className="icon" />
             </button>
           </div>
         );
