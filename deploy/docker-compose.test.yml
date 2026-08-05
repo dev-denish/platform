@@ -90,9 +90,14 @@ services:
       DMRV_LOCAL_DATA_DIR: /var/lib/dmrv/data
       DMRV_REDIS_URL: redis://test-redis:6379/0
       DMRV_TASK_RUNNER_BACKEND: arq
-    tmpfs:
-      - /var/lib/dmrv/data
-      - /var/lib/dmrv/staging
+    volumes:
+      # Named (not per-service tmpfs) so test-worker below reads the exact
+      # same staged file test-backend just wrote - required for the ingest
+      # job to find anything at all. `down -v` (global-teardown.js) still
+      # leaves nothing behind; these just aren't backed by tmpfs like the
+      # single-container mounts elsewhere in this file.
+      - test_raster_data:/var/lib/dmrv/data
+      - test_upload_staging:/var/lib/dmrv/staging
     ports:
       # Host port intentionally different from anything deploy/docker-compose.yml
       # exposes (8080), so the two stacks can run side by side without a
@@ -108,7 +113,41 @@ services:
         condition: service_completed_successfully
     restart: "no"
 
-# No `worker` service: nothing in tests/e2e currently exercises the async
-# ingestion job path (upload flow isn't covered yet). Add one here, copying
-# deploy/docker-compose.yml's `worker` service verbatim onto this stack's
-# env vars, if/when an upload.spec.js needs it.
+  # Added for this regression pass: map/project-detail/layer-rename/draw-save
+  # coverage all need at least one real, fully-ingested project, and a project
+  # only comes into existence once run_ingest_job (app/workers/jobs.py) runs -
+  # POST /datasets/upload only enqueues it (see datasets.py's upload_dataset).
+  # Verbatim copy of deploy/docker-compose.yml's `worker` service, retargeted
+  # at this stack's own test-db/test-redis and the named volumes above.
+  test-worker:
+    build:
+      context: ../backend
+    command: ["sh", "-c", "arq app.workers.arq_worker.WorkerSettings"]
+    healthcheck:
+      disable: true
+    environment:
+      DMRV_ENVIRONMENT: test
+      DMRV_DB_HOST: test-db
+      DMRV_DB_USER: dmrv_qa
+      DMRV_DB_PASSWORD: dmrv_qa_ephemeral
+      DMRV_DB_NAME: dmrv_qa
+      DMRV_JWT_SECRET: dmrv-qa-ephemeral-secret-shared-across-workers-not-for-real-use
+      DMRV_STORAGE_BACKEND: local
+      DMRV_LOCAL_DATA_DIR: /var/lib/dmrv/data
+      DMRV_REDIS_URL: redis://test-redis:6379/0
+      DMRV_TASK_RUNNER_BACKEND: arq
+    volumes:
+      - test_raster_data:/var/lib/dmrv/data
+      - test_upload_staging:/var/lib/dmrv/staging
+    depends_on:
+      test-db:
+        condition: service_healthy
+      test-redis:
+        condition: service_healthy
+      test-migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+volumes:
+  test_raster_data:
+  test_upload_staging:

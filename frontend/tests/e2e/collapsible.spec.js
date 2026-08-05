@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { login, ADMIN } from "./helpers.js";
+import { login, ADMIN, QA_PROJECT_NAME } from "./helpers.js";
 
 /** Generic assertions for one collapsible-header button: starts expanded,
  * click collapses (aria-expanded=false), Enter/Space on focus re-expands,
@@ -31,37 +31,29 @@ async function checkCollapse(page, button) {
   await expect(button).toHaveAttribute("aria-expanded", "true");
 }
 
-test.describe("Dashboard's 6 collapsible panels", () => {
-  const PANELS = [
-    "Portfolio snapshot",
-    "Land cover composition",
-    "Project coverage",
-    "Carbon removal trend",
-    "Verification status",
-    "Recently updated projects",
-  ];
-
-  for (const label of PANELS) {
-    test(`"${label}" opens, closes, keyboard-operable, persists across reload`, async ({ page }) => {
-      await login(page, ADMIN);
-      const button = page.getByRole("button", { name: label });
-      await expect(button).toBeVisible();
-      await checkCollapse(page, button);
-    });
-  }
-});
+// The old global Dashboard (Portfolio snapshot / Land cover composition /
+// Project coverage / Carbon removal trend / Verification status / Recently
+// updated projects) was DELETED in the redesign - DashboardPage.jsx no
+// longer exists (App.jsx's index route is ProjectsPage now) and its content
+// moved into ProjectDetailPage's own Dashboard tab (see
+// "Per-project Dashboard tab" describe block below), which has its own,
+// different set of sections. There is intentionally no equivalent describe
+// block left here for the deleted page.
 
 test.describe("Project Detail page collapsible sections", () => {
-  async function gotoFirstProject(page) {
+  async function gotoQaProject(page) {
     await login(page, ADMIN);
     await page.goto("/projects");
-    await page.locator(".table-link").first().click();
+    await page.getByRole("link", { name: QA_PROJECT_NAME }).click();
     await expect(page).toHaveURL(/\/projects\/[\w-]+/);
+    // Maps is the default tab - Key metrics/Landscape evolution/Datasets only
+    // render under the Dashboard tab (ProjectDetailPage.jsx).
+    await page.getByRole("button", { name: "Dashboard" }).click();
   }
 
   for (const label of ["Members", "Key metrics", "Landscape evolution", "Datasets"]) {
     test(`"${label}" section opens, closes, keyboard-operable, persists across reload`, async ({ page }) => {
-      await gotoFirstProject(page);
+      await gotoQaProject(page);
       const button = page.getByRole("button", { name: label });
       await expect(button).toBeVisible();
       await checkCollapse(page, button);
@@ -91,8 +83,12 @@ test.describe("LayersPanel (map) collapsible groups", () => {
   test("outer Layers panel collapses and reopens", async ({ page }) => {
     await login(page, ADMIN);
     await page.goto("/projects");
-    await page.locator(".table-link").first().click();
-    const outer = page.getByRole("button", { name: "Layers" });
+    await page.getByRole("link", { name: QA_PROJECT_NAME }).click();
+    // exact: true - "Layers" alone would also match "Vector layers" (a
+    // per-kind group header) and "Hide the Layers panel" (the map's separate
+    // whole-panel-collapse button, see redesign.spec.js) under Playwright's
+    // default substring matching.
+    const outer = page.getByRole("button", { name: "Layers", exact: true });
     await expect(outer).toBeVisible();
     await expect(outer).toHaveAttribute("aria-expanded", "true");
     await outer.click();
@@ -104,7 +100,7 @@ test.describe("LayersPanel (map) collapsible groups", () => {
   test('per-kind group ("Classified imagery") collapses, keyboard-operable, persists', async ({ page }) => {
     await login(page, ADMIN);
     await page.goto("/projects");
-    await page.locator(".table-link").first().click();
+    await page.getByRole("link", { name: QA_PROJECT_NAME }).click();
     const group = page.getByRole("button", { name: /Classified imagery/i });
     await expect(group).toBeVisible();
     await checkCollapse(page, group);
@@ -115,7 +111,11 @@ test.describe("Per-layer Key Metrics section", () => {
   test("a layer's own metrics header has aria-expanded, like every other collapsible header", async ({ page }) => {
     await login(page, ADMIN);
     await page.goto("/projects");
-    await page.locator(".table-link").first().click();
+    await page.getByRole("link", { name: QA_PROJECT_NAME }).click();
+    // .layer-metrics-header only renders under the Dashboard tab's Key
+    // metrics section (ProjectDetailPage.jsx) - Maps (the default tab) has
+    // no such header.
+    await page.getByRole("button", { name: "Dashboard" }).click();
     const header = page.locator(".layer-metrics-header").first();
     await expect(header).toBeVisible();
     // Every other collapsible-header in the app sets aria-expanded (see

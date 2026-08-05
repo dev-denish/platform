@@ -1,11 +1,15 @@
 import { test, expect } from "@playwright/test";
-import { login, ADMIN, collectConsoleErrors } from "./helpers.js";
+import { login, ADMIN, QA_PROJECT_NAME, collectConsoleErrors } from "./helpers.js";
 
 // Every top-level route, lazy-loaded via React.lazy/Suspense (App.jsx) as of
 // the code-splitting perf wave. Checks: no console error, not stuck on the
 // Suspense "Loading…" fallback, a real heading renders.
+//
+// Redesign: index route ("/") is ProjectsPage now, not the deleted
+// DashboardPage - "/" and "/projects" both render the same component (see
+// App.jsx's comment on why "/projects" is kept as a working path too).
 const ROUTES = [
-  { path: "/", heading: "Dashboard" },
+  { path: "/", heading: "Projects" },
   { path: "/projects", heading: "Projects" },
   { path: "/upload", heading: "Upload dataset" },
   { path: "/users", heading: "Users" },
@@ -30,11 +34,11 @@ test.describe("Route loads (code-split)", () => {
     const errors = collectConsoleErrors(page);
     await login(page, ADMIN);
     await page.goto("/projects");
-    const firstLink = page.locator(".table-link").first();
-    await expect(firstLink).toBeVisible();
-    await firstLink.click();
+    const link = page.getByRole("link", { name: QA_PROJECT_NAME });
+    await expect(link).toBeVisible();
+    await link.click();
     await expect(page).toHaveURL(/\/projects\/[\w-]+/);
-    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: QA_PROJECT_NAME })).toBeVisible();
     expect(errors, `console errors on project detail: ${errors.join(" | ")}`).toEqual([]);
   });
 });
@@ -44,7 +48,14 @@ test.describe("Code-split chunks", () => {
     await login(page, ADMIN);
     const jsRequests = [];
     page.on("request", (req) => {
-      if (req.url().endsWith(".js")) jsRequests.push(req.url());
+      // Vite's DEV server (what webServer runs here - see playwright.config.js)
+      // serves each lazy-imported module at its real source extension
+      // (.jsx), not a bundled "assets/xyz-hash.js" chunk the way a production
+      // build would - matching only ".js" here always found zero new
+      // requests and passed for the wrong reason (no code was actually
+      // exercised). ".jsx" is what a route's own lazy-loaded page module
+      // (App.jsx's lazy(() => import(...))) actually requests in this mode.
+      if (/\.(js|jsx)(\?.*)?$/.test(req.url())) jsRequests.push(req.url());
     });
     await page.goto("/projects");
     await page.waitForLoadState("networkidle");

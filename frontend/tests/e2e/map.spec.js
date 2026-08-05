@@ -1,10 +1,10 @@
 import { test, expect } from "@playwright/test";
-import { login, ADMIN, collectConsoleErrors } from "./helpers.js";
+import { login, ADMIN, QA_PROJECT_NAME, collectConsoleErrors } from "./helpers.js";
 
 async function gotoProjectWithMap(page) {
   await login(page, ADMIN);
   await page.goto("/projects");
-  await page.locator(".table-link").first().click();
+  await page.getByRole("link", { name: QA_PROJECT_NAME }).click();
   await expect(page).toHaveURL(/\/projects\/[\w-]+/);
   const map = page.locator(".leaflet-container");
   await expect(map).toBeVisible();

@@ -666,7 +666,16 @@ export default function ProjectMap({ layers, onRefreshLayers, onLegendChanged, p
   // given (raw coordinate entry) = keep the current zoom unless it's zoomed
   // way out, where landing at z7 on a point is useless.
   const jumpTo = useCallback(
-    (lat, lon, zoom) => mapRef?.setView([lat, lon], zoom ?? Math.max(mapRef.getZoom(), 14)),
+    (lat, lon, zoom) => {
+      if (!mapRef) return;
+      // A still-open Identify/pixel-inspect popup runs its own auto-pan
+      // (Leaflet's Popup._adjustPan) to keep itself on-screen whenever the
+      // view changes - confirmed via instrumentation that this, not any app
+      // code, is what was yanking the map back toward its old position right
+      // after setView below. Closing it first removes the thing fighting us.
+      mapRef.closePopup();
+      mapRef.setView([lat, lon], zoom ?? Math.max(mapRef.getZoom(), 14));
+    },
     [mapRef]
   );
 
@@ -676,15 +685,33 @@ export default function ProjectMap({ layers, onRefreshLayers, onLegendChanged, p
   // html-to-image re-fetches each tile to inline it; every basemap this app
   // offers sends `Access-Control-Allow-Origin: *` and our own tile endpoint is
   // same-origin, so nothing taints the canvas.
+  //
+  // A classified raster layer's real coverage is normally SMALLER than the
+  // viewport (see the LULC extent rectangle any project screenshot shows) -
+  // Leaflet requests the full rectangular tile grid for the viewport anyway,
+  // and every tile outside the layer's real bounds legitimately 404s (see
+  // tiles.py's documented NotFoundError - confirmed benign, not a bug). html-
+  // to-image doesn't know that: it tries to re-fetch/embed every <img> tile
+  // in the DOM regardless, and ANY single failed one rejects the whole
+  // capture with a bare DOM error Event (not even a real Error - confirmed by
+  // temporarily logging the caught value). `filter` excludes exactly the
+  // tiles Leaflet itself never marked `leaflet-tile-loaded` (only added on a
+  // real `load` event, never on `error` - see leaflet-src.js's _tileOnLoad),
+  // so the export just omits the same blank area the user already sees.
   const exportImage = useCallback(async () => {
     if (!mapRef) return;
     try {
-      const dataUrl = await toPng(mapRef.getContainer(), { backgroundColor: "#ffffff" });
+      const dataUrl = await toPng(mapRef.getContainer(), {
+        backgroundColor: "#ffffff",
+        filter: (node) =>
+          !(node.tagName === "IMG" && node.classList?.contains("leaflet-tile") && !node.classList.contains("leaflet-tile-loaded")),
+      });
       const a = document.createElement("a");
       a.href = dataUrl;
       a.download = `map-${new Date().toISOString().slice(0, 10)}.png`;
       a.click();
-    } catch {
+    } catch (err) {
+      console.error("Map image export failed:", err);
       // A user-initiated action that silently does nothing is worse than a
       // blunt native alert - and this needs no layout of its own.
       window.alert("Could not save this view as an image. Try again once all tiles have finished loading.");
@@ -1078,6 +1105,14 @@ export default function ProjectMap({ layers, onRefreshLayers, onLegendChanged, p
                 attribution={basemap.attribution}
                 url={basemap.url}
                 maxNativeZoom={basemap.maxNativeZoom}
+                // "Save image" (exportImage) rasterizes this whole container to a
+                // canvas via html-to-image. Every basemap sends a real
+                // Access-Control-Allow-Origin header (verified directly), but the
+                // browser only honors that for canvas purposes if the <img> itself
+                // was fetched in CORS mode - without this, the canvas silently
+                // taints and toPng()'s toDataURL() throws a SecurityError the
+                // moment any cross-origin basemap tile has loaded.
+                crossOrigin="anonymous"
               />
               {/* Compare mode replaces the normal layer stack with exactly the
                * two chosen dates - anything else on top would sit over both

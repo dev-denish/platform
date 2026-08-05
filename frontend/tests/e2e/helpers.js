@@ -1,4 +1,6 @@
 import { readFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 
 // Shared helpers for the collapsible-panel-redesign regression pass.
 //
@@ -9,6 +11,15 @@ import { readFileSync } from "fs";
 // global-setup.js's hard guard refuses to run if it is.
 export const ADMIN = { username: "qa_admin", password: "QaTest12345!" };
 export const VIEWER = { username: "qa_viewer", password: "QaTest12345!" };
+export const GIS_ASSOCIATE = { username: "qa_gis", password: "QaTest12345!" };
+export const ANALYST = { username: "qa_analyst", password: "QaTest12345!" };
+export const VERIFIER = { username: "qa_verifier", password: "QaTest12345!" };
+
+// The one real project global-setup.js seeds (see seedProject there) via the
+// REAL upload API + REAL ingest worker - not a mock. Named/exported so specs
+// that need actual layer data (map, collapsible, redesign) can navigate to it
+// by name instead of assuming row order/position in the Projects table.
+export const QA_PROJECT_NAME = "QA Regression Project";
 
 // The dmrv-qa stack's backend, exposed on a host port distinct from
 // deploy/docker-compose.yml's (8080) specifically so the two can never be
@@ -22,8 +33,11 @@ export const API_BASE = `${ROOT_BASE}/api/v1`;
 // the token pairs here; every test just seeds sessionStorage from this file
 // instead of hitting the real endpoint again. Only auth.spec.js's own
 // login-flow tests use uiLogin() below, which goes through the real form.
-export const TOKEN_FILE =
-  "/tmp/claude-1000/-home-denish-dmrv-1-platform/8338ce9e-6b69-4e08-ae35-3eab3ccbc29e/scratchpad/dmrv-qa-tokens.json";
+// os.tmpdir(), not a Claude-session scratchpad path: this file is committed
+// test infra run by any dev/CI/agent session, so it must not depend on a
+// path that only exists inside one particular agent's ephemeral scratchpad
+// (a prior run hardcoded one of those here - broke the very next session).
+export const TOKEN_FILE = join(tmpdir(), "dmrv-qa-tokens.json");
 
 function readTokens(username) {
   const all = JSON.parse(readFileSync(TOKEN_FILE, "utf-8"));

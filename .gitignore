@@ -31,3 +31,4 @@ frontend/dist/
 .DS_Store
 .idea/
 .vscode/
+backups/
