@@ -73,6 +73,15 @@ MANAGE_REFERENCE_LAYERS_ROLES: frozenset[Role] = frozenset({Role.ADMINISTRATOR})
 # MANAGE_USERS_ROLES above).
 RENAME_LAYER_ROLES: frozenset[Role] = frozenset({Role.ADMINISTRATOR})
 
+# Delete-a-dataset: a formal, project-scoped upload (not a reference layer or
+# an ad-hoc quick-add - those keep their own removal paths and roles).
+# Administrator only, global gate, same reasoning as RENAME_LAYER_ROLES: this
+# permanently removes a file a project's own GIS Associate can't get back,
+# not a routine day-to-day action that needs the two-tier upload check. A
+# separate constant from RENAME_LAYER_ROLES even though identical today,
+# matching this file's one-named-capability-per-concept convention.
+DELETE_DATASET_ROLES: frozenset[Role] = frozenset({Role.ADMINISTRATOR})
+
 
 class LayerKind(StrEnum):
     RASTER = "raster"

@@ -35,6 +35,16 @@ class VectorFeatureRepository:
             ],
         )
 
+    def delete_for_layer(self, layer_id: UUID) -> None:
+        """Delete-a-dataset (Administrator-only, see DatasetDeleteService): a
+        vector layer's real data IS these rows - `spatial_layer`/`dataset`
+        only ever get soft-deleted (deleted_at), never dropped, so the
+        `ON DELETE CASCADE` on vector_feature.layer_id never fires on its
+        own. Without this, a deleted vector dataset would still carry every
+        one of its features forever - the DB-side equivalent of not
+        actually freeing a raster's file from storage."""
+        self.cur.execute("DELETE FROM vector_feature WHERE layer_id = %s", (str(layer_id),))
+
     def total_polygon_area_ha(self, layer_id: UUID) -> float:
         """Area only makes sense for polygon geometries - a point/line layer
         (e.g. CSV-as-points) correctly reports 0.0 ha here, same convention

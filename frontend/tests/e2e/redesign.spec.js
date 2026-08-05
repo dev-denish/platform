@@ -1,5 +1,12 @@
+import { readFileSync } from "fs";
+import { dirname, resolve } from "path";
+import { fileURLToPath } from "url";
 import { test, expect } from "@playwright/test";
-import { login, ADMIN, GIS_ASSOCIATE, QA_PROJECT_NAME, collectConsoleErrors } from "./helpers.js";
+import {
+  login, readTokens, ADMIN, GIS_ASSOCIATE, QA_PROJECT_NAME, API_BASE, collectConsoleErrors,
+} from "./helpers.js";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // New-in-this-redesign coverage (Phase 1: icon system, admin layer rename,
 // measure units, draw tools, popover scroll fix; Phase 2: visual redesign,
@@ -552,5 +559,91 @@ test.describe("Status display: pill/badge markup removed app-wide", () => {
     expect(style.bg).toMatch(/rgba\(0, 0, 0, 0\)|transparent/);
     expect(style.padding).toBe("0px");
     expect(style.border).toBe("none");
+  });
+});
+
+test.describe("Delete-a-dataset (Administrator-only)", () => {
+  /** Uploads ONE fresh, disposable raster into the shared QA_PROJECT_NAME
+   * project via the real upload API + real worker - not the seeded layers
+   * every other spec in this file depends on (deleting one of those would
+   * break tests that run later in the same session). Mirrors global-setup's
+   * own uploadAndWait exactly, scoped to just this describe block since
+   * nothing else needs a throwaway dataset. Returns the new layer_id. */
+  async function uploadThrowawayDataset(accessToken) {
+    const file = "qa-raw-imagery.tif";
+    const bytes = readFileSync(resolve(__dirname, "fixtures", file));
+    const form = new FormData();
+    form.set("file", new Blob([bytes]), file);
+    const fields = {
+      project_name: QA_PROJECT_NAME, region: "Karnataka",
+      dataset_type: "Satellite / Raw Imagery", source: "delete-test-throwaway",
+      classification_method: "", date_processed: "2022-01-01", pixel_size_m: "10",
+    };
+    for (const [k, v] of Object.entries(fields)) form.set(k, v);
+
+    const uploadRes = await fetch(`${API_BASE}/datasets/upload`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}` },
+      body: form,
+    });
+    if (!uploadRes.ok) throw new Error(`throwaway upload failed: ${uploadRes.status} ${await uploadRes.text()}`);
+    const { job_id } = await uploadRes.json();
+
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      const jobRes = await fetch(`${API_BASE}/jobs/${job_id}`, { headers: { Authorization: `Bearer ${accessToken}` } });
+      const job = await jobRes.json();
+      if (job.status === "succeeded") {
+        const layersRes = await fetch(`${API_BASE}/projects/${job.result.project_id}/layers`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        const layers = (await layersRes.json()).layers;
+        const layer = layers.find((l) => l.date_processed === "2022-01-01");
+        return { projectId: job.result.project_id, layerId: layer.layer_id, previewUrl: layer.preview_url };
+      }
+      if (["failed", "dead_letter"].includes(job.status)) throw new Error(`throwaway ingest failed: ${JSON.stringify(job.error)}`);
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    throw new Error("throwaway ingest did not reach a terminal status within 30s");
+  }
+
+  test("Administrator sees the delete option, confirms with the dataset's name shown, and the file is actually gone", async ({ page }) => {
+    const { access_token } = readTokens(ADMIN.username);
+    const { previewUrl } = await uploadThrowawayDataset(access_token);
+
+    // The file genuinely exists before delete - otherwise "gone after" is a
+    // tautology, not a real assertion.
+    const before = await fetch(`${API_BASE.replace("/api/v1", "")}${previewUrl}`);
+    expect(before.status).toBe(200);
+
+    await login(page, ADMIN);
+    await page.goto("/projects");
+    await page.getByRole("link", { name: QA_PROJECT_NAME }).click();
+    await expect(page).toHaveURL(/\/projects\/[\w-]+/);
+
+    const row = page.locator(".layer-row", { hasText: "2022-01-01" });
+    await expect(row).toBeVisible();
+    await row.getByRole("button", { name: "Delete this dataset" }).click();
+
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    // The dataset's name, not a raw id - the whole point of the confirmation.
+    await expect(dialog).toContainText("Satellite / Raw Imagery");
+    await expect(dialog).toContainText("2022-01-01");
+    await dialog.getByRole("button", { name: "Delete" }).click();
+
+    await expect(row).toHaveCount(0);
+
+    const after = await fetch(`${API_BASE.replace("/api/v1", "")}${previewUrl}`);
+    expect(after.status).toBe(404);
+  });
+
+  test("Non-administrator never sees the delete option on a formal dataset", async ({ page }) => {
+    await login(page, GIS_ASSOCIATE);
+    await page.goto("/projects");
+    await page.getByRole("link", { name: QA_PROJECT_NAME }).click();
+    await expect(page).toHaveURL(/\/projects\/[\w-]+/);
+    await expect(page.locator(".layer-row").first()).toBeVisible();
+    await expect(page.getByRole("button", { name: "Delete this dataset" })).toHaveCount(0);
   });
 });

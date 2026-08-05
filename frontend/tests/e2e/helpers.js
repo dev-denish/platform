@@ -39,7 +39,7 @@ export const API_BASE = `${ROOT_BASE}/api/v1`;
 // (a prior run hardcoded one of those here - broke the very next session).
 export const TOKEN_FILE = join(tmpdir(), "dmrv-qa-tokens.json");
 
-function readTokens(username) {
+export function readTokens(username) {
   const all = JSON.parse(readFileSync(TOKEN_FILE, "utf-8"));
   const tokens = all[username];
   if (!tokens) throw new Error(`no cached tokens for ${username} - did global-setup run?`);

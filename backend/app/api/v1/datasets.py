@@ -27,14 +27,17 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, Header, Request, UploadFile
 
-from app.api.deps import get_job_service, get_settings, get_task_runner, require_role
+from uuid import UUID
+
+from app.api.deps import get_dataset_delete_service, get_job_service, get_settings, get_task_runner, require_role
 from app.core.config import Settings
 from app.core.errors import DomainError, PayloadTooLargeError, UnprocessableError, ValidationError
 from app.core.logging import request_id_ctx
 from app.core.metrics import jobs_submitted_total
 from app.core.ratelimit import limiter
 from app.domain.dtos import CurrentUser, IngestMetadata, JobAccepted, ScanValuesResult
-from app.domain.enums import UPLOAD_ROLES
+from app.domain.enums import DELETE_DATASET_ROLES, UPLOAD_ROLES
+from app.services.dataset_delete_service import DatasetDeleteService
 from app.services.ingestion import raster as R
 from app.services.ingestion.vector import csv_header
 from app.services.jobs_service import JobService
@@ -239,3 +242,16 @@ async def scan_raster_values(
         with contextlib.suppress(OSError):
             os.unlink(staged)
     return ScanValuesResult(values=values)
+
+
+@router.delete("/datasets/{layer_id}", status_code=204, response_model=None)
+def delete_dataset(
+    layer_id: UUID,
+    user: Annotated[CurrentUser, Depends(require_role(*DELETE_DATASET_ROLES))],
+    svc: Annotated[DatasetDeleteService, Depends(get_dataset_delete_service)],
+) -> None:
+    """Delete-a-dataset: a formal, project-scoped upload - not a reference
+    layer (`DELETE /reference-layers/{id}`) or an ad-hoc quick-add
+    (`DELETE /adhoc-layers/{id}`), which keep their own endpoints/roles.
+    Administrator-only, global gate - see DELETE_DATASET_ROLES."""
+    svc.remove(layer_id, user)

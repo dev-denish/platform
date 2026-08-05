@@ -116,6 +116,25 @@ class DatasetRepository:
         )
         return self.cur.rowcount > 0
 
+    def soft_delete_dataset(self, dataset_id: UUID | str, deleted_by: UUID) -> bool:
+        """Delete-a-dataset (Administrator-only) - the third and last of
+        these three mutually-exclusive guards (soft_delete_reference is
+        `is_reference = true`, soft_delete_adhoc is `is_adhoc = true`): this
+        one is reachable ONLY for an ordinary, formal, project-scoped
+        dataset - reference and ad-hoc layers already have their own
+        removal paths and must never be reachable through this one instead
+        (a caller trying to use this on either gets the same 404 as an
+        already-deleted or never-existed dataset, not a 403 that would
+        confirm which kind it actually is)."""
+        self.cur.execute(
+            """
+            UPDATE dataset SET deleted_at = now(), deleted_by = %s
+            WHERE dataset_id = %s AND is_reference = false AND is_adhoc = false AND deleted_at IS NULL
+            """,
+            (str(deleted_by), str(dataset_id)),
+        )
+        return self.cur.rowcount > 0
+
     def rename(self, dataset_id: UUID | str, display_name: str) -> None:
         """Rename-a-layer (Administrator-only). `display_name` lives here on
         `dataset`, not on `spatial_layer` - see LayerRenameService, the only
@@ -221,11 +240,14 @@ class LayerRepository:
         # renames a layer already reads this same row first (to resolve
         # project_id for the audit entry) - widening it here lets those
         # callers describe WHAT they acted on in prose (see dataset_label),
-        # instead of writing the raw id into the audit trail.
+        # instead of writing the raw id into the audit trail. preview_key:
+        # delete-a-dataset (DatasetDeleteService) needs every storage key a
+        # layer might have written, not just the two get_cog_key/
+        # get_render_context care about.
         self.cur.execute(
             """
             SELECT sl.layer_id, sl.dataset_id, sl.layer_kind, sl.cog_key, sl.file_key,
-                   sl.class_legend, p.project_id,
+                   sl.preview_key, sl.class_legend, p.project_id,
                    d.type, d.date_processed, d.display_name, d.source, d.is_adhoc
             FROM spatial_layer sl
             JOIN dataset d ON d.dataset_id = sl.dataset_id

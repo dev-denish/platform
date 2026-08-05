@@ -29,6 +29,7 @@ class Storage(Protocol):
     def local_path_for_processing(self, key: str) -> str: ...
     def url_for(self, key: str) -> str: ...
     def open_stream(self, key: str) -> BinaryIO: ...
+    def delete(self, key: str) -> None: ...
 
 
 class LocalStorage:
@@ -62,6 +63,12 @@ class LocalStorage:
     def open_stream(self, key: str) -> BinaryIO:
         return open(self._abs(key), "rb")
 
+    def delete(self, key: str) -> None:
+        # missing_ok: a delete that races another delete (or a key that was
+        # never actually written - a raster with no cog_key yet) must not
+        # raise. This is a real removal, not a soft/reversible one.
+        self._abs(key).unlink(missing_ok=True)
+
 
 class S3Storage:
     """Cloud backend. Kept dependency-light: boto3 is imported lazily so dev/test
@@ -89,6 +96,11 @@ class S3Storage:
 
     def open_stream(self, key: str):
         return self._client.get_object(Bucket=self.bucket, Key=key)["Body"]
+
+    def delete(self, key: str) -> None:
+        # S3's delete_object is already a no-op (204) on a missing key -
+        # nothing extra needed to match LocalStorage's missing_ok behavior.
+        self._client.delete_object(Bucket=self.bucket, Key=key)
 
 
 def build_storage(settings: Settings) -> Storage:

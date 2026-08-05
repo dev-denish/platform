@@ -65,6 +65,17 @@ export function canRenameLayer(role) {
   return RENAME_LAYER_ROLES.has(role);
 }
 
+// Delete-a-dataset: a formal, project-scoped upload - not a reference layer
+// or an ad-hoc quick-add, which keep their own removal roles/gating
+// (canManageReferenceLayers / canUpload respectively). Administrator-only,
+// mirrors app.domain.enums.DELETE_DATASET_ROLES - separate named capability
+// from RENAME_LAYER_ROLES even though identical today, same convention.
+export const DELETE_DATASET_ROLES = new Set([ROLES.ADMINISTRATOR]);
+
+export function canDeleteDataset(role) {
+  return DELETE_DATASET_ROLES.has(role);
+}
+
 // Wave: project-level RBAC. Mirrors app.domain.enums.PROJECT_ROLES -
 // Administrator is global-only, never a valid project-membership role (an
 // Administrator already bypasses membership checks entirely).

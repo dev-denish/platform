@@ -1,13 +1,14 @@
 import { memo, useMemo, useState } from "react";
-import { AlertTriangle, ChevronDown, Info, Settings2, X } from "lucide-react";
+import { AlertTriangle, ChevronDown, Info, Settings2, Trash2, X } from "lucide-react";
 import { useCollapse } from "../lib/useCollapse.js";
 import SymbologyPanel from "./SymbologyPanel.jsx";
 import ClassLegendEditor from "./ClassLegendEditor.jsx";
 import AddAdhocLayerDialog from "./AddAdhocLayerDialog.jsx";
+import ConfirmDialog from "./ConfirmDialog.jsx";
 import { formatDate, formatNumber } from "../lib/format.js";
 import { apiFetch } from "../config.js";
 import { useAuth } from "../context/AuthContext.jsx";
-import { canManageReferenceLayers, canRenameLayer, canUpload } from "../lib/roles.js";
+import { canDeleteDataset, canManageReferenceLayers, canRenameLayer, canUpload } from "../lib/roles.js";
 
 /**
  * The GEE Code Editor's "Layers" panel, now a docked left column beside the
@@ -81,6 +82,15 @@ function byDate(a, b) {
  */
 function displayLabel(layer) {
   return layer.display_name ?? (layer.is_adhoc ? layer.source ?? "Untitled layer" : layer.type);
+}
+
+/** displayLabel, suffixed with the date if there is one (mirrors the
+ * backend's dataset_label formatting) - the row label already builds this
+ * inline; the delete confirmation needs the exact same string so two
+ * same-type datasets with different dates aren't indistinguishable right
+ * before a permanent, unrecoverable delete. */
+function displayLabelWithDate(layer) {
+  return `${displayLabel(layer)}${layer.date_processed ? ` · ${layer.date_processed}` : ""}`;
 }
 
 /**
@@ -174,6 +184,14 @@ function LayersPanel({
   const [openPopover, setOpenPopover] = useState(null); // { layerId, kind: "gear" | "info" }
   const [removingId, setRemovingId] = useState(null);
   const [addLayerOpen, setAddLayerOpen] = useState(false);
+  // Delete-a-dataset needs a real confirmation (unlike the reference/ad-hoc
+  // removals above, which delete on click) - the underlying file isn't
+  // easily recoverable once gone. Holds the whole layer object (not just an
+  // id) so the confirmation dialog can show its name without a second
+  // lookup.
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState(null);
 
   async function removeReferenceLayer(layerId) {
     setRemovingId(layerId);
@@ -192,6 +210,23 @@ function LayersPanel({
       await onRefreshLayers?.();
     } finally {
       setRemovingId(null);
+    }
+  }
+
+  async function deleteDataset() {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await apiFetch(`/datasets/${deleteTarget.layer_id}`, { method: "DELETE" });
+      await onRefreshLayers?.();
+      setDeleteTarget(null);
+    } catch (err) {
+      // Dialog stays open with the error visible - a failed delete
+      // shouldn't silently close as if it had succeeded.
+      setDeleteError(err.message ?? "Could not delete this dataset.");
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -283,10 +318,7 @@ function LayersPanel({
                                   aria-label={`Toggle ${l.type} ${l.date_processed ?? "undated"}`}
                                 />
                                 <span className="layer-row-body">
-                                  <span className="layer-row-label">
-                                    {displayLabel(l)}
-                                    {l.date_processed ? ` · ${l.date_processed}` : ""}
-                                  </span>
+                                  <span className="layer-row-label">{displayLabelWithDate(l)}</span>
                                   {featureCount != null ? (
                                     <span className="layer-row-feature-count">{formatNumber(featureCount, 0)} features</span>
                                   ) : null}
@@ -337,6 +369,19 @@ function LayersPanel({
                                     onClick={() => removeAdhocLayer(l.layer_id)}
                                   >
                                     <X size={16} strokeWidth={2} className="icon" />
+                                  </button>
+                                ) : null}
+                                {!l.is_reference && !l.is_adhoc && user && canDeleteDataset(user.role) ? (
+                                  <button
+                                    type="button"
+                                    className="layer-row-remove"
+                                    aria-label="Delete this dataset"
+                                    onClick={() => {
+                                      setDeleteError(null);
+                                      setDeleteTarget(l);
+                                    }}
+                                  >
+                                    <Trash2 size={16} strokeWidth={2} className="icon" />
                                   </button>
                                 ) : null}
                               </li>
@@ -450,6 +495,22 @@ function LayersPanel({
           </div>
         </div>
       ) : null}
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        title="Delete this dataset?"
+        detail={
+          deleteTarget
+            ? `"${displayLabelWithDate(deleteTarget)}" and its underlying file will be permanently removed. This cannot be undone.`
+            : ""
+        }
+        confirmLabel={deleting ? "Deleting…" : "Delete"}
+        danger
+        onConfirm={deleteDataset}
+        onCancel={() => setDeleteTarget(null)}
+      >
+        {deleteError ? <p className="field-hint field-hint-error">{deleteError}</p> : null}
+      </ConfirmDialog>
     </div>
   );
 }

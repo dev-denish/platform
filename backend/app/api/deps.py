@@ -24,6 +24,7 @@ from app.domain.dtos import CurrentUser
 from app.domain.enums import Role
 from app.services.adhoc_layer_service import AdhocLayerService
 from app.services.auth_service import AuthService
+from app.services.dataset_delete_service import DatasetDeleteService
 from app.services.ingestion.service import IngestionService
 from app.services.ingestion.storage import Storage
 from app.services.jobs_service import JobService
@@ -122,6 +123,13 @@ def get_class_legend_service(
 
 def get_layer_rename_service(db: Annotated[Database, Depends(get_db)]) -> LayerRenameService:
     return LayerRenameService(db)
+
+
+def get_dataset_delete_service(
+    db: Annotated[Database, Depends(get_db)],
+    storage: Annotated[Storage, Depends(get_storage)],
+) -> DatasetDeleteService:
+    return DatasetDeleteService(db, storage)
 
 
 def get_tile_service(
