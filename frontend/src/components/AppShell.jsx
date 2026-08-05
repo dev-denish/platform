@@ -6,6 +6,7 @@ import { useCollapse } from "../lib/useCollapse.js";
 import { RoleBadge } from "./StatusBadge.jsx";
 import ChangePasswordButton from "./ChangePasswordButton.jsx";
 import Spinner from "./Spinner.jsx";
+import vnvLogoFullLockup from "../assets/vnv-logo-full-lockup.png";
 import vnvMarkOnly from "../assets/vnv-mark-only.png";
 
 export default function AppShell() {
@@ -21,12 +22,11 @@ export default function AppShell() {
   return (
     <div className="shell">
       <header className="shell-header">
-        {/* Mark only, not the full lockup: the lockup's wordmark has fixed
-            colors baked into the raster (correct on the login screen's
-            light background, but its non-accent text reads illegibly
-            against this header's dark chrome - a raster can't flip color
-            by CSS the way the old inline SVG could). */}
-        <img src={vnvMarkOnly} alt="VNV — Value Network Ventures" className="shell-header-logo" />
+        {/* Full lockup, not mark-only: the header is now a light background
+            (see .shell-header), the same context the lockup's raster colors
+            were authored for - no legibility problem here, unlike the
+            earlier dark-header version. */}
+        <img src={vnvLogoFullLockup} alt="VNV — Value Network Ventures" className="shell-header-logo" />
         <div className="shell-header-user">
           <div className="shell-header-user-id">
             <div className="shell-user-name">{user?.username}</div>

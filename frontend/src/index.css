@@ -142,11 +142,11 @@ a {
   outline-offset: 2px;
 }
 
-/* the default focus ring is the same green as the sidebar's active-link
-   background, so it's invisible for keyboard users tabbing through the
-   dark sidebar — override to a light color there only. */
-.shell-sidebar :focus-visible,
-.shell-header :focus-visible {
+/* the default accent-colored focus ring is invisible against the sidebar's
+   own dark active-link background - override to a light color there only.
+   The header is a light surface now (see .shell-header) and needs no such
+   override; the default ring already reads fine on it. */
+.shell-sidebar :focus-visible {
   outline: 2px solid var(--sidebar-text-active);
   outline-offset: 2px;
 }
@@ -188,14 +188,17 @@ a {
   min-height: 100vh;
 }
 
-/* full-width structural chrome above sidebar+main, same dark graphite
-   family as the sidebar (not --surface) — it's part of the app's fixed
-   frame, not page content, so it stays visually welded to the sidebar. */
+/* full-width structural chrome above sidebar+main - a light surface (the
+   sidebar stays the dark graphite one, this is the one part of the fixed
+   frame that isn't), so the authentic VNV lockup (navy + orange, authored
+   for a light background) can be used here unmodified. The border-bottom
+   is what keeps this reading as a distinct strip rather than blending into
+   the equally-light page content below it. */
 .shell-header {
   flex: none;
   height: var(--header-height);
-  background: linear-gradient(160deg, var(--sidebar-bg) 0%, var(--sidebar-bg-elevated) 100%);
-  border-bottom: 1px solid var(--sidebar-border);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -298,7 +301,10 @@ a {
 }
 
 .shell-header-logo {
-  height: 28px;
+  /* Taller than the old mark-only version (28px) - this is the full
+     lockup (mark + wordmark, ~2.44:1), and the wordmark needs real height
+     to stay legible rather than just filling the same square footprint. */
+  height: 36px;
   width: auto;
   object-fit: contain;
 }
@@ -382,7 +388,8 @@ a {
 .shell-user-name {
   font-size: 13px;
   font-weight: 500;
-  color: var(--sidebar-text-active);
+  /* Header is a light surface now - this only ever renders there. */
+  color: var(--text);
 }
 
 /* Wave: password reset - "Change password" sits next to "Sign out" in the
@@ -391,27 +398,6 @@ a {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-/* sidebar/header sit on a dark surface while the rest of the app is light —
-   the shared controls that live inside them (sign-out, role pill)
-   need their contrast flipped locally rather than forking a new class. */
-.shell-sidebar .ghost-button,
-.shell-header .ghost-button {
-  color: var(--sidebar-text);
-  border-color: rgba(255, 255, 255, 0.25);
-}
-
-.shell-sidebar .ghost-button:hover:not(:disabled),
-.shell-header .ghost-button:hover:not(:disabled) {
-  color: var(--sidebar-text-active);
-  border-color: var(--sidebar-text-active);
-}
-
-.shell-sidebar .role-badge,
-.shell-header .role-badge {
-  color: var(--sidebar-text);
-  border-color: rgba(255, 255, 255, 0.25);
 }
 
 .shell-main {
