@@ -6,7 +6,7 @@ import { useCollapse } from "../lib/useCollapse.js";
 import { RoleBadge } from "./StatusBadge.jsx";
 import ChangePasswordButton from "./ChangePasswordButton.jsx";
 import Spinner from "./Spinner.jsx";
-import VnvLogo from "./VnvMark.jsx";
+import vnvMarkOnly from "../assets/vnv-mark-only.png";
 
 export default function AppShell() {
   const { user, logout } = useAuth();
@@ -21,7 +21,12 @@ export default function AppShell() {
   return (
     <div className="shell">
       <header className="shell-header">
-        <VnvLogo size={26} />
+        {/* Mark only, not the full lockup: the lockup's wordmark has fixed
+            colors baked into the raster (correct on the login screen's
+            light background, but its non-accent text reads illegibly
+            against this header's dark chrome - a raster can't flip color
+            by CSS the way the old inline SVG could). */}
+        <img src={vnvMarkOnly} alt="VNV — Value Network Ventures" className="shell-header-logo" />
         <div className="shell-header-user">
           <div className="shell-header-user-id">
             <div className="shell-user-name">{user?.username}</div>
@@ -39,7 +44,7 @@ export default function AppShell() {
       <div className="shell-body">
         <aside className={`shell-sidebar${expanded ? "" : " shell-sidebar-collapsed"}`}>
           <div className="shell-brand">
-            <span className="shell-brand-mark" aria-hidden="true" />
+            <img src={vnvMarkOnly} alt="" aria-hidden="true" className="shell-brand-mark" />
             <div className="shell-brand-text">
               <div className="shell-brand-name">dMRV</div>
               <div className="shell-brand-sub">Analytical Platform</div>

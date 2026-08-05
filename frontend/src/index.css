@@ -279,21 +279,14 @@ a {
 .shell-brand-mark {
   width: 22px;
   height: 22px;
-  border-radius: 5px;
-  background: var(--accent);
-  position: relative;
+  object-fit: contain;
   flex: none;
 }
 
-.shell-brand-mark::after {
-  content: "";
-  position: absolute;
-  left: 5px;
-  top: 5px;
-  right: 9px;
-  bottom: 9px;
-  border-left: 1.5px solid var(--sidebar-bg);
-  border-top: 1.5px solid var(--sidebar-bg);
+.shell-header-logo {
+  height: 28px;
+  width: auto;
+  object-fit: contain;
 }
 
 .shell-brand-name {
@@ -1178,38 +1171,6 @@ button:not(:disabled):active,
 
 /* ---------------------------------------------------------- vnv logo */
 
-/* VNV company mark (radial petal burst + vertical wordmark) — distinct
-   from the dMRV product brand above. Wordmark defaults to a light-surface
-   color; the header sits on dark chrome so it flips there. */
-.vnv-logo {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.vnv-mark-petal {
-  fill: var(--accent);
-}
-
-.vnv-wordmark {
-  display: flex;
-  flex-direction: column;
-  font-family: var(--font-display);
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1.25;
-  letter-spacing: 0.01em;
-  color: var(--text-muted);
-}
-
-.shell-header .vnv-wordmark {
-  color: var(--sidebar-text);
-}
-
-.vnv-word-lead {
-  font-weight: 700;
-}
-
 /* ---------------------------------------------------------- login */
 
 .login-screen {
@@ -1238,6 +1199,12 @@ button:not(:disabled):active,
   height: 100%;
   color: var(--border-strong);
   opacity: 0.7;
+}
+
+.login-vnv-logo {
+  height: 48px;
+  width: auto;
+  object-fit: contain;
 }
 
 .login-card {

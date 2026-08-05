@@ -2,7 +2,8 @@ import { useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext.jsx";
 import ErrorBanner from "../components/ErrorBanner.jsx";
-import VnvLogo from "../components/VnvMark.jsx";
+import vnvLogoFullLockup from "../assets/vnv-logo-full-lockup.png";
+import vnvMarkOnly from "../assets/vnv-mark-only.png";
 
 export default function LoginPage() {
   const { login } = useAuth();
@@ -31,10 +32,10 @@ export default function LoginPage() {
     <div className="login-screen">
       <ContourField />
       <div className="login-content">
-        <VnvLogo size={40} className="login-vnv-logo" />
+        <img src={vnvLogoFullLockup} alt="VNV — Value Network Ventures" className="login-vnv-logo" />
         <div className="login-card">
           <div className="login-brand">
-            <span className="shell-brand-mark" aria-hidden="true" />
+            <img src={vnvMarkOnly} alt="" aria-hidden="true" className="shell-brand-mark" />
             <div>
               <div className="shell-brand-name">dMRV</div>
               <div className="shell-brand-sub">Analytical Platform</div>
