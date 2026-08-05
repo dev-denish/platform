@@ -160,6 +160,51 @@ test.describe("Symbology popover scroll (9-class LULC)", () => {
     expect(headerBoxAfter).toEqual(headerBoxBefore);
     expect(footerBoxAfter).toEqual(footerBoxBefore);
   });
+
+  test("popover paints above the map's panel-collapse toggle, expanded or after a collapse/re-expand cycle", async ({ page }) => {
+    await gotoQaProject(page);
+    const panelToggle = page.getByRole("button", { name: "Hide the Layers panel" });
+
+    async function openPopoverAndAssertOnTop() {
+      const row = page.locator(".layer-row", { hasText: "LULC · 2024-06-01" }).first();
+      await row.getByRole("button", { name: "Visualization parameters" }).click();
+      const popover = page.locator(".symbology-popover", { hasText: "visualization parameters" });
+      await expect(popover).toBeVisible();
+      // Their bounding boxes overlapping is EXPECTED and fine (the popover
+      // opens right where .map-overlay-topleft sits) - a plain bounding-box
+      // check would flag that as "overlap" even with paint order already
+      // correct. What actually broke before the fix was the toggle button
+      // painting on top and clipping the popover's own title text; the
+      // real regression check is which element the browser hit-tests at
+      // the overlap point, not whether the boxes touch.
+      const title = popover.locator(".symbology-popover-header");
+      await expect(title).toContainText("LULC");
+      const titleBox = await title.boundingBox();
+      const toggleBox = await panelToggle.boundingBox();
+      const overlapX = Math.max(titleBox.x, toggleBox.x) + Math.min(titleBox.x + titleBox.width, toggleBox.x + toggleBox.width);
+      const overlapY = Math.max(titleBox.y, toggleBox.y) + Math.min(titleBox.y + titleBox.height, toggleBox.y + toggleBox.height);
+      const topElementIsPopover = await page.evaluate(
+        ([x, y]) => {
+          const el = document.elementFromPoint(x / 2, y / 2);
+          return !!el?.closest(".symbology-popover");
+        },
+        [overlapX, overlapY]
+      );
+      expect(topElementIsPopover).toBe(true);
+      await popover.getByRole("button", { name: "Close" }).click();
+    }
+
+    // Panel expanded (the reported case).
+    await openPopoverAndAssertOnTop();
+
+    // Collapse, then re-expand - the toggle button's own screen position
+    // shifts (it's anchored to the map canvas, which widens/narrows as the
+    // docked Layers column disappears/reappears), so this isn't redundant
+    // with the check above.
+    await panelToggle.click();
+    await page.getByRole("button", { name: "Show the Layers panel" }).click();
+    await openPopoverAndAssertOnTop();
+  });
 });
 
 test.describe("Map toolbar: new capabilities", () => {

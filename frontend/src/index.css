@@ -61,6 +61,20 @@
   --sidebar-width: 240px;
   --sidebar-width-collapsed: 60px;
 
+  /* Shared z-index scale for everything that floats over the map, so a new
+     control doesn't quietly tie an existing one and let DOM order decide
+     the winner by accident (that exact bug hit the toolbar dropdowns vs.
+     the panel-collapse button, then separately the symbology popover vs.
+     that same button - two "one-off" fixes for the same root cause before
+     this existed). --z-map-chrome: persistent, always-visible map controls
+     (overlay buttons, the scroll-zoom hint). --z-map-overlay: transient
+     floating UI that must always win over the chrome underneath it while
+     open (popovers, dropdown menus) - strictly higher, not just "another
+     1000-ish number." Add anything new to whichever tier it actually
+     belongs to, don't invent a third number next to these. */
+  --z-map-chrome: 1000;
+  --z-map-overlay: 1100;
+
   --font-display: "IBM Plex Sans", "Segoe UI", Roboto, -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif;
   --font-body: "IBM Plex Sans", "Segoe UI", Roboto, -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, monospace;
@@ -1548,12 +1562,14 @@ button:not(:disabled):active,
   position: absolute;
   top: calc(100% + 4px);
   left: 0;
-  /* Higher than .map-overlay-topleft/-topright's 1000: an open dropdown
-     (Measure/Draw/Compare/Views) can extend down far enough to overlap the
-     map's own top-left/top-right overlay buttons (e.g. the Layers panel
-     collapse toggle) - tied z-indices left DOM paint order to decide the
-     winner, which silently ate clicks on the dropdown's own items. */
-  z-index: 1100;
+  /* --z-map-overlay (see :root): an open dropdown (Measure/Draw/Compare/
+     Views) can extend down far enough to overlap the map's own top-left/
+     top-right overlay buttons (e.g. the Layers panel collapse toggle) -
+     tied z-indices there left DOM paint order decide the winner, which
+     silently ate clicks on the dropdown's own items. The symbology
+     popover needed the same fix for a different colliding pair - both now
+     share this one tier instead of two separately-chosen 1100s. */
+  z-index: var(--z-map-overlay);
   display: flex;
   flex-direction: column;
   min-width: 120px;
@@ -1725,7 +1741,7 @@ button:not(:disabled):active,
 .map-overlay-topright {
   position: absolute;
   top: 10px;
-  z-index: 1000;
+  z-index: var(--z-map-chrome);
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1998,10 +2014,16 @@ button:not(:disabled):active,
   position: absolute;
   top: 0;
   left: calc(100% + 10px);
-  /* Above Leaflet's own panes (z-index up to ~700) - without this the popover
-   * sits behind the map canvas now that .layers-panel is a normal docked
-   * sibling instead of a z-index:1000 floating overlay. */
-  z-index: 1000;
+  /* Must be ABOVE .map-overlay-topleft's --z-map-chrome (1000), not just
+   * above Leaflet's own panes (~700): this popover's left edge lands
+   * exactly where .map-canvas-wrap begins, the same spot the panel-collapse
+   * toggle button sits at (top:10px; left:10px inside that wrapper) - tied
+   * z-indices there let DOM order (the toggle button's container is later)
+   * pick it as the winner, clipping the popover's own header text behind
+   * it. --z-map-overlay is the shared "always wins over map chrome" tier -
+   * see :root and the toolbar dropdown menu, which needed the exact same
+   * fix for a different pair of colliding elements. */
+  z-index: var(--z-map-overlay);
   /* Wave: editable class legend widened this from 260px - a legend row
    * (pixel value + class dropdown + color swatch + remove button) needs
    * more room than the plain band/color controls this popover started
@@ -2161,7 +2183,10 @@ button:not(:disabled):active,
   left: 50%;
   bottom: 10px;
   transform: translateX(-50%);
-  z-index: 1000;
+  /* Bottom-center + pointer-events:none below, so it can't actually collide
+     with anything - kept on the shared --z-map-chrome tier anyway (see
+     :root) for consistency, not because a collision was ever observed. */
+  z-index: var(--z-map-chrome);
   background: rgba(20, 20, 20, 0.72);
   color: #fff;
   font-size: 11.5px;
