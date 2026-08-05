@@ -234,17 +234,72 @@ class ProjectService:
         ]
         return compute_evolution(project_id, own_layer_rows, kpi_rows)
 
+    # Which repository (if any) can turn this action's `target` into prose,
+    # and which id space `target` is actually in for that action - RENAME_LAYER/
+    # UPDATE_CLASS_LEGEND/CREATE_EXTERNAL_LAYER record a spatial_layer.layer_id;
+    # INGEST_DATASET/DELETE_DATASET record a dataset.dataset_id instead (see
+    # each service's own AuditRepository.record call). Membership actions
+    # (ADD/REMOVE_PROJECT_MEMBER, UPDATE_PROJECT_MEMBER_ROLE) and every
+    # genuinely-global action are deliberately absent - their `detail` is
+    # already plain English (a username, never a raw id), nothing to resolve.
+    _LAYER_TARGET_ACTIONS = frozenset(
+        {AuditAction.RENAME_LAYER, AuditAction.UPDATE_CLASS_LEGEND, AuditAction.CREATE_EXTERNAL_LAYER}
+    )
+    _DATASET_TARGET_ACTIONS = frozenset({AuditAction.INGEST_DATASET, AuditAction.DELETE_DATASET})
+
     def get_activity(self, project_id: UUID, limit: int, user: CurrentUser) -> ActivityFeed:
         """Recent-activity feed for this project's dashboard: audit_log rows
         already tagged with THIS project_id at write time (migration 0014) -
         see AuditRepository.list_for_project's own docstring for why that's
         read-time-join-free and for which actions never carry one (WMS
         domain allow-list, user management, login - genuinely global, not
-        "this project's" activity)."""
+        "this project's" activity).
+
+        `target_label` is resolved HERE, at read time, rather than snapshotted
+        at write time - a rename's own audit entry should keep reflecting
+        whatever the layer is called NOW (if it's renamed again later), same
+        as this feed already does for every other "what is this called"
+        question in the app. A row this can't resolve (unknown action, or the
+        referenced row is genuinely gone) just gets target_label=None - the
+        frontend already falls back to `detail` alone in that case."""
         with self.db.connection() as conn, conn.cursor() as cur:
             require_project_view(cur, project_id, user)
             rows = AuditRepository(cur).list_for_project(project_id, limit)
-        return ActivityFeed(items=[ActivityItem(**r) for r in rows])
+            layer_repo, dataset_repo = LayerRepository(cur), DatasetRepository(cur)
+            # DELETE_PROJECT's target IS this project - one lookup covers
+            # every such row in the page, not one per row.
+            project_name: str | None = None
+            project_name_looked_up = False
+            items = []
+            for r in rows:
+                action, target = r["action"], r["target"]
+                label = None
+                # `target`'s shape is convention, not a schema - membership
+                # actions record a "project_id:user_id" composite, and
+                # nothing stops a future action from writing something else
+                # non-UUID for a type in these two sets. A malformed value
+                # hitting spatial_layer/dataset's UUID columns would raise
+                # at the DB rather than just "not found" - validate first so
+                # one odd row degrades to target_label=None, not a 500 for
+                # every row after it.
+                if target and (action in self._LAYER_TARGET_ACTIONS or action in self._DATASET_TARGET_ACTIONS):
+                    try:
+                        UUID(target)
+                    except ValueError:
+                        target = None
+                if target:
+                    if action in self._LAYER_TARGET_ACTIONS:
+                        label = layer_repo.get_label(target)
+                    elif action in self._DATASET_TARGET_ACTIONS:
+                        label = dataset_repo.get_label(target)
+                    elif action == AuditAction.DELETE_PROJECT:
+                        if not project_name_looked_up:
+                            proj = ProjectRepository(cur).get(project_id)
+                            project_name = proj["name"] if proj else None
+                            project_name_looked_up = True
+                        label = project_name
+                items.append(ActivityItem(**r, target_label=label))
+        return ActivityFeed(items=items)
 
     def _needs_reingestion(self, layer_kind: str, cog_key: str | None) -> bool:
         """True when this raster layer's stored COG predates the geometric
@@ -333,6 +388,10 @@ class ProjectService:
         UPDATE, and write the audit entry only if it actually took effect."""
         with self.db.transaction() as cur:
             repo = ProjectRepository(cur)
+            # Read before the version check purely for its `name` - a 404 on
+            # a project that never existed skips this and the audit write
+            # below entirely, so there's no cost paid on the failure path.
+            proj = repo.get(project_id)
             version = repo.get_version(project_id)
             if version is None:
                 raise NotFoundError("Project not found.")
@@ -347,7 +406,7 @@ class ProjectService:
             AuditRepository(cur).record(
                 actor_id=actor.user_id, actor_name=actor.username,
                 action=AuditAction.DELETE_PROJECT, target=str(project_id),
-                detail=f"Soft-deleted project {project_id}.",
+                detail=f"Soft-deleted project '{proj['name'] if proj else project_id}'.",
                 project_id=project_id,
             )
 
@@ -391,7 +450,7 @@ class ProjectService:
                 audit.record(
                     actor_id=actor.user_id, actor_name=actor.username,
                     action=AuditAction.DELETE_PROJECT, target=str(project_id),
-                    detail=f"Soft-deleted project {project_id} (bulk delete).",
+                    detail=f"Soft-deleted project '{name}' (bulk delete).",
                     project_id=project_id,
                 )
                 results.append(BulkDeleteItemResult(id=project_id, name=name, success=True))

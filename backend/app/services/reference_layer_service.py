@@ -18,7 +18,7 @@ from app.core.errors import NotFoundError
 from app.domain.dtos import CurrentUser
 from app.domain.enums import AuditAction
 from app.repositories.audit import AuditRepository
-from app.repositories.datasets import DatasetRepository, LayerRepository
+from app.repositories.datasets import DatasetRepository, LayerRepository, dataset_label
 
 
 class ReferenceLayerService:
@@ -42,6 +42,6 @@ class ReferenceLayerService:
             AuditRepository(cur).record(
                 actor_id=actor.user_id, actor_name=actor.username,
                 action=AuditAction.DELETE_DATASET, target=str(dataset_id),
-                detail=f"Removed reference layer {layer_id} (dataset {dataset_id}).",
+                detail=f"Removed reference layer '{dataset_label(layer)}'.",
                 project_id=layer["project_id"],
             )

@@ -16,9 +16,16 @@ function humanizeAction(action) {
 
 /**
  * GET /projects/{id}/activity?limit=20 -> { items: [{actor_name, action,
- * detail, target, created_at}] }, reverse-chronological. Own fetch (not fed
- * by ProjectDetailPage's load()) since it's a Dashboard-tab-only card, same
- * "reload just this section" spirit as ProjectMembers.
+ * detail, target, target_label, created_at}] }, reverse-chronological. Own
+ * fetch (not fed by ProjectDetailPage's load()) since it's a Dashboard-tab-
+ * only card, same "reload just this section" spirit as ProjectMembers.
+ *
+ * `target_label` (backend-resolved: ProjectService.get_activity) is a
+ * human-readable stand-in for `target` wherever the action names a layer/
+ * dataset/project - e.g. "LULC · 2020-09-04" instead of a raw layer_id.
+ * It's None for actions where `target` isn't one of those (a membership
+ * change, say) - `detail` already reads in plain English for those, so
+ * there's nothing to show in the quoted part at all.
  */
 export default function ActivityFeed({ projectId }) {
   const [items, setItems] = useState(null);
@@ -56,7 +63,7 @@ export default function ActivityFeed({ projectId }) {
         <li className="activity-item" key={i}>
           <span className="activity-text">
             <strong>{item.actor_name}</strong> {humanizeAction(item.action)}
-            {item.target ? ` "${item.target}"` : ""}
+            {item.target_label ? ` "${item.target_label}"` : ""}
             {item.detail ? ` — ${item.detail}` : ""}
           </span>
           <span className="activity-time mono-cell">{formatDate(item.created_at)}</span>

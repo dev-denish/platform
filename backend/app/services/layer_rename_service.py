@@ -14,7 +14,7 @@ from app.core.errors import NotFoundError
 from app.domain.dtos import CurrentUser, LayerRenameResult
 from app.domain.enums import AuditAction
 from app.repositories.audit import AuditRepository
-from app.repositories.datasets import DatasetRepository, LayerRepository
+from app.repositories.datasets import DatasetRepository, LayerRepository, dataset_label
 
 
 class LayerRenameService:
@@ -28,11 +28,17 @@ class LayerRenameService:
             layer = LayerRepository(cur).get(layer_id)
             if layer is None:
                 raise NotFoundError("No such layer.")
+            # Captured BEFORE the rename below - the activity feed's own
+            # target_label resolves the CURRENT name (post-rename, since it
+            # reads at request time, not write time - see
+            # ProjectService.get_activity), so this is the one place that
+            # still needs the "what was it called before" half of the story.
+            old_label = dataset_label(layer)
             DatasetRepository(cur).rename(layer["dataset_id"], display_name)
             AuditRepository(cur).record(
                 actor_id=actor.user_id, actor_name=actor.username,
                 action=AuditAction.RENAME_LAYER, target=str(layer_id),
-                detail=f"Renamed layer {layer_id} to '{display_name}'.",
+                detail=f"Renamed '{old_label}' to '{display_name}'.",
                 project_id=layer["project_id"],
             )
         return LayerRenameResult(layer_id=layer_id, display_name=display_name)

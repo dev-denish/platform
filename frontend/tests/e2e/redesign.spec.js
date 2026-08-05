@@ -267,6 +267,53 @@ test.describe("Map toolbar: new capabilities", () => {
     await expect(page.getByText("No saved views yet")).toBeVisible();
   });
 
+  test("only one toolbar dropdown is open at a time, each anchored under its own button", async ({ page }) => {
+    await gotoQaProject(page);
+    const menus = page.locator(".map-toolbar-menu");
+
+    // Every open menu must sit directly under ITS OWN trigger button. The CSS
+    // does this on its own (.map-toolbar-menu is absolute inside the button's
+    // own position:relative .map-toolbar-dropdown wrapper), including after the
+    // toolbar flex-wraps on a narrow window - this asserts it stays true rather
+    // than assuming it.
+    async function expectOnlyMenuUnder(buttonName) {
+      await expect(menus).toHaveCount(1);
+      const trigger = page.getByRole("button", { name: buttonName, exact: true });
+      const btn = await trigger.boundingBox();
+      const menu = await menus.first().boundingBox();
+      expect(Math.abs(menu.x - btn.x)).toBeLessThan(2); // left-aligned with its trigger
+      expect(menu.y).toBeGreaterThanOrEqual(btn.y + btn.height); // below it, not over it
+      const viewport = page.viewportSize();
+      expect(menu.x + menu.width).toBeLessThanOrEqual(viewport.width); // not clipped off-screen
+    }
+
+    // The reported bug: open Measure, pick nothing, then open Draw - both used
+    // to stay open (four independent local useState flags), overlapping each
+    // other and the floating measure/draw instruction banner underneath.
+    await page.getByRole("button", { name: "Measure" }).click();
+    await expectOnlyMenuUnder("Measure");
+    await expect(page.getByRole("button", { name: "Distance" })).toBeVisible();
+
+    await page.getByRole("button", { name: "Draw" }).click();
+    await expectOnlyMenuUnder("Draw");
+    await expect(page.getByRole("button", { name: "Distance" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Polygon" })).toBeVisible();
+
+    await page.getByRole("button", { name: "Views" }).click();
+    await expectOnlyMenuUnder("Views");
+    await expect(page.getByRole("button", { name: "Polygon" })).toHaveCount(0);
+
+    // The basemap picker is a native <select>, not a custom positioned menu, so
+    // it can't overlap anything - but it must not leave a stale toolbar menu
+    // behind it either.
+    await page.getByLabel("Basemap").selectOption({ index: 1 });
+    await expect(menus).toHaveCount(1); // Views still open; nothing new stacked on it
+
+    // Clicking the open menu's own button closes it - back to zero menus.
+    await page.getByRole("button", { name: "Views" }).click();
+    await expect(menus).toHaveCount(0);
+  });
+
   test("whole-panel collapse hides and reshows the docked Layers column", async ({ page }) => {
     await gotoQaProject(page);
     const toggle = page.getByRole("button", { name: /Hide the Layers panel|Show the Layers panel/ });

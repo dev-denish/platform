@@ -16,26 +16,35 @@ import { parseLatLon } from "../lib/measure.js";
  * jump-to-coordinates, click-to-copy on that readout, and per-project view
  * bookmarks - all following the same MeasureMenu/DrawMenu dropdown shape and
  * map-toolbar-btn classes as everything already here.
+ *
+ * Every dropdown here (Measure/Draw/Compare/Views) is a controlled component:
+ * which one is open is ONE piece of state owned by MapToolbar (`openMenu`), not
+ * four independent local useState flags. With local flags a user could open
+ * Measure, not pick anything, then open Draw - nothing ever told Measure to
+ * close, so two menus rendered at once a few buttons apart and visually
+ * collided (with each other and with the map's floating measure/draw
+ * instruction banner underneath). Opening any one now closes the others by
+ * construction. Basemap stays out of this: it's a native <select>, so the
+ * browser already closes it for us.
  */
-function MeasureMenu({ mode, onSelect }) {
-  const [open, setOpen] = useState(false);
+function MeasureMenu({ mode, onSelect, isOpen, onOpenChange }) {
   const active = mode === "distance" || mode === "area";
   return (
     <div className="map-toolbar-dropdown">
       <button
         type="button"
         className={`map-toolbar-btn map-toolbar-btn-text${active ? " map-toolbar-btn-active" : ""}`}
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => onOpenChange(!isOpen)}
       >
         Measure <ChevronDown size={14} strokeWidth={2} className="icon" aria-hidden="true" />
       </button>
-      {open ? (
+      {isOpen ? (
         <div className="map-toolbar-menu">
           <button
             type="button"
             onClick={() => {
               onSelect("distance");
-              setOpen(false);
+              onOpenChange(false);
             }}
           >
             Distance
@@ -44,7 +53,7 @@ function MeasureMenu({ mode, onSelect }) {
             type="button"
             onClick={() => {
               onSelect("area");
-              setOpen(false);
+              onOpenChange(false);
             }}
           >
             Area
@@ -58,18 +67,17 @@ function MeasureMenu({ mode, onSelect }) {
 /** Same dropdown shape as MeasureMenu - point/line/polygon draw modes, which
  * share the map-click gesture with the measure tools and so are mutually
  * exclusive with them (ProjectMap's selectDrawMode/selectMeasureMode). */
-function DrawMenu({ mode, onSelect }) {
-  const [open, setOpen] = useState(false);
+function DrawMenu({ mode, onSelect, isOpen, onOpenChange }) {
   return (
     <div className="map-toolbar-dropdown">
       <button
         type="button"
         className={`map-toolbar-btn map-toolbar-btn-text${mode !== "none" ? " map-toolbar-btn-active" : ""}`}
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => onOpenChange(!isOpen)}
       >
         Draw <ChevronDown size={14} strokeWidth={2} className="icon" aria-hidden="true" />
       </button>
-      {open ? (
+      {isOpen ? (
         <div className="map-toolbar-menu">
           {[
             ["point", "Point"],
@@ -81,7 +89,7 @@ function DrawMenu({ mode, onSelect }) {
               type="button"
               onClick={() => {
                 onSelect(value);
-                setOpen(false);
+                onOpenChange(false);
               }}
             >
               {label}
@@ -101,18 +109,17 @@ function DrawMenu({ mode, onSelect }) {
  * two dated layers to compare - `options` is already sorted oldest-first by
  * ProjectMap.
  */
-function CompareMenu({ options, compare, onChange }) {
-  const [open, setOpen] = useState(false);
+function CompareMenu({ options, compare, onChange, isOpen, onOpenChange }) {
   if (options.length < 2) return null;
 
   function toggle() {
     if (compare) {
       onChange(null);
-      setOpen(false);
+      onOpenChange(false);
       return;
     }
     onChange({ before: options[0].layer_id, after: options[options.length - 1].layer_id });
-    setOpen(true);
+    onOpenChange(true);
   }
 
   return (
@@ -125,7 +132,7 @@ function CompareMenu({ options, compare, onChange }) {
       >
         <Columns2 size={14} strokeWidth={2} className="icon" aria-hidden="true" /> Compare
       </button>
-      {open && compare ? (
+      {isOpen && compare ? (
         <div className="map-toolbar-menu map-toolbar-menu-wide">
           {[
             ["before", "Before"],
@@ -146,7 +153,7 @@ function CompareMenu({ options, compare, onChange }) {
               </select>
             </label>
           ))}
-          <button type="button" onClick={() => setOpen(false)}>
+          <button type="button" onClick={() => onOpenChange(false)}>
             Done
           </button>
         </div>
@@ -174,8 +181,8 @@ function readBookmarks(projectId) {
  * projectId so one project's bookmarks never show up on another's map.
  * `center`/`zoom` come from the same live map state the readout uses.
  */
-function BookmarksMenu({ projectId, center, zoom, onJump }) {
-  const [open, setOpen] = useState(false);
+function BookmarksMenu({ projectId, center, zoom, onJump, isOpen, onOpenChange }) {
+  // Only open/closed is lifted; the saved list itself is this menu's own data.
   const [items, setItems] = useState(() => (projectId ? readBookmarks(projectId) : []));
 
   // Switching projects without unmounting the toolbar must not carry the
@@ -203,13 +210,13 @@ function BookmarksMenu({ projectId, center, zoom, onJump }) {
       <button
         type="button"
         className="map-toolbar-btn map-toolbar-btn-text"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => onOpenChange(!isOpen)}
         title="Saved views"
       >
         <Bookmark size={14} strokeWidth={2} className="icon" aria-hidden="true" /> Views
         <ChevronDown size={14} strokeWidth={2} className="icon" aria-hidden="true" />
       </button>
-      {open ? (
+      {isOpen ? (
         <div className="map-toolbar-menu map-toolbar-menu-wide">
           <button type="button" onClick={save}>
             + Save current view
@@ -223,7 +230,7 @@ function BookmarksMenu({ projectId, center, zoom, onJump }) {
                   type="button"
                   onClick={() => {
                     onJump(b.lat, b.lon, b.zoom);
-                    setOpen(false);
+                    onOpenChange(false);
                   }}
                 >
                   {b.name}
@@ -317,6 +324,15 @@ function MapToolbar({
   const [exporting, setExporting] = useState(false);
   const copyTimerRef = useRef(null);
 
+  // The single source of truth for which dropdown is open: "measure" | "draw" |
+  // "compare" | "views" | null. Setting one necessarily unsets the others, so
+  // two menus can never be on screen at the same time.
+  const [openMenu, setOpenMenu] = useState(null);
+  const menuProps = (id) => ({
+    isOpen: openMenu === id,
+    onOpenChange: (next) => setOpenMenu(next ? id : null),
+  });
+
   useEffect(() => () => clearTimeout(copyTimerRef.current), []);
 
   async function copyCoords() {
@@ -355,8 +371,8 @@ function MapToolbar({
         <button type="button" className="map-toolbar-btn map-toolbar-btn-text" onClick={onExtent}>
           Extent
         </button>
-        <MeasureMenu mode={measureMode} onSelect={onSelectMeasureMode} />
-        <DrawMenu mode={drawMode} onSelect={onSelectDrawMode} />
+        <MeasureMenu mode={measureMode} onSelect={onSelectMeasureMode} {...menuProps("measure")} />
+        <DrawMenu mode={drawMode} onSelect={onSelectDrawMode} {...menuProps("draw")} />
         <button
           type="button"
           className={`map-toolbar-btn map-toolbar-btn-text${measureMode === "inspect" && drawMode === "none" ? " map-toolbar-btn-active" : ""}`}
@@ -364,8 +380,19 @@ function MapToolbar({
         >
           Identify
         </button>
-        <CompareMenu options={compareOptions} compare={compare} onChange={onCompareChange} />
-        <BookmarksMenu projectId={projectId} center={center} zoom={zoom} onJump={onJump} />
+        <CompareMenu
+          options={compareOptions}
+          compare={compare}
+          onChange={onCompareChange}
+          {...menuProps("compare")}
+        />
+        <BookmarksMenu
+          projectId={projectId}
+          center={center}
+          zoom={zoom}
+          onJump={onJump}
+          {...menuProps("views")}
+        />
         <button
           type="button"
           className="map-toolbar-btn map-toolbar-btn-text"

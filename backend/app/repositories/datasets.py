@@ -12,6 +12,22 @@ import psycopg
 from psycopg.types.json import Jsonb
 
 
+def dataset_label(row: dict[str, Any]) -> str:
+    """Human-readable reference for a dataset/layer row - an admin-set
+    display_name override if one's been set, else whatever the frontend's
+    LayersPanel row label would show (an ad-hoc layer's own `source`, or the
+    dataset `type` for anything else), suffixed with its date if it has one.
+    Shared by everything that needs to describe a layer in prose instead of
+    a raw id - the activity feed's read-time resolution and any audit
+    detail string written at the moment a layer is acted on."""
+    display_name = row.get("display_name")
+    if display_name:
+        return display_name
+    base = (row.get("source") or "Untitled layer") if row.get("is_adhoc") else row["type"]
+    date_processed = row.get("date_processed")
+    return f"{base} · {date_processed}" if date_processed else base
+
+
 class DatasetRepository:
     def __init__(self, cur: psycopg.Cursor) -> None:
         self.cur = cur
@@ -44,6 +60,20 @@ class DatasetRepository:
             ),
         )
         return self.cur.fetchone()["dataset_id"]  # type: ignore[index]
+
+    def get_label(self, dataset_id: UUID | str) -> str | None:
+        """Human-readable reference for a dataset (activity feed) - see
+        LayerRepository.get_label's twin, resolved by dataset_id instead of
+        layer_id (INGEST_DATASET/DELETE_DATASET record the dataset_id, not
+        the spatial_layer row, as their target). Deliberately no deleted_at
+        guard, same reasoning as that method."""
+        self.cur.execute(
+            "SELECT type, date_processed, display_name, source, is_adhoc "
+            "FROM dataset WHERE dataset_id = %s",
+            (str(dataset_id),),
+        )
+        row = self.cur.fetchone()
+        return dataset_label(row) if row else None
 
     def mark_failed_promotion(self, dataset_id: UUID | str) -> None:
         """Compensating action for IngestionService.ingest: the row's own
@@ -185,10 +215,18 @@ class LayerRepository:
         # everywhere else. Both callers of this method (get_cog_key,
         # get_render_context) go through this one query, so this single fix
         # closes the gap for both.
+        #
+        # type/date_processed/display_name/source/is_adhoc: not needed by
+        # get_cog_key/get_render_context, but every caller that removes or
+        # renames a layer already reads this same row first (to resolve
+        # project_id for the audit entry) - widening it here lets those
+        # callers describe WHAT they acted on in prose (see dataset_label),
+        # instead of writing the raw id into the audit trail.
         self.cur.execute(
             """
             SELECT sl.layer_id, sl.dataset_id, sl.layer_kind, sl.cog_key, sl.file_key,
-                   sl.class_legend, p.project_id
+                   sl.class_legend, p.project_id,
+                   d.type, d.date_processed, d.display_name, d.source, d.is_adhoc
             FROM spatial_layer sl
             JOIN dataset d ON d.dataset_id = sl.dataset_id
             JOIN project p ON p.project_id = d.project_id
@@ -197,6 +235,24 @@ class LayerRepository:
             (str(layer_id),),
         )
         return self.cur.fetchone()
+
+    def get_label(self, layer_id: UUID | str) -> str | None:
+        """Human-readable reference for a layer (activity feed) - resolved
+        by layer_id, deliberately WITHOUT `get()`'s deleted_at guard: a
+        since-removed layer's name is still the correct thing to show for a
+        past action that referenced it, same reasoning as audit_log itself
+        never being pruned. None only if the layer_id never existed at
+        all (already-invalid data, not a normal case)."""
+        self.cur.execute(
+            """
+            SELECT d.type, d.date_processed, d.display_name, d.source, d.is_adhoc
+            FROM spatial_layer sl JOIN dataset d ON d.dataset_id = sl.dataset_id
+            WHERE sl.layer_id = %s
+            """,
+            (str(layer_id),),
+        )
+        row = self.cur.fetchone()
+        return dataset_label(row) if row else None
 
     def set_cog_key(self, layer_id: UUID | str, cog_key: str) -> None:
         self.cur.execute(

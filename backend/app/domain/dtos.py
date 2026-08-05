@@ -280,14 +280,20 @@ class ProjectLayers(BaseModel):
 
 class ActivityItem(BaseModel):
     """One `audit_log` row already scoped to a single project - see
-    AuditRepository.list_for_project. `target`/`detail` are free-form
+    AuditRepository.list_for_project. `target`/`detail` stay free-form
     (their shape depends on `action`, same as everywhere else audit_log is
-    read), never re-interpreted here."""
+    read) - `target_label` is the one addition: a human-readable resolution
+    of `target` for the action types where it names a layer/dataset/project
+    (see ProjectService.get_activity), so the frontend never has to render
+    a raw id. None whenever `target` isn't one of those types (e.g. a
+    membership action, whose `detail` already reads in plain English), or
+    the referenced row genuinely can't be resolved."""
 
     actor_name: str
     action: str
     detail: str | None
     target: str | None
+    target_label: str | None = None
     created_at: datetime
 
 

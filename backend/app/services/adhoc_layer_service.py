@@ -17,7 +17,7 @@ from app.domain.authz import require_project_upload
 from app.domain.dtos import CurrentUser
 from app.domain.enums import AuditAction
 from app.repositories.audit import AuditRepository
-from app.repositories.datasets import DatasetRepository, LayerRepository
+from app.repositories.datasets import DatasetRepository, LayerRepository, dataset_label
 
 
 class AdhocLayerService:
@@ -45,6 +45,6 @@ class AdhocLayerService:
             AuditRepository(cur).record(
                 actor_id=actor.user_id, actor_name=actor.username,
                 action=AuditAction.DELETE_DATASET, target=str(layer["dataset_id"]),
-                detail=f"Removed ad-hoc layer {layer_id} (dataset {layer['dataset_id']}).",
+                detail=f"Removed ad-hoc layer '{dataset_label(layer)}'.",
                 project_id=layer["project_id"],
             )
