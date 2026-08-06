@@ -73,6 +73,15 @@ export default function AppShell() {
                   <span className="shell-nav-label">Upload dataset</span>
                 </NavLink>
               ) : null}
+              {/* Wave: permission grants. Visible to every authenticated
+                  role - the value itself is readable by everyone (see
+                  ForestDefinitionPage); only the edit form is gated. */}
+              {user ? (
+                <NavLink to="/forest-definition" className={navLinkClass} title="Forest definition">
+                  <NavIcon d="M12 3 L19 15 H5 Z M12 3 V21 M8 21 H16" />
+                  <span className="shell-nav-label">Forest definition</span>
+                </NavLink>
+              ) : null}
             </div>
 
             {user && (canManageUsers(user.role) || canManageWmsSources(user.role)) ? (

@@ -15,6 +15,7 @@ const ProjectDetailPage = lazy(() => import("./pages/ProjectDetailPage.jsx"));
 const UploadPage = lazy(() => import("./pages/UploadPage.jsx"));
 const UsersPage = lazy(() => import("./pages/UsersPage.jsx"));
 const WmsDomainsPage = lazy(() => import("./pages/WmsDomainsPage.jsx"));
+const ForestDefinitionPage = lazy(() => import("./pages/ForestDefinitionPage.jsx"));
 
 export default function App() {
   return (
@@ -30,6 +31,11 @@ export default function App() {
             <Route index element={<ProjectsPage />} />
             <Route path="projects" element={<ProjectsPage />} />
             <Route path="projects/:projectId" element={<ProjectDetailPage />} />
+            {/* Wave: permission grants. No RoleRoute - every authenticated
+                role can read this value (it feeds reports everyone sees);
+                the edit form itself is gated server-side by can_edit
+                (has_permission), not by route access. */}
+            <Route path="forest-definition" element={<ForestDefinitionPage />} />
             <Route element={<RoleRoute allow={UPLOAD_ROLES} />}>
               <Route path="upload" element={<UploadPage />} />
             </Route>
