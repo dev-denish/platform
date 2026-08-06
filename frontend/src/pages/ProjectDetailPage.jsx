@@ -13,6 +13,7 @@ import ProjectMap from "../components/ProjectMap.jsx";
 import ProjectMembers from "../components/ProjectMembers.jsx";
 import LandscapeEvolutionTable from "../components/LandscapeEvolutionTable.jsx";
 import AddExternalLayerDialog from "../components/AddExternalLayerDialog.jsx";
+import AnalysisPanel from "../components/AnalysisPanel.jsx";
 import ProjectDashboard from "../components/dashboard/ProjectDashboard.jsx";
 import { canDeleteProject, canUpload } from "../lib/roles.js";
 import { formatDate, formatNumber, humanizeMetricName } from "../lib/format.js";
@@ -107,6 +108,11 @@ export default function ProjectDetailPage() {
   // user's first view of a project doesn't change. Persisted per-project via
   // sessionStorage like every other collapse toggle on this page.
   const [showDashboard, toggleTab] = useCollapse(`collapse:project:${projectId}:tab`, false);
+
+  // Wave: GEE analysis registry. Layers/Analysis switch WITHIN the Maps tab -
+  // false (Layers) keeps this tab exactly as it was. Same segmented control
+  // and same sessionStorage-backed toggle as the Maps/Dashboard one above.
+  const [analysisView, toggleAnalysisView] = useCollapse(`collapse:project:${projectId}:maps-view`, false);
 
   const [keyMetricsOpen, toggleKeyMetrics] = useCollapse(`collapse:project:${projectId}:key-metrics`, true);
   const [evolutionOpen, toggleEvolution] = useCollapse(`collapse:project:${projectId}:evolution`, true);
@@ -294,11 +300,29 @@ export default function ProjectDetailPage() {
         <section className="panel">
           <div className="panel-header">
             <h2 className="panel-title">Spatial layers</h2>
-            {user && canUpload(user.role) ? (
-              <button type="button" className="ghost-button" onClick={() => setAddLayerOpen(true)}>
-                + Add WMS/WFS layer
-              </button>
-            ) : null}
+            <div className="panel-header-tools">
+              <div className="symbology-toggle" role="group" aria-label="Maps view">
+                <button
+                  type="button"
+                  className={`symbology-toggle-btn${!analysisView ? " symbology-toggle-btn-active" : ""}`}
+                  onClick={() => analysisView && toggleAnalysisView()}
+                >
+                  Layers
+                </button>
+                <button
+                  type="button"
+                  className={`symbology-toggle-btn${analysisView ? " symbology-toggle-btn-active" : ""}`}
+                  onClick={() => !analysisView && toggleAnalysisView()}
+                >
+                  Analysis
+                </button>
+              </div>
+              {user && canUpload(user.role) && !analysisView ? (
+                <button type="button" className="ghost-button" onClick={() => setAddLayerOpen(true)}>
+                  + Add WMS/WFS layer
+                </button>
+              ) : null}
+            </div>
           </div>
 
           <AddExternalLayerDialog
@@ -315,6 +339,13 @@ export default function ProjectDetailPage() {
 
           {!layers || layers.layers.length === 0 ? (
             <EmptyState title="No layers yet" detail="Ingested rasters will appear here with their extent and preview." />
+          ) : analysisView ? (
+            <AnalysisPanel
+              projectId={projectId}
+              layers={layers.layers}
+              onRefreshLayers={reloadLayers}
+              onLegendChanged={reloadLayersAndMetrics}
+            />
           ) : (
             <>
               <ProjectMap

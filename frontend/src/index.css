@@ -2623,3 +2623,195 @@ button:not(:disabled):active,
   flex: none;
   color: var(--text-faint);
 }
+
+/* ---------------------------------------------------------- analysis view (Wave: GEE analysis registry) */
+
+/* Registry list | map | results, all capped at the same height as .map-frame
+ * (460px) so the three read as one row. Stacks into one column below 1440px
+ * viewport width: the app shell's own sidebar (240px) plus the page padding
+ * already eat into this, so at anything narrower the middle column stops
+ * leaving the map a usable width (checked in a real browser at 1280 - the map
+ * came out ~320px wide, which is not a map).*/
+.analysis-layout {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr) 280px;
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 1440px) {
+  .analysis-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.analysis-column {
+  display: flex;
+  flex-direction: column;
+  max-height: 460px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  overflow: hidden;
+  font-size: 12.5px;
+}
+
+/* Same accent bar as .layers-panel-header, but a plain label - this column
+ * has nothing to collapse into. */
+.analysis-column-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  flex: none;
+  padding: 8px 12px;
+  background: var(--accent);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.analysis-column-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  opacity: 0.85;
+}
+
+.analysis-column-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.analysis-results-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+}
+
+.analysis-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 7px 12px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  cursor: pointer;
+}
+
+.analysis-row:hover {
+  background: var(--surface-hover);
+}
+
+.analysis-row-active {
+  background: var(--accent-wash);
+}
+
+/* De-emphasized, never hidden: an in-development analysis is listed on
+ * purpose (see app/domain/analysis_catalog.py's status convention). */
+.analysis-row-muted {
+  opacity: 0.55;
+}
+
+.analysis-row-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.analysis-row-name {
+  font-weight: 500;
+}
+
+.analysis-row-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.analysis-description {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+/* Dataset caveats (stats.note) - always visible, small, never a tooltip. */
+.analysis-note {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
+.analysis-callout {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  background: var(--accent-wash);
+  border-radius: var(--radius-sm);
+}
+
+/* .stat-label capitalizes every word (its usual input is a humanized metric
+ * key like "class_area_forest") - these labels are real sentences with units
+ * and parentheses in them, which that mangles ("At ≥15% Canopy Cover"). */
+.analysis-results-body .stat-label {
+  text-transform: none;
+}
+
+.analysis-callout-value {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.analysis-year-select {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.analysis-bars {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.analysis-bar-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 3px 8px;
+}
+
+.analysis-bar-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+}
+
+.analysis-bar-track {
+  grid-column: 1 / -1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-elevated);
+  overflow: hidden;
+}
+
+.analysis-bar-fill {
+  display: block;
+  height: 100%;
+}
+
+/* The Maps tab's panel header now carries two controls (the Layers/Analysis
+ * switch + Add WMS/WFS layer), not one. */
+.panel-header-tools {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}

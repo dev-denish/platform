@@ -384,7 +384,12 @@ function initLayerState(layers) {
 // the scheduled tick.
 const PROACTIVE_REFRESH_INTERVAL_MS = 45 * 60 * 1000;
 
-export default function ProjectMap({ layers, onRefreshLayers, onLegendChanged, projectId }) {
+// Wave: GEE analysis registry. `overlayTileUrl` (optional) is one extra XYZ
+// tile layer drawn on top of everything else - the selected analysis's GEE
+// tiles (see AnalysisPanel.jsx). Deliberately a prop on THIS map rather than a
+// second independent MapContainer, so an analysis result is seen over the
+// project's own layers, with the same toolbar/measure/basemap chrome.
+export default function ProjectMap({ layers, onRefreshLayers, onLegendChanged, projectId, overlayTileUrl }) {
   const [layerState, setLayerState] = useState(() => initLayerState(layers));
   // Wave: map UI redesign. The Leaflet map instance (once mounted) and its
   // live zoom/center/hovered-position, both consumed by the toolbar above -
@@ -1141,6 +1146,17 @@ export default function ProjectMap({ layers, onRefreshLayers, onLegendChanged, p
                   </Tooltip>
                 </Rectangle>
               ))}
+              {/* Last child + explicit zIndex so it draws over the project's
+                * own tiles rather than depending on add order alone. No
+                * tile-error handlers: a GEE tile outside the analysed
+                * boundary legitimately comes back empty and must not trip the
+                * tile-expiry retry/banner above, which is about OUR signed
+                * tile tokens only. `key` forces a real remount when the
+                * selected analysis changes - a GEE tile URL carries its own
+                * map id, so the whole grid has to be re-requested. */}
+              {overlayTileUrl ? (
+                <TileLayer key={overlayTileUrl} url={overlayTileUrl} opacity={0.8} zIndex={400} maxZoom={22} />
+              ) : null}
             </MapContainer>
           </div>
         </div>
