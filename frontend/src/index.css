@@ -1493,11 +1493,12 @@ button:not(:disabled):active,
  * left, a live Lat/Lon/Zoom/Scale readout on the right. Replaces the old
  * floating GEE-style controls; every control inside is the same tool as
  * before, just relocated here (see MapToolbar.jsx). */
+/* Wave: toolbar overflow. A column of fixed rows, not one wide row - see
+ * .map-toolbar-row below for why. */
 .map-toolbar {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  flex-direction: column;
+  gap: 6px;
   flex: none;
   padding: 6px 10px;
   background: var(--surface);
@@ -1505,14 +1506,18 @@ button:not(:disabled):active,
   font-size: 12.5px;
 }
 
-.map-toolbar-group {
+/* Deliberately flex-wrap: NOWRAP - each row's own control set is sized to
+ * always fit even the narrowest real toolbar width (measured ~525px at the
+ * Analysis panel's 3-column breakpoint), so it never needs to wrap itself.
+ * Two of these (nav/inspect controls, then settings/extras) instead of one
+ * auto-wrapping row is what makes the split controlled and identical at
+ * every width, rather than flex-wrap picking a different, ragged break
+ * point depending on exactly how much room happens to be left over. */
+.map-toolbar-row {
   display: flex;
   align-items: center;
   gap: 6px;
-  /* Wave: map toolbar capabilities added five more controls here - wrap rather
-   * than overflow off the frame on a narrow window. */
-  flex-wrap: wrap;
-  row-gap: 6px;
+  flex-wrap: nowrap;
 }
 
 .map-toolbar-btn {
@@ -1590,7 +1595,10 @@ button:not(:disabled):active,
   gap: 2px;
 }
 
-.map-toolbar-menu button {
+/* :not(.map-toolbar-btn) - the More menu (Wave: toolbar overflow) nests the
+ * real Compare/Views pill buttons inside a plain-list .map-toolbar-menu; this
+ * generic reset must not clobber their own already-complete pill styling. */
+.map-toolbar-menu button:not(.map-toolbar-btn) {
   border: none;
   background: none;
   text-align: left;
@@ -1601,8 +1609,28 @@ button:not(:disabled):active,
   font-size: 12.5px;
 }
 
-.map-toolbar-menu button:hover {
+.map-toolbar-menu button:not(.map-toolbar-btn):hover {
   background: var(--surface-hover);
+}
+
+/* More's own dropdown: Compare/Views/Save image stacked as full-width rows
+ * (each already pill-styled - see the :not() above) rather than the plain
+ * short-verb list Measure/Draw use. */
+.map-toolbar-menu-more {
+  min-width: 160px;
+}
+
+.map-toolbar-menu-more > .map-toolbar-dropdown > .map-toolbar-btn,
+.map-toolbar-menu-more > .map-toolbar-btn {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+/* Its own row (Wave: toolbar overflow) - right-aligned, matching where it
+ * used to sit at the far end of the single wide row. */
+.map-toolbar-readout-row {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .map-toolbar-readout {
@@ -2668,12 +2696,18 @@ button:not(:disabled):active,
  * .analysis-column-title headers start right at the top of the row while
  * Layers' header (below the toolbar) starts lower, a staircase instead of
  * one straight line. This is a blank placeholder row of the exact same
- * height as .map-toolbar (28px button + 6px top/bottom padding + 1px
- * border-bottom = 41px), not a second real toolbar - it exists purely so
- * both titles start at Layers' Y position instead of above it. */
+ * height as .map-toolbar, not a second real toolbar - it exists purely so
+ * both titles start at Layers' Y position instead of above it.
+ *
+ * Height is measured, not computed from the box model: Wave: toolbar
+ * overflow changed .map-toolbar from one row to a 3-row column (two fixed
+ * nowrap control rows + the coordinate readout's own row), so this must
+ * track whatever .map-toolbar actually renders at (100px as of that
+ * change) - if the toolbar's row count/padding changes again, remeasure
+ * this rather than guess. */
 .analysis-column-toolbar-spacer {
   flex: none;
-  height: 41px;
+  height: 100px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
 }

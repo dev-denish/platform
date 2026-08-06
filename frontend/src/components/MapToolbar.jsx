@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState } from "react";
-import { Bookmark, Camera, ChevronDown, Columns2, Minus, Plus, X } from "lucide-react";
+import { Bookmark, Camera, ChevronDown, Columns2, MapPin, Minus, Plus, X } from "lucide-react";
 import BasemapToggle from "./BasemapToggle.jsx";
 import { parseLatLon } from "../lib/measure.js";
 
@@ -253,25 +253,118 @@ function BookmarksMenu({ projectId, center, zoom, onJump, isOpen, onOpenChange }
 }
 
 /**
+ * Wave: toolbar overflow (fixes the ragged multi-row wrap the Analysis
+ * panel's side columns caused - they permanently eat width the toolbar used
+ * to have to itself). Compare, Views, and Save image are all occasional
+ * actions, not always-needed like zoom/Extent/Measure/Draw/Identify/basemap,
+ * so they move into one "More" dropdown instead of competing for main-row
+ * space. Compare/Views each keep their own picker - `subOpen` is a SECOND,
+ * independent single-open-at-a-time state local to this menu (which of
+ * Compare's before/after picker or Views' saved list is expanded), separate
+ * from the parent's openMenu (which only tracks whether More itself is
+ * open) - the same "one piece of state, not two flags" reasoning as
+ * openMenu itself, just one level deeper.
+ */
+function MoreMenu({ compareProps, bookmarksProps, onExportImage, isOpen, onOpenChange }) {
+  const [subOpen, setSubOpen] = useState(null); // "compare" | "views" | null
+  const [exporting, setExporting] = useState(false);
+  const subMenuProps = (id) => ({
+    isOpen: subOpen === id,
+    onOpenChange: (next) => setSubOpen(next ? id : null),
+  });
+
+  // Reopening More should never resurface whichever sub-picker was left open
+  // last time - start collapsed.
+  useEffect(() => {
+    if (!isOpen) setSubOpen(null);
+  }, [isOpen]);
+
+  async function exportImage() {
+    setExporting(true);
+    try {
+      await onExportImage();
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  return (
+    <div className="map-toolbar-dropdown">
+      <button
+        type="button"
+        className="map-toolbar-btn map-toolbar-btn-text"
+        onClick={() => onOpenChange(!isOpen)}
+      >
+        More <ChevronDown size={14} strokeWidth={2} className="icon" aria-hidden="true" />
+      </button>
+      {isOpen ? (
+        <div className="map-toolbar-menu map-toolbar-menu-more">
+          <CompareMenu {...compareProps} {...subMenuProps("compare")} />
+          <BookmarksMenu {...bookmarksProps} {...subMenuProps("views")} />
+          <button
+            type="button"
+            className="map-toolbar-btn map-toolbar-btn-text"
+            onClick={exportImage}
+            disabled={exporting}
+            title="Download the current map view as a PNG image"
+          >
+            <Camera size={14} strokeWidth={2} className="icon" aria-hidden="true" />
+            {exporting ? "Saving…" : "Save image"}
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
  * Raw "lat, lon" entry - deliberately NOT geocoding (that needs an external
  * keyed service this app has no dependency on). Anything unparseable or out of
  * range just marks the field invalid instead of moving the map somewhere
  * meaningless.
+ *
+ * Collapsed behind a pin icon until clicked (Wave: toolbar overflow) - an
+ * always-visible input+button was the single widest thing on the row; open
+ * state is local and closes itself again on a successful jump, same as any
+ * other one-shot toolbar action.
  */
 function JumpToCoords({ onJump }) {
+  const [open, setOpen] = useState(false);
   const [value, setValue] = useState("");
   const [invalid, setInvalid] = useState(false);
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    if (open) inputRef.current?.focus();
+  }, [open]);
 
   function submit(e) {
     e.preventDefault();
     const parsed = parseLatLon(value);
     setInvalid(!parsed);
+    // Deliberately does NOT close the form on success - jumping more than
+    // once shouldn't mean re-clicking the pin icon every time.
     if (parsed) onJump(parsed.lat, parsed.lon);
+  }
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        className="map-toolbar-btn"
+        onClick={() => setOpen(true)}
+        aria-label="Go to coordinates"
+        title="Go to coordinates"
+      >
+        <MapPin size={16} strokeWidth={2} className="icon" />
+      </button>
+    );
   }
 
   return (
     <form className="map-toolbar-jump" onSubmit={submit}>
       <input
+        ref={inputRef}
         type="text"
         className={`map-toolbar-input${invalid ? " map-toolbar-input-invalid" : ""}`}
         placeholder="lat, lon"
@@ -282,6 +375,9 @@ function JumpToCoords({ onJump }) {
         onChange={(e) => {
           setValue(e.target.value);
           setInvalid(false);
+        }}
+        onBlur={() => {
+          if (!value) setOpen(false);
         }}
       />
       <button type="submit" className="map-toolbar-btn map-toolbar-btn-text">
@@ -321,12 +417,13 @@ function MapToolbar({
   scaleLabel,
 }) {
   const [copied, setCopied] = useState(false);
-  const [exporting, setExporting] = useState(false);
   const copyTimerRef = useRef(null);
 
   // The single source of truth for which dropdown is open: "measure" | "draw" |
-  // "compare" | "views" | null. Setting one necessarily unsets the others, so
-  // two menus can never be on screen at the same time.
+  // "more" | null. Setting one necessarily unsets the others, so two menus
+  // can never be on screen at the same time. Compare/Views used to be
+  // top-level ids here too, but now live inside "more" - see MoreMenu's own
+  // `subOpen`, one level deeper for the same reason.
   const [openMenu, setOpenMenu] = useState(null);
   const menuProps = (id) => ({
     isOpen: openMenu === id,
@@ -350,18 +447,20 @@ function MapToolbar({
     }
   }
 
-  async function exportImage() {
-    setExporting(true);
-    try {
-      await onExportImage();
-    } finally {
-      setExporting(false);
-    }
-  }
-
   return (
     <div className="map-toolbar">
-      <div className="map-toolbar-group">
+      {/* Wave: toolbar overflow. Two FIXED rows (flex-wrap: nowrap on each),
+       * not one auto-wrapping row - the Analysis panel's side columns
+       * permanently narrow this toolbar below what even the reduced,
+       * post-More-menu control set needs for one row (measured: as little as
+       * ~525px available at the narrowest real layout, vs ~650px needed for
+       * every control on one line). Letting flex-wrap decide per-button
+       * produces a different, unpredictable ragged split at every width -
+       * this is the "controlled two-row layout" instead: the SAME two
+       * groupings always, at every width, never reshuffled. The readout gets
+       * its own row for the same reason (it alone needs ~480px, unshrinkable
+       * since it's nowrap text) rather than competing with either row. */}
+      <div className="map-toolbar-row">
         <button type="button" className="map-toolbar-btn" onClick={onZoomIn} aria-label="Zoom in" title="Zoom in">
           <Plus size={18} strokeWidth={2} className="icon" />
         </button>
@@ -380,51 +479,38 @@ function MapToolbar({
         >
           Identify
         </button>
-        <CompareMenu
-          options={compareOptions}
-          compare={compare}
-          onChange={onCompareChange}
-          {...menuProps("compare")}
-        />
-        <BookmarksMenu
-          projectId={projectId}
-          center={center}
-          zoom={zoom}
-          onJump={onJump}
-          {...menuProps("views")}
-        />
-        <button
-          type="button"
-          className="map-toolbar-btn map-toolbar-btn-text"
-          onClick={exportImage}
-          disabled={exporting}
-          title="Download the current map view as a PNG image"
-        >
-          <Camera size={14} strokeWidth={2} className="icon" aria-hidden="true" />{" "}
-          {exporting ? "Saving…" : "Save image"}
-        </button>
+      </div>
+      <div className="map-toolbar-row">
         <BasemapToggle mode={basemapMode} onChange={onBasemapChange} />
+        <MoreMenu
+          compareProps={{ options: compareOptions, compare, onChange: onCompareChange }}
+          bookmarksProps={{ projectId, center, zoom, onJump }}
+          onExportImage={onExportImage}
+          {...menuProps("more")}
+        />
         <JumpToCoords onJump={onJump} />
       </div>
-      <div className="map-toolbar-readout">
-        <button
-          type="button"
-          className="map-toolbar-copy"
-          onClick={copyCoords}
-          disabled={lat == null || lon == null}
-          title="Copy these coordinates"
-        >
-          {lat != null && lon != null ? (
-            <>
-              Lat: {lat.toFixed(5)}° Lon: {lon.toFixed(5)}°
-            </>
-          ) : (
-            "Lat: — Lon: —"
-          )}
-          {copied ? <span className="map-toolbar-copied"> Copied!</span> : null}
-        </button>
-        {" | "}Zoom: {zoom ?? "—"}
-        {" | "}Scale: {scaleLabel ?? "—"}
+      <div className="map-toolbar-readout-row">
+        <div className="map-toolbar-readout">
+          <button
+            type="button"
+            className="map-toolbar-copy"
+            onClick={copyCoords}
+            disabled={lat == null || lon == null}
+            title="Copy these coordinates"
+          >
+            {lat != null && lon != null ? (
+              <>
+                Lat: {lat.toFixed(5)}° Lon: {lon.toFixed(5)}°
+              </>
+            ) : (
+              "Lat: — Lon: —"
+            )}
+            {copied ? <span className="map-toolbar-copied"> Copied!</span> : null}
+          </button>
+          {" | "}Zoom: {zoom ?? "—"}
+          {" | "}Scale: {scaleLabel ?? "—"}
+        </div>
       </div>
     </div>
   );

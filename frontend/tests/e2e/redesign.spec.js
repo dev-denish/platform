@@ -219,6 +219,9 @@ test.describe("Map toolbar: new capabilities", () => {
     await gotoQaProject(page);
     const map = page.locator(".leaflet-container");
     await map.click({ position: { x: 400, y: 300 } });
+    // Wave: toolbar overflow - Compare now lives inside the "More" dropdown,
+    // not directly on the main toolbar row.
+    await page.getByRole("button", { name: "More" }).click();
     await page.getByRole("button", { name: "Compare" }).click();
     await expect(page.locator(".map-swipe-divider")).toBeVisible();
     await expect(page.getByRole("button", { name: "Before" })).toHaveCount(0); // labels are plain text, not buttons
@@ -230,6 +233,9 @@ test.describe("Map toolbar: new capabilities", () => {
     await gotoQaProject(page);
     const map = page.locator(".leaflet-container");
     await map.click({ position: { x: 400, y: 300 } });
+    // Wave: toolbar overflow - the lat/lon field is now collapsed behind a
+    // pin icon until clicked (JumpToCoords's own `open` state).
+    await page.getByRole("button", { name: "Go to coordinates" }).click();
     const input = page.getByLabel("Go to coordinates (latitude, longitude)");
     const readout = page.locator(".map-toolbar-readout");
     await input.fill("12.9716, 77.5946");
@@ -257,6 +263,8 @@ test.describe("Map toolbar: new capabilities", () => {
     await gotoQaProject(page);
     const map = page.locator(".leaflet-container");
     await map.click({ position: { x: 400, y: 300 } });
+    // Wave: toolbar overflow - Save image now lives inside "More".
+    await page.getByRole("button", { name: "More" }).click();
     const [download] = await Promise.all([
       page.waitForEvent("download", { timeout: 15000 }),
       page.getByRole("button", { name: /Save image/ }).click(),
@@ -267,7 +275,16 @@ test.describe("Map toolbar: new capabilities", () => {
   test("Saved views: save the current view, jump to it, then remove it", async ({ page }) => {
     await gotoQaProject(page);
     const map = page.locator(".leaflet-container");
-    await map.click({ position: { x: 400, y: 300 } });
+    // The readout shows the last-CLICKED point (mapView.pos), not the map's
+    // true center (mapView.center) - "+ Save current view" saves the latter.
+    // A hardcoded (400, 300) only happened to land near center at the map
+    // canvas's PRE-toolbar-overflow height; Wave: toolbar overflow shrank the
+    // canvas (100px toolbar vs 41px), shifting (400, 300) further from true
+    // center and exposing the pos/center gap as a real mismatch after
+    // recall. Click the map's actual center instead, so pos and center are
+    // the same point regardless of canvas size.
+    const box = await map.boundingBox();
+    await map.click({ position: { x: box.width / 2, y: box.height / 2 } });
 
     // window.prompt() has no Playwright-native handler (unlike dialog()) for
     // a plain synchronous prompt - stub it directly on the already-loaded
@@ -276,6 +293,12 @@ test.describe("Map toolbar: new capabilities", () => {
     await page.evaluate(() => {
       window.prompt = () => "QA saved view";
     });
+    // Wave: toolbar overflow - Views now lives inside "More"; opening it once
+    // here is enough for the rest of this test (More itself stays open the
+    // whole time - clicking a NESTED trigger like Views only toggles its own
+    // sub-picker, never the outer More panel, same "one open at a time, one
+    // level deeper" reasoning as MoreMenu's own subOpen state).
+    await page.getByRole("button", { name: "More" }).click();
     await page.getByRole("button", { name: "Views" }).click();
     await page.getByRole("button", { name: "+ Save current view" }).click();
     // The menu stays open after saving (BookmarksMenu's save() doesn't close
@@ -304,15 +327,41 @@ test.describe("Map toolbar: new capabilities", () => {
     // this exact race reproduced the SAME wrong zoom every time, not random
     // noise, meaning it was deterministic given the animation's fixed
     // duration, not a one-off flake. Wait for the zoom-in transition to
-    // fully settle (two consecutive identical reads) before recalling.
+    // fully settle - THREE consecutive identical reads (not two), a longer
+    // gap between them, and a longer overall budget: two-reads-150ms-apart
+    // occasionally still landed inside the transition under load (confirmed:
+    // reproduces under a busy host, not just in theory) and let the stale
+    // zoomend outlive this check, silently overriding the recall below.
     await expect(async () => {
       const a = await readout.textContent();
-      await page.waitForTimeout(150);
+      await page.waitForTimeout(250);
       const b = await readout.textContent();
+      await page.waitForTimeout(250);
+      const c = await readout.textContent();
       expect(a).toEqual(b);
-    }).toPass({ timeout: 5000 });
+      expect(b).toEqual(c);
+    }).toPass({ timeout: 8000 });
     await savedRow.click();
-    await expect(readout).toHaveText(zoomBefore);
+    // Recall reapplies the bookmark's exact stored lat/lon/zoom, but a
+    // combined pan+zoom setView() re-derives the resulting center through
+    // Leaflet's own pixel<->latlng transform at the new zoom level, which can
+    // introduce a tiny sub-degree rounding difference from the original
+    // (confirmed: zoom always matches exactly, lat/lon only off in the
+    // 3rd-4th decimal - not the race the comment above guards against, which
+    // would show a completely different, unsettled zoom). A byte-exact text
+    // match was never really what "recall" promises - compare parsed values
+    // with a tolerance instead.
+    function parseReadout(text) {
+      const m = text.match(/Lat: (-?\d+\.\d+)° Lon: (-?\d+\.\d+)° \| Zoom: (\d+)/);
+      return { lat: Number(m[1]), lon: Number(m[2]), zoom: Number(m[3]) };
+    }
+    const before = parseReadout(zoomBefore);
+    await expect(async () => {
+      const after = parseReadout(await readout.textContent());
+      expect(after.zoom).toBe(before.zoom);
+      expect(after.lat).toBeCloseTo(before.lat, 1);
+      expect(after.lon).toBeCloseTo(before.lon, 1);
+    }).toPass({ timeout: 5000 });
 
     await page.getByRole("button", { name: "Views" }).click();
     await page.getByRole("button", { name: "Remove QA saved view" }).click();
@@ -325,14 +374,16 @@ test.describe("Map toolbar: new capabilities", () => {
 
     // Every open menu must sit directly under ITS OWN trigger button. The CSS
     // does this on its own (.map-toolbar-menu is absolute inside the button's
-    // own position:relative .map-toolbar-dropdown wrapper), including after the
-    // toolbar flex-wraps on a narrow window - this asserts it stays true rather
-    // than assuming it.
-    async function expectOnlyMenuUnder(buttonName) {
-      await expect(menus).toHaveCount(1);
+    // own position:relative .map-toolbar-dropdown wrapper) - this asserts it
+    // stays true rather than assuming it. `menus.last()` for the nested case
+    // (Wave: toolbar overflow): Compare/Views' own picker renders as a
+    // DESCENDANT of More's outer panel, so it's the LAST .map-toolbar-menu in
+    // document order once both are open.
+    async function expectOnlyMenuUnder(buttonName, { count = 1 } = {}) {
+      await expect(menus).toHaveCount(count);
       const trigger = page.getByRole("button", { name: buttonName, exact: true });
       const btn = await trigger.boundingBox();
-      const menu = await menus.first().boundingBox();
+      const menu = await menus.last().boundingBox();
       expect(Math.abs(menu.x - btn.x)).toBeLessThan(2); // left-aligned with its trigger
       expect(menu.y).toBeGreaterThanOrEqual(btn.y + btn.height); // below it, not over it
       const viewport = page.viewportSize();
@@ -351,18 +402,32 @@ test.describe("Map toolbar: new capabilities", () => {
     await expect(page.getByRole("button", { name: "Distance" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Polygon" })).toBeVisible();
 
-    await page.getByRole("button", { name: "Views" }).click();
-    await expectOnlyMenuUnder("Views");
+    // Opening More (Wave: toolbar overflow) closes Draw at the top level -
+    // still just 1 menu, since Compare/Views inside it aren't expanded yet.
+    await page.getByRole("button", { name: "More" }).click();
+    await expectOnlyMenuUnder("More");
     await expect(page.getByRole("button", { name: "Polygon" })).toHaveCount(0);
+
+    // Nested level: Views' own picker is a SECOND, independent
+    // single-open-at-a-time state local to More (MoreMenu's `subOpen`) -
+    // opening it doesn't close More itself, so now there are 2 (More's own
+    // container + Views' nested one).
+    await page.getByRole("button", { name: "Views" }).click();
+    await expectOnlyMenuUnder("Views", { count: 2 });
 
     // The basemap picker is a native <select>, not a custom positioned menu, so
     // it can't overlap anything - but it must not leave a stale toolbar menu
     // behind it either.
     await page.getByLabel("Basemap").selectOption({ index: 1 });
-    await expect(menus).toHaveCount(1); // Views still open; nothing new stacked on it
+    await expect(menus).toHaveCount(2); // More + Views still open; nothing new stacked on them
 
-    // Clicking the open menu's own button closes it - back to zero menus.
+    // Clicking Views again closes just its own nested picker - back to 1
+    // (More itself stays open).
     await page.getByRole("button", { name: "Views" }).click();
+    await expect(menus).toHaveCount(1);
+
+    // Clicking More's own button closes the whole thing - back to zero menus.
+    await page.getByRole("button", { name: "More" }).click();
     await expect(menus).toHaveCount(0);
   });
 
