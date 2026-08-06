@@ -28,7 +28,7 @@ class AnalysisCatalogEntry(TypedDict):
 
 
 CATALOG: tuple[AnalysisCatalogEntry, ...] = (
-    # --- Real (5), status "available" ---
+    # --- Real (6), status "available" ---
     {
         "id": "hansen_gfc",
         "name": "Global Forest Change (Hansen)",
@@ -71,9 +71,17 @@ CATALOG: tuple[AnalysisCatalogEntry, ...] = (
             "coarse resolution - context/trend only, not microlandscape-scale)."
         ),
     },
-    # --- Deferred (8), status "in-development" ---
-    {"id": "ndvi", "name": "NDVI", "category": "Vegetation Indices", "status": "in-development",
-     "description": "Normalized Difference Vegetation Index time series."},
+    {
+        "id": "ndvi",
+        "name": "NDVI",
+        "category": "Vegetation Indices",
+        "status": "available",
+        "description": (
+            "Normalized Difference Vegetation Index, one value per year "
+            "(2017-present) from cloud-masked Sentinel-2 composites."
+        ),
+    },
+    # --- Deferred (7), status "in-development" ---
     {"id": "evi", "name": "EVI", "category": "Vegetation Indices", "status": "in-development",
      "description": "Enhanced Vegetation Index time series."},
     {"id": "savi", "name": "SAVI", "category": "Vegetation Indices", "status": "in-development",

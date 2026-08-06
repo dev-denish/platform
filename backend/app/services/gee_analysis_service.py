@@ -28,6 +28,24 @@ otherwise mislead a reader:
     time, so re-running after that setting changes is expected, not a bug.
   - MODIS is 500m resolution vs. 10m for the other land-cover products -
     coarse trend context only, not microlandscape-scale area.
+
+Wave: vegetation indices (NDVI/EVI/SAVI/MNDWI/NBR) compute FRESH from raw
+Sentinel-2 imagery rather than querying a pre-built dataset, so unlike the
+five analyses above they need real band math and cloud-free compositing -
+`_s2_reflectance_composite`/`_annual_index_series` are the ONE shared
+utility all five call, not five copies of the same compositing logic.
+Verified live before implementing: S2_SR_HARMONIZED bands are raw DN in the
+thousands, not [0,1] reflectance - EVI/SAVI's additive constants (+1, +0.5)
+are calibrated for reflectance and would be silently wrong without the
+divide(10000) in `_s2_reflectance_composite`. Sentinel-2 only (2017-present)
+- a real multi-year series (one composite+value PER YEAR, not a snapshot),
+matching the trend-chart framing these were designed for. Landsat back to
+2013 was evaluated and deliberately deferred: different band names/scale,
+no Cloud Score+ equivalent (would need QA_PIXEL bit-mask instead), 30m vs
+10m resolution, and a likely fake "trend break" at the sensor handoff year -
+real complications, not a drop-in extension. Synchronous like the first
+five (measured ~3.5-4s for the full 9-year series in one round trip, same
+single-.getInfo()-call convention) - no job queue needed at this AOI scale.
 """
 from __future__ import annotations
 
@@ -160,6 +178,8 @@ def _compute(
         return _esri_lulc(boundary)
     if analysis_id == "modis_lulc":
         return _modis_lulc(boundary)
+    if analysis_id == "ndvi":
+        return _ndvi_query(boundary)
     # refresh() already rejects any non-"available" analysis_id before calling this.
     raise AssertionError(f"no query function wired for {analysis_id!r}")
 
@@ -340,3 +360,102 @@ def _modis_lulc(boundary: ee.Geometry) -> tuple[dict[str, Any], list[dict[str, A
     latest = _year_image(max(_MODIS_YEARS))
     map_id = _visualize_discrete(latest, MODIS_IGBP_LEGEND).getMapId()
     return stats, legend_entries(MODIS_IGBP_LEGEND), map_id["tile_fetcher"].url_format
+
+
+# ----------------------------------------------- vegetation/water/burn indices
+
+
+_VEG_INDEX_YEARS = range(2017, datetime.utcnow().year + 1)  # Sentinel-2 available since 2017
+_VEG_SEASON_START_MD = "02-01"  # pre-monsoon window - same convention as
+_VEG_SEASON_END_MD = "05-31"  # scripts/gee_phase1_agb_proxy.py's usage example
+_VEG_CLOUD_BAND = "cs_cdf"
+_VEG_CLOUD_THRESHOLD = 0.60
+# Diverging red-yellow-green - low (sparse/no vegetation) to high (dense vegetation).
+# Same ramp for all 5 indices: they all range roughly -1..1 with "more vegetation/
+# water/burn signal" at the high end, and reusing one palette keeps every index's
+# map view visually consistent rather than inventing a new ramp per formula.
+_VEG_INDEX_PALETTE = [
+    "a50026", "d73027", "f46d43", "fdae61", "fee08b",
+    "d9ef8b", "a6d96a", "66bd63", "1a9850", "006837",
+]
+
+
+def _s2_reflectance_composite(boundary: ee.Geometry, year: int) -> ee.Image:
+    """Cloud-masked (Cloud Score+, same mask/threshold as
+    scripts/gee_phase1_agb_proxy.py's _s2_composite - reused, not
+    reinvented) pre-monsoon Sentinel-2 median composite for one calendar
+    year, scaled from raw DN to [0,1] reflectance. The /10000 is not
+    optional: verified live that S2_SR_HARMONIZED bands are raw DN in the
+    thousands, not already [0,1] - EVI's "+1" and SAVI's "+0.5" are
+    constants calibrated for reflectance and would be silently swamped by
+    unscaled DN values (NDVI/MNDWI/NBR are pure ratios and technically
+    unaffected by scale, but this is scaled for all 5 for consistency, so
+    no future index added here has to remember which ones need it)."""
+    start, end = f"{year}-{_VEG_SEASON_START_MD}", f"{year}-{_VEG_SEASON_END_MD}"
+    s2 = (
+        ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+        .filterDate(start, end)
+        .filterBounds(boundary)
+    )
+    cs_plus = ee.ImageCollection("GOOGLE/CLOUD_SCORE_PLUS/V1/S2_HARMONIZED")
+
+    def _mask(img: ee.Image) -> ee.Image:
+        return img.updateMask(img.select(_VEG_CLOUD_BAND).gte(_VEG_CLOUD_THRESHOLD))
+
+    composite = s2.linkCollection(cs_plus, [_VEG_CLOUD_BAND]).map(_mask).median().clip(boundary)
+    return composite.divide(10000)
+
+
+def _annual_index_series(
+    boundary: ee.Geometry, index_band
+) -> tuple[dict[str, Any], None, str]:
+    """Shared by every vegetation/water/burn index - one composite + one
+    index value PER YEAR (2017-present), not a single snapshot, matching the
+    trend-chart framing these were designed for. `index_band` is a
+    `ee.Image -> ee.Image` formula (e.g. NDVI's normalizedDifference) applied
+    to each year's reflectance composite. Builds the whole N-year
+    computation graph in a Python loop but calls .getInfo() exactly once for
+    the whole series (verified live: ~3.5-4s for the full 2017-present range
+    over a real boundary - comfortably synchronous, same one-round-trip
+    convention as the two annual analyses above).
+
+    Only the LATEST year gets a map tile (one extra getMapId() call) - not
+    all N years. A per-year tile for the timeline scrubber to switch between
+    was considered; deferred until real timing shows there's headroom for
+    N extra getMapId() round trips without risking the sync budget this
+    whole batch was measured against. The scrubber still has a real job:
+    it drives which year's point is highlighted on the trend chart, using
+    the already-fetched series - no extra backend call for that part."""
+    per_year_value = {}
+    latest_year = max(_VEG_INDEX_YEARS)
+    latest_image = None
+    for year in _VEG_INDEX_YEARS:
+        refl = _s2_reflectance_composite(boundary, year)
+        idx = index_band(refl).rename("index")
+        if year == latest_year:
+            latest_image = idx
+        per_year_value[str(year)] = idx.reduceRegion(
+            reducer=ee.Reducer.mean(), geometry=boundary, scale=10, crs=AOI_CRS,
+            maxPixels=1e10, bestEffort=True,
+        ).get("index")
+    series = ee.Dictionary(per_year_value).getInfo()
+    series = {year: (round(v, 4) if v is not None else None) for year, v in series.items()}
+
+    stats = {
+        "series": series,
+        "note": (
+            "Boundary-mean of a cloud-masked, pre-monsoon (Feb-May) Sentinel-2 "
+            "composite per year, 2017-present. Sentinel-2 only - a Landsat "
+            "extension back to 2013 would need different cloud-masking (no Cloud "
+            "Score+ equivalent) and risks a false 'trend break' at the sensor "
+            "handoff year, so isn't included in this batch."
+        ),
+    }
+    map_id = latest_image.visualize(min=-1, max=1, palette=_VEG_INDEX_PALETTE).getMapId()
+    return stats, None, map_id["tile_fetcher"].url_format
+
+
+def _ndvi_query(boundary: ee.Geometry) -> tuple[dict[str, Any], None, str]:
+    return _annual_index_series(
+        boundary, lambda refl: refl.normalizedDifference(["B8", "B4"])
+    )

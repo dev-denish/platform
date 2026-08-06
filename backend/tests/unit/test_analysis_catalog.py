@@ -6,11 +6,11 @@ from __future__ import annotations
 from app.domain.analysis_catalog import CATALOG, REAL_ANALYSIS_IDS, get_catalog_entry
 
 
-def test_catalog_has_exactly_five_available_and_eleven_in_development_entries():
+def test_catalog_has_exactly_six_available_and_ten_in_development_entries():
     available = [e for e in CATALOG if e["status"] == "available"]
     in_development = [e for e in CATALOG if e["status"] == "in-development"]
-    assert len(available) == 5
-    assert len(in_development) == 11
+    assert len(available) == 6
+    assert len(in_development) == 10
     assert len(CATALOG) == 16
 
 
