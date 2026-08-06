@@ -64,9 +64,14 @@ services:
       DMRV_REDIS_URL: redis://redis:6379/0
       DMRV_TASK_RUNNER_BACKEND: ${DMRV_TASK_RUNNER_BACKEND:-arq}
       WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+      # Google Earth Engine (RS/AGB proxy). Credentials are the mounted file
+      # below, NOT an env var - ee.Initialize() picks them up from
+      # ~/.config/earthengine/credentials automatically (container HOME=/app).
+      DMRV_GEE_PROJECT_ID: ${DMRV_GEE_PROJECT_ID:?set DMRV_GEE_PROJECT_ID in .env}
     volumes:
       - raster_data:/var/lib/dmrv/data
       - upload_staging:/var/lib/dmrv/staging
+      - ${DMRV_GEE_CREDENTIALS_PATH:?set DMRV_GEE_CREDENTIALS_PATH in .env (path to your earthengine `credentials` file)}:/app/.config/earthengine/credentials:ro
     depends_on:
       db:
         condition: service_healthy

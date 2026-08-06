@@ -134,6 +134,12 @@ class Settings(BaseSettings):
     # test_expired_token_is_rejected in tests/unit/test_security.py).
     tile_token_ttl_seconds: int = 3600
 
+    # --- Google Earth Engine (RS/AGB proxy, see scripts/gee_phase1_agb_proxy.py) ---
+    # Not a secret - just tells ee.Initialize() which GCP project to bill/quota
+    # against. The actual credentials are a file mounted read-only into the
+    # container (see deploy/docker-compose.yml), never an env var.
+    gee_project_id: str = ""
+
     @field_validator("cors_allow_origins", mode="before")
     @classmethod
     def _split_csv(cls, v: object) -> object:

@@ -23,8 +23,8 @@ reported AGB mean; this raster only reduces how many field plots are needed for 
 given Up,t. Do not report phase1_mean directly as project AGB.
 
 Usage (interactive, one site at a time -- test small before batching all 10):
-    import ee; ee.Initialize()
-    from scripts.gee_phase1_agb_proxy import build_agb_proxy, phase1_stats, sample_at_plots
+    from scripts.gee_phase1_agb_proxy import init_ee, build_agb_proxy, phase1_stats, sample_at_plots
+    init_ee()
 
     aoi = ee.FeatureCollection('users/vnv/microlandscapes').filter(
         ee.Filter.eq('name', 'Suntikoppa')).geometry()
@@ -38,10 +38,22 @@ from __future__ import annotations
 
 import ee
 
+from app.core.config import get_settings
+
 AOI_CRS = "EPSG:32643"  # UTM 43N, Karnataka -- all reduceRegion/export calls use this
 SAMPLE_SCALE_M = 25  # matches GEDI L4A footprint size; do not sample at S-2's native 10 m
 QA_BAND = "cs_cdf"
 CLEAR_THRESHOLD = 0.60
+
+
+def init_ee() -> None:
+    """
+    ee.Initialize(project=...) -- a bare ee.Initialize() raises "no project
+    found" on this account. Credentials come from the file GEE auto-discovers
+    at ~/.config/earthengine/credentials (mounted read-only into the backend
+    container, see deploy/docker-compose.yml); only the project id is config.
+    """
+    ee.Initialize(project=get_settings().gee_project_id)
 
 
 def _s2_composite(aoi: ee.Geometry, start: str, end: str) -> ee.Image:
