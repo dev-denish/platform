@@ -90,6 +90,15 @@ services:
       DMRV_LOCAL_DATA_DIR: /var/lib/dmrv/data
       DMRV_REDIS_URL: redis://test-redis:6379/0
       DMRV_TASK_RUNNER_BACKEND: arq
+      # Wave: GEE analysis registry. There's no meaningful mock for a real GEE
+      # dataset query, so the analysis E2E spec hits the real GEE service even
+      # from this ephemeral stack - unlike every other value in this file,
+      # this is NOT a disposable default; it's this dev machine's own
+      # `earthengine authenticate` credential and GCP project id (same ones
+      # deploy/docker-compose.yml's backend uses). Overridable via env var for
+      # anyone running this on a different machine; every other spec in this
+      # suite works fine with this unset/absent.
+      DMRV_GEE_PROJECT_ID: ${DMRV_GEE_PROJECT_ID:-ee-kdenish4}
     volumes:
       # Named (not per-service tmpfs) so test-worker below reads the exact
       # same staged file test-backend just wrote - required for the ingest
@@ -98,6 +107,7 @@ services:
       # single-container mounts elsewhere in this file.
       - test_raster_data:/var/lib/dmrv/data
       - test_upload_staging:/var/lib/dmrv/staging
+      - ${DMRV_GEE_CREDENTIALS_PATH:-/home/denish/.config/earthengine/credentials}:/app/.config/earthengine/credentials:ro
     ports:
       # Host port intentionally different from anything deploy/docker-compose.yml
       # exposes (8080), so the two stacks can run side by side without a
