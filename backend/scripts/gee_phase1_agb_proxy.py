@@ -38,22 +38,14 @@ from __future__ import annotations
 
 import ee
 
-from app.core.config import get_settings
+from app.services.gee_client import init_ee
 
 AOI_CRS = "EPSG:32643"  # UTM 43N, Karnataka -- all reduceRegion/export calls use this
 SAMPLE_SCALE_M = 25  # matches GEDI L4A footprint size; do not sample at S-2's native 10 m
 QA_BAND = "cs_cdf"
 CLEAR_THRESHOLD = 0.60
 
-
-def init_ee() -> None:
-    """
-    ee.Initialize(project=...) -- a bare ee.Initialize() raises "no project
-    found" on this account. Credentials come from the file GEE auto-discovers
-    at ~/.config/earthengine/credentials (mounted read-only into the backend
-    container, see deploy/docker-compose.yml); only the project id is config.
-    """
-    ee.Initialize(project=get_settings().gee_project_id)
+__all__ = ["init_ee", "build_agb_proxy", "phase1_stats", "sample_at_plots"]
 
 
 def _s2_composite(aoi: ee.Geometry, start: str, end: str) -> ee.Image:

@@ -140,3 +140,4 @@ class AuditAction(StrEnum):
     GRANT_PERMISSION = "grant_permission"
     REVOKE_PERMISSION = "revoke_permission"
     UPDATE_FOREST_DEFINITION = "update_forest_definition"
+    REFRESH_ANALYSIS = "refresh_analysis"
