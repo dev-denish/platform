@@ -481,10 +481,22 @@ def test_referencing_foreign_keys_matches_the_reviewed_schema(db):
         # deleting the approving Administrator must not delete the domain
         # itself from the allow-list.
         ("allowed_wms_domain", "added_by"),
+        # Wave: permission grants (migration 0016) - who last changed the
+        # forest-definition thresholds; same attribution-only convention as
+        # every other `*_by` column here.
+        ("forest_definition_setting", "updated_by"),
+        # Wave: permission grants (migration 0015) - who granted this
+        # permission; attribution-only, unlike the grant row itself (see
+        # expected_cascade below).
+        ("user_permission_grant", "granted_by"),
     }
     expected_cascade = {
         ("project_membership", "user_id"),
         ("revoked_token", "user_id"),
+        # Wave: permission grants (migration 0015) - a grant IS that user's
+        # grant, it cannot mean anything with no user to hold it, same
+        # reasoning as project_membership.user_id above.
+        ("user_permission_grant", "user_id"),
     }
 
     assert expected_set_null <= by_column.keys()
