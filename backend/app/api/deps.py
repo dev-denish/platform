@@ -26,6 +26,7 @@ from app.services.adhoc_layer_service import AdhocLayerService
 from app.services.auth_service import AuthService
 from app.services.dataset_delete_service import DatasetDeleteService
 from app.services.forest_definition_service import ForestDefinitionService
+from app.services.gee_analysis_service import GEEAnalysisService
 from app.services.ingestion.service import IngestionService
 from app.services.ingestion.storage import Storage
 from app.services.jobs_service import JobService
@@ -83,6 +84,10 @@ def get_user_service(db: Annotated[Database, Depends(get_db)]) -> UserService:
 
 def get_permission_service(db: Annotated[Database, Depends(get_db)]) -> PermissionService:
     return PermissionService(db)
+
+
+def get_gee_analysis_service(db: Annotated[Database, Depends(get_db)]) -> GEEAnalysisService:
+    return GEEAnalysisService(db)
 
 
 def get_forest_definition_service(

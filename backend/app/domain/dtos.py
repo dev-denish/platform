@@ -602,6 +602,43 @@ class Page(BaseModel, Generic[T]):
         return nxt if nxt < self.total else None
 
 
+# ------------------------------------------------------- GEE analysis registry
+
+
+class AnalysisCatalogEntryOut(BaseModel):
+    id: str
+    name: str
+    category: str
+    status: str
+    description: str
+
+
+class ProjectAnalysisSummary(BaseModel):
+    """One catalog entry + this project's cache status for it (no cached
+    result yet -> computed_at is None, never a fake/zeroed stats blob)."""
+
+    id: str
+    name: str
+    category: str
+    status: str
+    description: str
+    computed_at: datetime | None = None
+
+
+class ProjectAnalysisCatalog(BaseModel):
+    project_id: UUID
+    analyses: list[ProjectAnalysisSummary]
+
+
+class AnalysisResultOut(BaseModel):
+    project_id: UUID
+    analysis_id: str
+    computed_at: datetime
+    stats: dict[str, Any]
+    legend: list[dict[str, Any]] | None = None
+    tile_url_template: str | None = None
+
+
 # ---------------------------------------------------------------- health
 
 
