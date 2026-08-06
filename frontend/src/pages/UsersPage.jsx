@@ -10,6 +10,7 @@ import ConfirmDialog from "../components/ConfirmDialog.jsx";
 import PermanentDeleteDialog from "../components/PermanentDeleteDialog.jsx";
 import BulkPermanentDeleteDialog from "../components/BulkPermanentDeleteDialog.jsx";
 import ResetPasswordDialog from "../components/ResetPasswordDialog.jsx";
+import ManagePermissionsPanel from "../components/ManagePermissionsPanel.jsx";
 import { RoleBadge } from "../components/StatusBadge.jsx";
 import { formatDate } from "../lib/format.js";
 import { ROLES, canManageUsers } from "../lib/roles.js";
@@ -45,6 +46,8 @@ export default function UsersPage() {
   const [hidingId, setHidingId] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
+
+  const [permissionsTarget, setPermissionsTarget] = useState(null);
 
   const [resetTarget, setResetTarget] = useState(null);
   const [resetting, setResetting] = useState(false);
@@ -311,6 +314,13 @@ export default function UsersPage() {
         onCancel={() => setDeleteTarget(null)}
       />
 
+      <ManagePermissionsPanel
+        open={permissionsTarget != null}
+        user={permissionsTarget}
+        onClose={() => setPermissionsTarget(null)}
+        onChanged={() => load(offset)}
+      />
+
       <ResetPasswordDialog
         open={resetTarget != null}
         username={resetTarget?.username}
@@ -439,6 +449,7 @@ export default function UsersPage() {
                   <th>Role</th>
                   <th>Created</th>
                   <th>Status</th>
+                  <th>Individual permissions</th>
                   <th />
                 </tr>
               </thead>
@@ -446,6 +457,7 @@ export default function UsersPage() {
                 {page.items.map((u) => {
                   const active = !u.deleted_at;
                   const hidden = !!u.hidden_at;
+                  const isAdministrator = u.role === ROLES.ADMINISTRATOR;
                   const busy = deactivatingId === u.user_id || hidingId === u.user_id || deletingId === u.user_id;
                   return (
                     <tr key={u.user_id}>
@@ -475,6 +487,24 @@ export default function UsersPage() {
                             Hidden
                           </span>
                         ) : null}
+                      </td>
+                      <td>
+                        {isAdministrator ? (
+                          "All (implicit)"
+                        ) : (
+                          <>
+                            {u.permission_grant_count > 0
+                              ? `${u.permission_grant_count} granted`
+                              : "None"}{" "}
+                            <button
+                              type="button"
+                              className="link-button"
+                              onClick={() => setPermissionsTarget(u)}
+                            >
+                              Manage
+                            </button>
+                          </>
+                        )}
                       </td>
                       <td className="table-actions-cell table-actions-multi">
                         {active ? (
