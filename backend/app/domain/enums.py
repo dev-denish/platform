@@ -82,6 +82,13 @@ RENAME_LAYER_ROLES: frozenset[Role] = frozenset({Role.ADMINISTRATOR})
 # matching this file's one-named-capability-per-concept convention.
 DELETE_DATASET_ROLES: frozenset[Role] = frozenset({Role.ADMINISTRATOR})
 
+# Wave: permission grants. Who may view/grant/revoke another user's
+# individual permission grants - Administrator only, same global gate as
+# MANAGE_USERS_ROLES (this is part of the same Users screen). Distinct from
+# `has_permission()` (app.domain.permissions), which decides who may USE a
+# granted permission, not who may grant one.
+MANAGE_PERMISSIONS_ROLES: frozenset[Role] = frozenset({Role.ADMINISTRATOR})
+
 
 class LayerKind(StrEnum):
     RASTER = "raster"
@@ -130,3 +137,6 @@ class AuditAction(StrEnum):
     CREATE_EXTERNAL_LAYER = "create_external_layer"
     UPDATE_CLASS_LEGEND = "update_class_legend"
     RENAME_LAYER = "rename_layer"
+    GRANT_PERMISSION = "grant_permission"
+    REVOKE_PERMISSION = "revoke_permission"
+    UPDATE_FOREST_DEFINITION = "update_forest_definition"

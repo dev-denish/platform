@@ -39,8 +39,17 @@ from app.repositories.users import UserRepository
 # confirmed via UserRepository.referencing_foreign_keys below). Any OTHER
 # non-SET-NULL FK discovered at delete time is treated as unreviewed and
 # blocks the delete - see permanent_delete_user.
+#
+# Wave: permission grants adds user_permission_grant.user_id, same
+# reasoning as project_membership above - a grant IS that user's grant, it
+# cannot survive with no user to hold it. (Its OTHER FK, granted_by, is
+# SET NULL - purely attribution, like deleted_by/added_by.)
 _REVIEWED_CASCADE_FKS = frozenset(
-    {("project_membership", "user_id"), ("revoked_token", "user_id")}
+    {
+        ("project_membership", "user_id"),
+        ("revoked_token", "user_id"),
+        ("user_permission_grant", "user_id"),
+    }
 )
 
 

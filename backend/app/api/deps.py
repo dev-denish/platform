@@ -25,12 +25,14 @@ from app.domain.enums import Role
 from app.services.adhoc_layer_service import AdhocLayerService
 from app.services.auth_service import AuthService
 from app.services.dataset_delete_service import DatasetDeleteService
+from app.services.forest_definition_service import ForestDefinitionService
 from app.services.ingestion.service import IngestionService
 from app.services.ingestion.storage import Storage
 from app.services.jobs_service import JobService
 from app.services.layer_rename_service import LayerRenameService
 from app.services.legend_service import ClassLegendService
 from app.services.membership_service import MembershipService
+from app.services.permission_service import PermissionService
 from app.services.project_service import ProjectService
 from app.services.reference_layer_service import ReferenceLayerService
 from app.services.tile_service import TileService
@@ -77,6 +79,16 @@ def get_membership_service(db: Annotated[Database, Depends(get_db)]) -> Membersh
 
 def get_user_service(db: Annotated[Database, Depends(get_db)]) -> UserService:
     return UserService(db)
+
+
+def get_permission_service(db: Annotated[Database, Depends(get_db)]) -> PermissionService:
+    return PermissionService(db)
+
+
+def get_forest_definition_service(
+    db: Annotated[Database, Depends(get_db)],
+) -> ForestDefinitionService:
+    return ForestDefinitionService(db)
 
 
 def get_ingestion_service(

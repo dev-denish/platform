@@ -129,13 +129,18 @@ class UserRepository:
         hidden_filter = "" if include_hidden else "WHERE hidden_at IS NULL"
         self.cur.execute(f"SELECT count(*) AS n FROM app_user {hidden_filter}")  # noqa: S608 - hidden_filter is a fixed literal, never interpolated user input
         total = int(self.cur.fetchone()["n"])  # type: ignore[index]
+        # LEFT JOIN + count, not a per-row /permissions call from the Users
+        # table (Wave: permission grants) - one query for the whole page.
         self.cur.execute(
             f"""
-            SELECT user_id, username, role, created_at,
-                   deleted_at, deleted_by, hidden_at, hidden_by
-            FROM app_user
-            {hidden_filter}
-            ORDER BY username
+            SELECT u.user_id, u.username, u.role, u.created_at,
+                   u.deleted_at, u.deleted_by, u.hidden_at, u.hidden_by,
+                   count(g.permission_name) AS permission_grant_count
+            FROM app_user u
+            LEFT JOIN user_permission_grant g ON g.user_id = u.user_id
+            {hidden_filter.replace("hidden_at", "u.hidden_at")}
+            GROUP BY u.user_id
+            ORDER BY u.username
             LIMIT %s OFFSET %s
             """,  # noqa: S608
             (limit, offset),

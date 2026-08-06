@@ -88,6 +88,12 @@ class UserOut(BaseModel):
     # (deleted_at alone controls that).
     hidden_at: datetime | None = None
     hidden_by: UUID | None = None
+    # Wave: permission grants. How many individual grants this user holds -
+    # read alongside the row (UserRepository.list_all) rather than making the
+    # Users table fire one /permissions request per row. Meaningless for an
+    # Administrator (always 0 in practice, since they never need a grant) -
+    # the frontend shows "All (implicit)" for that role instead of this count.
+    permission_grant_count: int = 0
 
 
 class CreateUserRequest(BaseModel):
@@ -97,6 +103,50 @@ class CreateUserRequest(BaseModel):
     # rule that could drift from it.
     password: str = Field(min_length=1, max_length=256)
     role: Role
+
+
+# ---------------------------------------------------------------- permission grants
+# Wave: permission grants. A reusable, per-user grant system independent of
+# role-based RBAC (Role above) - see app.domain.permissions for the registry
+# and the has_permission() check every gated feature calls.
+
+
+class PermissionGrantOut(BaseModel):
+    permission_name: str
+    granted_by: UUID | None
+    granted_by_username: str | None = None
+    granted_at: datetime
+
+
+class UserPermissions(BaseModel):
+    user_id: UUID
+    grants: list[PermissionGrantOut]
+
+
+# ---------------------------------------------------------------- forest definition
+# Wave: permission grants, Part 2 - the first real use case for
+# has_permission(). A single settings row (migration 0016), seeded with
+# India's confirmed DNA values.
+
+
+class ForestDefinitionOut(BaseModel):
+    canopy_cover_pct: float
+    min_height_m: float
+    min_area_ha: float
+    updated_at: datetime
+    updated_by: UUID | None
+    updated_by_username: str | None = None
+    # Computed per-viewer at read time (has_permission(actor, ...)) - the
+    # frontend uses this alone to decide whether to render the edit form,
+    # rather than re-deriving the rule client-side from role + a separate
+    # grants fetch.
+    can_edit: bool
+
+
+class UpdateForestDefinitionRequest(BaseModel):
+    canopy_cover_pct: float = Field(ge=0.0, le=100.0)
+    min_height_m: float = Field(gt=0.0, le=100.0)
+    min_area_ha: float = Field(gt=0.0, le=10_000.0)
 
 
 # ---------------------------------------------------------------- projects

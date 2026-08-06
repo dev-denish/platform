@@ -11,9 +11,11 @@ from app.api.v1 import (
     auth,
     datasets,
     external_layers,
+    forest_definition,
     jobs,
     layers,
     memberships,
+    permissions,
     projects,
     reference_layers,
     tiles,
@@ -29,8 +31,10 @@ api_router.include_router(datasets.router)
 api_router.include_router(jobs.router)
 api_router.include_router(tiles.router)
 api_router.include_router(users.router)
+api_router.include_router(permissions.router)
 api_router.include_router(layers.router)
 api_router.include_router(wms_domains.router)
 api_router.include_router(external_layers.router)
 api_router.include_router(reference_layers.router)
 api_router.include_router(adhoc_layers.router)
+api_router.include_router(forest_definition.router)
