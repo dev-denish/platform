@@ -43,9 +43,17 @@ matching the trend-chart framing these were designed for. Landsat back to
 2013 was evaluated and deliberately deferred: different band names/scale,
 no Cloud Score+ equivalent (would need QA_PIXEL bit-mask instead), 30m vs
 10m resolution, and a likely fake "trend break" at the sensor handoff year -
-real complications, not a drop-in extension. Synchronous like the first
-five (measured ~3.5-4s for the full 9-year series in one round trip, same
-single-.getInfo()-call convention) - no job queue needed at this AOI scale.
+real complications, not a drop-in extension.
+
+UNLIKE the first six, these run as an async job (app/workers/gee_analysis_
+jobs.py), not synchronously - decided from real measured timing, not a
+guess: the isolated reduceRegion-only estimate looked like ~3.5-4s, but the
+actual end-to-end call (same code path a real request uses) measured 5-59s
+across repeated runs against real boundaries, well past "a few seconds".
+`refresh()` below is for "sync"-execution catalog entries only;
+`enqueue_refresh()` is the "async" path, mirroring POST /datasets/upload's
+own job-queue dispatch exactly (validate synchronously so a bad request
+fails immediately, then hand the actual compute to the worker).
 """
 from __future__ import annotations
 
@@ -56,7 +64,7 @@ from uuid import UUID
 import ee
 
 from app.core.db import Database
-from app.core.errors import NotFoundError, ValidationError
+from app.core.errors import DomainError, NotFoundError, ValidationError
 from app.domain.analysis_catalog import CATALOG, get_catalog_entry
 from app.domain.authz import require_project_upload, require_project_view
 from app.domain.dtos import (
@@ -77,6 +85,8 @@ from app.repositories.analysis_results import AnalysisResultRepository
 from app.repositories.audit import AuditRepository
 from app.repositories.forest_definition import ForestDefinitionRepository
 from app.services.gee_client import init_ee
+from app.services.jobs_service import JobService
+from app.workers.queue import TaskRunner
 
 AOI_CRS = "EPSG:32643"  # UTM 43N, Karnataka -- same convention as scripts/gee_phase1_agb_proxy.py
 
@@ -119,9 +129,17 @@ class GEEAnalysisService:
             raise NotFoundError("This analysis has not been computed for this project yet.")
         return AnalysisResultOut(**row)
 
-    # ---- refresh - the only thing that actually calls GEE ----
+    # ---- refresh - the only things that actually call GEE ----
 
-    def refresh(self, project_id: UUID, analysis_id: str, actor: CurrentUser) -> AnalysisResultOut:
+    def _prepare_refresh(
+        self, project_id: UUID, analysis_id: str, actor: CurrentUser
+    ) -> tuple[dict[str, Any], dict[str, Any], float]:
+        """Shared by refresh() and enqueue_refresh(): catalog/permission/
+        boundary validation, all synchronous DB work - done at request time
+        for BOTH paths, so a bad request (unknown analysis, not implemented
+        yet, no permission, no boundary) fails immediately with a normal
+        HTTP error rather than surfacing later inside an async job with no
+        one watching."""
         entry = get_catalog_entry(analysis_id)
         if entry is None:
             raise NotFoundError("Unknown analysis.")
@@ -139,6 +157,20 @@ class GEEAnalysisService:
             raise ValidationError(
                 "This project has no Boundary layer yet - upload one before running an analysis."
             )
+        return entry, boundary_geojson, canopy_cover_pct
+
+    def refresh(self, project_id: UUID, analysis_id: str, actor: CurrentUser) -> AnalysisResultOut:
+        """The "sync"-execution path - computes and returns the result inline.
+        Never called for an "async"-execution entry (the route sends those to
+        enqueue_refresh instead); the assertion below is a guard against that
+        ever drifting, not a real user-facing error path."""
+        entry, boundary_geojson, canopy_cover_pct = self._prepare_refresh(
+            project_id, analysis_id, actor
+        )
+        assert entry.get("execution") == "sync", (  # noqa: S101 - internal routing invariant
+            f"{analysis_id!r} is execution={entry.get('execution')!r}; route should have used "
+            "enqueue_refresh instead"
+        )
 
         stats, legend, tile_url_template = _compute(analysis_id, boundary_geojson, canopy_cover_pct)
 
@@ -154,6 +186,57 @@ class GEEAnalysisService:
                 project_id=project_id,
             )
         return AnalysisResultOut(**row)
+
+    async def enqueue_refresh(
+        self,
+        project_id: UUID,
+        analysis_id: str,
+        actor: CurrentUser,
+        jobs: JobService,
+        runner: TaskRunner,
+    ) -> UUID:
+        """The "async"-execution path - mirrors POST /datasets/upload's own
+        job-queue dispatch (app/api/v1/datasets.py) exactly: validate
+        synchronously first (same _prepare_refresh as the sync path), submit
+        a `jobs` row, then hand the actual GEE compute to the worker
+        (app/workers/gee_analysis_jobs.py) without awaiting it. The caller
+        polls GET /jobs/{id}, then re-fetches get_result() once it succeeds -
+        the job's own row only needs enough to prove it ran, not a duplicate
+        copy of the stats (those land in analysis_result via the worker's
+        own upsert, the one source of truth get_result() already reads)."""
+        entry, boundary_geojson, canopy_cover_pct = self._prepare_refresh(
+            project_id, analysis_id, actor
+        )
+        assert entry.get("execution") == "async", (  # noqa: S101 - internal routing invariant
+            f"{analysis_id!r} is execution={entry.get('execution')!r}; route should have used "
+            "refresh instead"
+        )
+        # Deferred import: app.workers.gee_analysis_jobs imports _compute FROM
+        # this module, so a top-level import here would be circular.
+        from app.workers.gee_analysis_jobs import run_gee_analysis_job
+
+        job_id, is_new = jobs.submit(
+            user_id=actor.user_id, kind="compute_gee_analysis",
+            idempotency_key=None, request_id=None,
+        )
+        if is_new:
+            try:
+                await runner.run(
+                    run_gee_analysis_job,
+                    job_id=str(job_id), project_id=str(project_id), analysis_id=analysis_id,
+                    boundary_geojson=boundary_geojson, canopy_cover_pct=canopy_cover_pct,
+                    actor=actor.model_dump(mode="json"),
+                )
+            except Exception as e:
+                # The jobs-row insert already committed (jobs.submit above) - if
+                # enqueueing then fails (e.g. Redis unreachable), mark it failed
+                # instead of leaving an orphaned `queued` row nothing will ever
+                # process. Same recovery datasets.py's upload endpoint does.
+                jobs.mark_enqueue_failed(job_id, str(e))
+                raise DomainError(
+                    "Failed to enqueue this analysis. Please retry."
+                ) from e
+        return job_id
 
 
 # --------------------------------------------------------------- GEE queries

@@ -131,7 +131,7 @@ def _add_boundary(db: Database, project_id) -> None:
 # --------------------------------------------------------------- catalog listing
 
 
-def test_get_project_analyses_lists_all_thirteen_with_no_computed_at_before_any_refresh(
+def test_get_project_analyses_lists_all_sixteen_with_no_computed_at_before_any_refresh(
     db, analysis_service
 ):
     admin = _make_user(db, Role.ADMINISTRATOR)
@@ -139,7 +139,7 @@ def test_get_project_analyses_lists_all_thirteen_with_no_computed_at_before_any_
 
     result = analysis_service.get_project_analyses(pid, admin)
 
-    assert len(result.analyses) == 13
+    assert len(result.analyses) == 16
     assert all(a.computed_at is None for a in result.analyses)
 
 
@@ -219,8 +219,10 @@ def test_refresh_in_development_analysis_id_is_a_validation_error(db, analysis_s
     pid = _make_project(db, f"Proj-{uuid.uuid4()}")
     _add_boundary(db, pid)
 
+    # "evi" - still in-development (unlike "ndvi", which this test used before
+    # Wave: vegetation indices made it real).
     with pytest.raises(ValidationError):
-        analysis_service.refresh(pid, "ndvi", admin)
+        analysis_service.refresh(pid, "evi", admin)
 
     assert fake_compute == []  # rejected before ever reaching GEE
 

@@ -631,12 +631,12 @@ def test_analysis_catalog_requires_auth(client):
     assert client.get("/api/v1/analysis-catalog").status_code == 401
 
 
-def test_analysis_catalog_lists_all_thirteen_entries(client):
+def test_analysis_catalog_lists_all_sixteen_entries(client):
     client.app.dependency_overrides[deps.get_gee_analysis_service] = lambda: FakeGEEAnalysisService()
     r = client.get("/api/v1/analysis-catalog", headers=AUTH)
     assert r.status_code == 200
     body = r.json()
-    assert len(body) == 13
+    assert len(body) == 16
     assert any(e["id"] == "hansen_gfc" and e["status"] == "available" for e in body)
 
 

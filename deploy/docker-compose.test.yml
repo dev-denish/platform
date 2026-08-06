@@ -146,9 +146,13 @@ services:
       DMRV_LOCAL_DATA_DIR: /var/lib/dmrv/data
       DMRV_REDIS_URL: redis://test-redis:6379/0
       DMRV_TASK_RUNNER_BACKEND: arq
+      # Wave: vegetation indices - async GEE analysis jobs run in THIS
+      # container, same reasoning as test-backend's own GEE wiring above.
+      DMRV_GEE_PROJECT_ID: ${DMRV_GEE_PROJECT_ID:-ee-kdenish4}
     volumes:
       - test_raster_data:/var/lib/dmrv/data
       - test_upload_staging:/var/lib/dmrv/staging
+      - ${DMRV_GEE_CREDENTIALS_PATH:-/home/denish/.config/earthengine/credentials}:/app/.config/earthengine/credentials:ro
     depends_on:
       test-db:
         condition: service_healthy

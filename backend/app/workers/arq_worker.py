@@ -17,6 +17,7 @@ from app.core.config import get_settings
 from app.core.db import Database
 from app.core.logging import configure_logging, get_logger
 from app.services.ingestion.storage import build_storage
+from app.workers.gee_analysis_jobs import run_gee_analysis_job
 from app.workers.jobs import run_ingest_job
 
 log = get_logger("dmrv.worker")
@@ -44,7 +45,7 @@ class WorkerSettings:
     matches a `Worker.__init__` parameter name is passed through (see
     arq.worker.create_worker)."""
 
-    functions = [run_ingest_job]
+    functions = [run_ingest_job, run_gee_analysis_job]
     on_startup = on_startup
     on_shutdown = on_shutdown
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)

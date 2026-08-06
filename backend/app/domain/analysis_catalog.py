@@ -14,9 +14,18 @@ behind it - the frontend shows an empty state for these, never fake data.
 """
 from __future__ import annotations
 
-from typing import Literal, TypedDict
+from typing import Literal, NotRequired, TypedDict
 
 AnalysisStatus = Literal["available", "in-development"]
+# Decided per entry from REAL measured timing (Wave: vegetation indices), not
+# guessed: "sync" analyses query a pre-built GEE dataset and return in a
+# normal request/response (the 6 land-cover/forest-change ones, all a few
+# seconds). "async" analyses compute fresh from raw imagery (cloud-free
+# compositing across multiple years) and go through the same job-queue/
+# polling pattern as dataset uploads instead - measured 5-59s end-to-end
+# across repeated real runs for NDVI's 2017-present series, well past "a few
+# seconds". Only meaningful for status="available" entries.
+AnalysisExecution = Literal["sync", "async"]
 
 
 class AnalysisCatalogEntry(TypedDict):
@@ -25,6 +34,7 @@ class AnalysisCatalogEntry(TypedDict):
     category: str
     status: AnalysisStatus
     description: str
+    execution: NotRequired[AnalysisExecution]
 
 
 CATALOG: tuple[AnalysisCatalogEntry, ...] = (
@@ -34,6 +44,7 @@ CATALOG: tuple[AnalysisCatalogEntry, ...] = (
         "name": "Global Forest Change (Hansen)",
         "category": "Forest Change",
         "status": "available",
+        "execution": "sync",
         "description": (
             "Tree-cover loss/gain within the project boundary, UMD/Google/USGS/NASA. "
             "Baseline forest area applies the current forest-definition canopy-cover "
@@ -45,6 +56,7 @@ CATALOG: tuple[AnalysisCatalogEntry, ...] = (
         "name": "Dynamic World",
         "category": "Land Cover",
         "status": "available",
+        "execution": "sync",
         "description": "Near-real-time 10m land-cover class breakdown (last 12 months).",
     },
     {
@@ -52,6 +64,7 @@ CATALOG: tuple[AnalysisCatalogEntry, ...] = (
         "name": "ESA WorldCover",
         "category": "Land Cover",
         "status": "available",
+        "execution": "sync",
         "description": "10m global land-cover class breakdown, single 2021 snapshot.",
     },
     {
@@ -59,6 +72,7 @@ CATALOG: tuple[AnalysisCatalogEntry, ...] = (
         "name": "10m Annual Land Cover (Impact Observatory / Esri)",
         "category": "Land Cover",
         "status": "available",
+        "execution": "sync",
         "description": "10m annual land-cover class breakdown, 2017-present.",
     },
     {
@@ -66,6 +80,7 @@ CATALOG: tuple[AnalysisCatalogEntry, ...] = (
         "name": "MODIS Land Cover",
         "category": "Land Cover",
         "status": "available",
+        "execution": "sync",
         "description": (
             "500m annual land-cover class breakdown, 2001-present (longest history; "
             "coarse resolution - context/trend only, not microlandscape-scale)."
@@ -76,6 +91,7 @@ CATALOG: tuple[AnalysisCatalogEntry, ...] = (
         "name": "NDVI",
         "category": "Vegetation Indices",
         "status": "available",
+        "execution": "async",
         "description": (
             "Normalized Difference Vegetation Index, one value per year "
             "(2017-present) from cloud-masked Sentinel-2 composites."
