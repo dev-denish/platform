@@ -489,6 +489,12 @@ def test_referencing_foreign_keys_matches_the_reviewed_schema(db):
         # permission; attribution-only, unlike the grant row itself (see
         # expected_cascade below).
         ("user_permission_grant", "granted_by"),
+        # Wave: GEE analysis registry (migration 0017) - who last refreshed
+        # this cached analysis result; attribution-only, same convention as
+        # every other `*_by` column here - the result itself is meaningless
+        # without the project (see analysis_result.project_id's own CASCADE,
+        # untouched by this app_user-focused test).
+        ("analysis_result", "computed_by"),
     }
     expected_cascade = {
         ("project_membership", "user_id"),

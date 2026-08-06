@@ -122,9 +122,7 @@ class GEEAnalysisService:
                 "This project has no Boundary layer yet - upload one before running an analysis."
             )
 
-        init_ee()
-        boundary = ee.Geometry(boundary_geojson)
-        stats, legend, tile_url_template = _compute(analysis_id, boundary, canopy_cover_pct)
+        stats, legend, tile_url_template = _compute(analysis_id, boundary_geojson, canopy_cover_pct)
 
         with self.db.transaction() as cur:
             row = AnalysisResultRepository(cur).upsert(
@@ -144,8 +142,14 @@ class GEEAnalysisService:
 
 
 def _compute(
-    analysis_id: str, boundary: ee.Geometry, canopy_cover_pct: float
+    analysis_id: str, boundary_geojson: dict[str, Any], canopy_cover_pct: float
 ) -> tuple[dict[str, Any], list[dict[str, Any]] | None, str | None]:
+    """The ONLY function that touches the GEE client - init_ee() and
+    ee.Geometry() construction both happen here, not in refresh(), so a
+    caller can test refresh()'s DB/permission/cache logic by monkeypatching
+    this one function alone, with zero GEE credentials/network involved."""
+    init_ee()
+    boundary = ee.Geometry(boundary_geojson)
     if analysis_id == "hansen_gfc":
         return _hansen_forest_change(boundary, canopy_cover_pct)
     if analysis_id == "dynamic_world":

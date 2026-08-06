@@ -4,13 +4,16 @@ handlers, pagination) with the service layer faked - so they exercise the HTTP
 contract end-to-end WITHOUT a database."""
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from uuid import UUID
 
 from prometheus_client.parser import text_string_to_metric_families
 
 from app.api import deps
+from app.core.errors import NotFoundError
 from app.core.security import create_tile_token
-from tests.conftest import _LAYER_ID, FakeTileService
+from app.domain.dtos import AnalysisResultOut, ProjectAnalysisCatalog
+from tests.conftest import _ADMIN_ID, _LAYER_ID, _PROJECT_ID, FakeTileService
 
 AUTH = {"Authorization": "Bearer admin-token"}
 VIEWER = {"Authorization": "Bearer viewer-token"}
@@ -588,3 +591,88 @@ def test_tile_outside_raster_bounds_is_404(client, test_settings, real_cog):
 
     r = client.get(_tile_url(_LAYER_ID, z, x, y, token))
     assert r.status_code == 404
+
+
+# --------------------------------------------------------------- analyses (Wave: GEE analysis registry)
+
+
+class FakeGEEAnalysisService:
+    """API-contract tier, no Postgres, no GEE - the real cache/RBAC/GEE-seam
+    behavior is proven against a real DB (see
+    tests/integration/test_gee_analysis_service.py). This fake only needs to
+    exist so route wiring (path/method/RBAC/response shape) can be exercised
+    without either, same role FakeProjectService already plays."""
+
+    def __init__(self) -> None:
+        self.refreshed: list[tuple[UUID, str, UUID]] = []
+
+    def list_catalog(self) -> list[dict]:
+        from app.domain.analysis_catalog import CATALOG
+
+        return list(CATALOG)
+
+    def get_project_analyses(self, project_id: UUID, user) -> ProjectAnalysisCatalog:
+        if project_id != _PROJECT_ID:
+            raise NotFoundError("Project not found.")
+        return ProjectAnalysisCatalog(project_id=project_id, analyses=[])
+
+    def get_result(self, project_id: UUID, analysis_id: str, user) -> AnalysisResultOut:
+        raise NotFoundError("This analysis has not been computed for this project yet.")
+
+    def refresh(self, project_id: UUID, analysis_id: str, actor) -> AnalysisResultOut:
+        self.refreshed.append((project_id, analysis_id, actor.user_id))
+        return AnalysisResultOut(
+            project_id=project_id, analysis_id=analysis_id,
+            computed_at=datetime.now(UTC), stats={"ok": True},
+        )
+
+
+def test_analysis_catalog_requires_auth(client):
+    assert client.get("/api/v1/analysis-catalog").status_code == 401
+
+
+def test_analysis_catalog_lists_all_thirteen_entries(client):
+    client.app.dependency_overrides[deps.get_gee_analysis_service] = lambda: FakeGEEAnalysisService()
+    r = client.get("/api/v1/analysis-catalog", headers=AUTH)
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body) == 13
+    assert any(e["id"] == "hansen_gfc" and e["status"] == "available" for e in body)
+
+
+def test_get_project_analyses_route_registered(client):
+    client.app.dependency_overrides[deps.get_gee_analysis_service] = lambda: FakeGEEAnalysisService()
+    r = client.get(f"/api/v1/projects/{_PROJECT_ID}/analyses", headers=AUTH)
+    assert r.status_code == 200
+    assert r.json()["project_id"] == str(_PROJECT_ID)
+
+
+def test_get_analysis_result_404_maps_cleanly(client):
+    client.app.dependency_overrides[deps.get_gee_analysis_service] = lambda: FakeGEEAnalysisService()
+    r = client.get(f"/api/v1/projects/{_PROJECT_ID}/analyses/hansen_gfc", headers=AUTH)
+    assert r.status_code == 404
+    assert r.json()["error"]["code"] == "not_found"
+
+
+def test_refresh_analysis_forbidden_for_viewer_role(client):
+    # RBAC: Viewer is not in UPLOAD_ROLES -> 403 via the shared require_role
+    # dependency, before the service (and any real project-tier re-check) is
+    # ever reached - same global gate every other upload-tier route uses.
+    client.app.dependency_overrides[deps.get_gee_analysis_service] = lambda: FakeGEEAnalysisService()
+    r = client.post(f"/api/v1/projects/{_PROJECT_ID}/analyses/hansen_gfc/refresh", headers=VIEWER)
+    assert r.status_code == 403
+    assert r.json()["error"]["code"] == "forbidden"
+
+
+def test_refresh_analysis_requires_auth(client):
+    r = client.post(f"/api/v1/projects/{_PROJECT_ID}/analyses/hansen_gfc/refresh")
+    assert r.status_code == 401
+
+
+def test_refresh_analysis_succeeds_for_administrator_role_at_the_http_layer(client):
+    fake = FakeGEEAnalysisService()
+    client.app.dependency_overrides[deps.get_gee_analysis_service] = lambda: fake
+    r = client.post(f"/api/v1/projects/{_PROJECT_ID}/analyses/hansen_gfc/refresh", headers=AUTH)
+    assert r.status_code == 200
+    assert r.json()["analysis_id"] == "hansen_gfc"
+    assert fake.refreshed == [(_PROJECT_ID, "hansen_gfc", _ADMIN_ID)]
