@@ -17,6 +17,14 @@ export default function ManagePermissionsPanel({ open, user, onClose, onChanged 
   const [grants, setGrants] = useState(null);
   const [error, setError] = useState(null);
   const [busyName, setBusyName] = useState(null);
+  // The checkbox is a controlled input driven off `grants`, which only
+  // updates once the grant/revoke round-trip finishes - without this, a
+  // click's native DOM toggle gets forced straight back by React's very
+  // next render (the `checked` prop hasn't moved yet), so the toggle visibly
+  // snaps back to its old state for the whole request instead of reflecting
+  // the click immediately. Keyed by permission name so only the toggle just
+  // clicked shows the optimistic value; cleared once the real state lands.
+  const [pending, setPending] = useState({});
 
   useEffect(() => {
     const dialog = ref.current;
@@ -45,6 +53,7 @@ export default function ManagePermissionsPanel({ open, user, onClose, onChanged 
   }
 
   async function toggle(permissionName, granted) {
+    setPending((p) => ({ ...p, [permissionName]: !granted }));
     setBusyName(permissionName);
     setError(null);
     try {
@@ -56,6 +65,11 @@ export default function ManagePermissionsPanel({ open, user, onClose, onChanged 
     } catch (err) {
       setError(err.message ?? "Could not update this permission.");
     } finally {
+      setPending((p) => {
+        const next = { ...p };
+        delete next[permissionName];
+        return next;
+      });
       setBusyName(null);
     }
   }
@@ -83,25 +97,26 @@ export default function ManagePermissionsPanel({ open, user, onClose, onChanged 
           Administrators already have every permission implicitly - there is nothing to grant.
         </p>
       ) : !grants ? (
-        <p className="field-hint">Loading…</p>
+        <p className="field-hint">Loading permissions…</p>
       ) : (
         <ul className="permission-toggle-list">
           {PERMISSION_REGISTRY.map((p) => {
             const grant = grants.find((g) => g.permission_name === p.name);
             const granted = !!grant;
+            const checked = p.name in pending ? pending[p.name] : granted;
             return (
               <li key={p.name} className="permission-toggle-row">
                 <label className="checkbox-field">
                   <input
                     type="checkbox"
-                    checked={granted}
+                    checked={checked}
                     disabled={busyName === p.name}
                     onChange={() => toggle(p.name, granted)}
                   />
                   {p.label}
                 </label>
                 <p className="field-hint">{p.description}</p>
-                {granted ? (
+                {granted && !(p.name in pending) ? (
                   <p className="field-hint">
                     Granted by {grant.granted_by_username ?? "an account that no longer exists"} on{" "}
                     {formatDate(grant.granted_at)}
