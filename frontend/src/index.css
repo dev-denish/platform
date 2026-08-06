@@ -1519,6 +1519,13 @@ button:not(:disabled):active,
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  /* An icon + label button (e.g. "Compare", "Views", "Save image") is two
+   * flex children with only a literal space character between them in JSX -
+   * flexbox collapses a whitespace-only text node to zero width, so without
+   * an explicit gap the icon glyph touches the label (same reason
+   * .primary-button sets gap: 8px). No-op for icon-only/text-only buttons
+   * (Zoom in/out, Extent) since gap only applies between multiple children. */
+  gap: 6px;
   min-width: 28px;
   height: 28px;
   padding: 0 10px;
@@ -2654,6 +2661,21 @@ button:not(:disabled):active,
   background: var(--surface);
   overflow: hidden;
   font-size: 12.5px;
+}
+
+/* The middle column's MapToolbar (zoom/measure/draw/etc.) sits above ONLY
+ * .map-body, not above these two side columns - without this, their
+ * .analysis-column-title headers start right at the top of the row while
+ * Layers' header (below the toolbar) starts lower, a staircase instead of
+ * one straight line. This is a blank placeholder row of the exact same
+ * height as .map-toolbar (28px button + 6px top/bottom padding + 1px
+ * border-bottom = 41px), not a second real toolbar - it exists purely so
+ * both titles start at Layers' Y position instead of above it. */
+.analysis-column-toolbar-spacer {
+  flex: none;
+  height: 41px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
 }
 
 /* Same accent bar as .layers-panel-header, but a plain label - this column
