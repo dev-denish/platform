@@ -30,9 +30,9 @@ async function gotoAnalysisView(page, creds = ADMIN) {
 test.describe("Analysis view", () => {
   test("lists the whole registry, in-development entries included but de-emphasized", async ({ page }) => {
     await gotoAnalysisView(page);
-    // 13 catalog entries, grouped by category.
-    await expect(page.locator(".analysis-row")).toHaveCount(13);
-    await expect(page.locator(".analysis-row-muted")).toHaveCount(8);
+    // 16 catalog entries, grouped by category.
+    await expect(page.locator(".analysis-row")).toHaveCount(16);
+    await expect(page.locator(".analysis-row-muted")).toHaveCount(11);
     await expect(page.getByRole("button", { name: /^Forest Change$/ })).toBeVisible();
 
     // An in-development entry: honest empty state, no numbers, no run button.
