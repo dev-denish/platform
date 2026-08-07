@@ -21,7 +21,7 @@ import ProjectMap from "./ProjectMap.jsx";
 
 /**
  * The Maps tab's "Analysis" view (Wave: GEE analysis registry) - three
- * regions: the registry list on the left (GET /projects/{id}/analyses, all 13
+ * regions: the registry list on the left (GET /projects/{id}/analyses, all 16
  * catalog entries, grouped by category), the existing project map in the
  * middle with the selected analysis's GEE tiles laid over it, and that
  * analysis's cached stats/legend on the right.
@@ -49,6 +49,14 @@ import ProjectMap from "./ProjectMap.jsx";
 const POLL_INTERVAL_MS = 2000;
 const POLL_TIMEOUT_MS = 5 * 60 * 1000;
 const TERMINAL_STATUSES = ["succeeded", "failed", "dead_letter"];
+
+/** The button's in-flight label. `runStatus` is only set on the async
+ * (job-polling) path, and only once the first poll response lands - a sync
+ * analysis, or the moment between click and that first poll, has nothing to
+ * report yet, so both default to the same "Computing…" as before. */
+function runningLabel(runStatus) {
+  return runStatus === "queued" ? "Queued…" : "Computing…";
+}
 
 /** Rows are keyed on the analysis id; a whole result object is only ever
  * fetched for the one currently selected. */
@@ -439,7 +447,7 @@ export default function AnalysisPanel({ projectId, layers, onRefreshLayers, onLe
         )}
         {canRun ? (
           <button type="button" className="primary-button" disabled={running} onClick={runAnalysis}>
-            {running ? "Computing…" : result ? "Refresh" : "Run analysis"}
+            {running ? runningLabel(runStatus) : result ? "Refresh" : "Run analysis"}
           </button>
         ) : null}
       </>
