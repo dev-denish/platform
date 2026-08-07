@@ -1,21 +1,24 @@
 import { memo, useEffect, useRef, useState } from "react";
-import { Bookmark, Camera, ChevronDown, Columns2, MapPin, Minus, Plus, X } from "lucide-react";
+import { Bookmark, Camera, ChevronDown, Columns2, Eye, Frame, MapPin, Minus, Pencil, Plus, Ruler, X } from "lucide-react";
 import BasemapToggle from "./BasemapToggle.jsx";
 import { parseLatLon } from "../lib/measure.js";
 
 /**
- * Full-width top toolbar (Wave: map UI redesign) - replaces the old
- * bottom-right/floating GEE-style controls. Every control here is a
- * relocation + restyle of an existing tool (zoom, Extent/fit-bounds,
- * distance/area measuring, pixel inspection, basemap picker); none of their
- * actual behavior changes, only where they live. The live Lat/Lon/Zoom/Scale
- * readout on the right is derived entirely from the map's own live state
- * (see ProjectMap.jsx's MapViewSync) - no backend involved.
+ * The map toolbar's floating panel contents (Wave: floating map controls) -
+ * revealed by the wrench toggle in ProjectMap.jsx's map-overlay-topleft, a
+ * single small floating card rather than the old full-width docked bar. Every
+ * control here is the same tool as before (zoom, Extent/fit-bounds,
+ * distance/area measuring, pixel inspection, basemap picker); only where it
+ * lives changed. The live Lat/Lon/Zoom/Scale readout no longer lives here at
+ * all - it moved to its own floating badge in the map's bottom-right corner
+ * (see ProjectMap.jsx's CoordinateBadge), since the toolbar itself is now
+ * collapsed by default and the readout needs to stay visible either way.
  *
- * Wave: map toolbar capabilities adds Compare (before/after swipe), Save image,
- * jump-to-coordinates, click-to-copy on that readout, and per-project view
- * bookmarks - all following the same MeasureMenu/DrawMenu dropdown shape and
- * map-toolbar-btn classes as everything already here.
+ * Extent/Measure/Draw/Identify are icon-only (with hover tooltips via
+ * title/aria-label, same as every other icon-only control in this app - see
+ * FullscreenToggle/JumpToCoords) now that the panel floats free of the side
+ * columns that used to force a two-row/readout-row split to fit a narrower
+ * width - one row is plenty of room for icons.
  *
  * Every dropdown here (Measure/Draw/Compare/Views) is a controlled component:
  * which one is open is ONE piece of state owned by MapToolbar (`openMenu`), not
@@ -33,10 +36,12 @@ function MeasureMenu({ mode, onSelect, isOpen, onOpenChange }) {
     <div className="map-toolbar-dropdown">
       <button
         type="button"
-        className={`map-toolbar-btn map-toolbar-btn-text${active ? " map-toolbar-btn-active" : ""}`}
+        className={`map-toolbar-btn${active ? " map-toolbar-btn-active" : ""}`}
         onClick={() => onOpenChange(!isOpen)}
+        aria-label="Measure"
+        title="Measure"
       >
-        Measure <ChevronDown size={14} strokeWidth={2} className="icon" aria-hidden="true" />
+        <Ruler size={16} strokeWidth={2} className="icon" />
       </button>
       {isOpen ? (
         <div className="map-toolbar-menu">
@@ -72,10 +77,12 @@ function DrawMenu({ mode, onSelect, isOpen, onOpenChange }) {
     <div className="map-toolbar-dropdown">
       <button
         type="button"
-        className={`map-toolbar-btn map-toolbar-btn-text${mode !== "none" ? " map-toolbar-btn-active" : ""}`}
+        className={`map-toolbar-btn${mode !== "none" ? " map-toolbar-btn-active" : ""}`}
         onClick={() => onOpenChange(!isOpen)}
+        aria-label="Draw"
+        title="Draw"
       >
-        Draw <ChevronDown size={14} strokeWidth={2} className="icon" aria-hidden="true" />
+        <Pencil size={16} strokeWidth={2} className="icon" />
       </button>
       {isOpen ? (
         <div className="map-toolbar-menu">
@@ -388,11 +395,10 @@ function JumpToCoords({ onJump }) {
 }
 
 /**
- * memo'd - but note this DOES still re-render on every pointer move over the
- * map, by design: lat/lon/zoom/scaleLabel are the live readout and genuinely
- * change. The memo earns its keep on the OTHER re-renders (layer toggles,
- * opacity slider, pixel popups) where none of its props changed at all. The
- * mousemove cost is bounded by MapViewSync's rAF throttle, not by this memo.
+ * memo'd like before - now genuinely stable across the mousemove-driven
+ * `mapView` state, since that live readout no longer lives in this
+ * component at all (see CoordinateBadge in ProjectMap.jsx) - this only
+ * re-renders on an actual toolbar interaction (layer/basemap/mode change).
  */
 function MapToolbar({
   onZoomIn,
@@ -411,14 +417,8 @@ function MapToolbar({
   onJump,
   projectId,
   center,
-  lat,
-  lon,
   zoom,
-  scaleLabel,
 }) {
-  const [copied, setCopied] = useState(false);
-  const copyTimerRef = useRef(null);
-
   // The single source of truth for which dropdown is open: "measure" | "draw" |
   // "more" | null. Setting one necessarily unsets the others, so two menus
   // can never be on screen at the same time. Compare/Views used to be
@@ -430,88 +430,37 @@ function MapToolbar({
     onOpenChange: (next) => setOpenMenu(next ? id : null),
   });
 
-  useEffect(() => () => clearTimeout(copyTimerRef.current), []);
-
-  async function copyCoords() {
-    if (lat == null || lon == null) return;
-    try {
-      await navigator.clipboard.writeText(`${lat.toFixed(5)}, ${lon.toFixed(5)}`);
-      setCopied(true);
-      // Restart rather than stack, so a second click doesn't have the first
-      // click's timer cut its own confirmation short.
-      clearTimeout(copyTimerRef.current);
-      copyTimerRef.current = setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // Clipboard permission denied / insecure context - nothing useful to say
-      // in a one-line readout, and the coordinates are still visible to select.
-    }
-  }
-
   return (
     <div className="map-toolbar">
-      {/* Wave: toolbar overflow. Two FIXED rows (flex-wrap: nowrap on each),
-       * not one auto-wrapping row - the Analysis panel's side columns
-       * permanently narrow this toolbar below what even the reduced,
-       * post-More-menu control set needs for one row (measured: as little as
-       * ~525px available at the narrowest real layout, vs ~650px needed for
-       * every control on one line). Letting flex-wrap decide per-button
-       * produces a different, unpredictable ragged split at every width -
-       * this is the "controlled two-row layout" instead: the SAME two
-       * groupings always, at every width, never reshuffled. The readout gets
-       * its own row for the same reason (it alone needs ~480px, unshrinkable
-       * since it's nowrap text) rather than competing with either row. */}
-      <div className="map-toolbar-row">
-        <button type="button" className="map-toolbar-btn" onClick={onZoomIn} aria-label="Zoom in" title="Zoom in">
-          <Plus size={18} strokeWidth={2} className="icon" />
-        </button>
-        <button type="button" className="map-toolbar-btn" onClick={onZoomOut} aria-label="Zoom out" title="Zoom out">
-          <Minus size={18} strokeWidth={2} className="icon" />
-        </button>
-        <button type="button" className="map-toolbar-btn map-toolbar-btn-text" onClick={onExtent}>
-          Extent
-        </button>
-        <MeasureMenu mode={measureMode} onSelect={onSelectMeasureMode} {...menuProps("measure")} />
-        <DrawMenu mode={drawMode} onSelect={onSelectDrawMode} {...menuProps("draw")} />
-        <button
-          type="button"
-          className={`map-toolbar-btn map-toolbar-btn-text${measureMode === "inspect" && drawMode === "none" ? " map-toolbar-btn-active" : ""}`}
-          onClick={() => onSelectMeasureMode("inspect")}
-        >
-          Identify
-        </button>
-      </div>
-      <div className="map-toolbar-row">
-        <BasemapToggle mode={basemapMode} onChange={onBasemapChange} />
-        <MoreMenu
-          compareProps={{ options: compareOptions, compare, onChange: onCompareChange }}
-          bookmarksProps={{ projectId, center, zoom, onJump }}
-          onExportImage={onExportImage}
-          {...menuProps("more")}
-        />
-        <JumpToCoords onJump={onJump} />
-      </div>
-      <div className="map-toolbar-readout-row">
-        <div className="map-toolbar-readout">
-          <button
-            type="button"
-            className="map-toolbar-copy"
-            onClick={copyCoords}
-            disabled={lat == null || lon == null}
-            title="Copy these coordinates"
-          >
-            {lat != null && lon != null ? (
-              <>
-                Lat: {lat.toFixed(5)}° Lon: {lon.toFixed(5)}°
-              </>
-            ) : (
-              "Lat: — Lon: —"
-            )}
-            {copied ? <span className="map-toolbar-copied"> Copied!</span> : null}
-          </button>
-          {" | "}Zoom: {zoom ?? "—"}
-          {" | "}Scale: {scaleLabel ?? "—"}
-        </div>
-      </div>
+      <button type="button" className="map-toolbar-btn" onClick={onZoomIn} aria-label="Zoom in" title="Zoom in">
+        <Plus size={18} strokeWidth={2} className="icon" />
+      </button>
+      <button type="button" className="map-toolbar-btn" onClick={onZoomOut} aria-label="Zoom out" title="Zoom out">
+        <Minus size={18} strokeWidth={2} className="icon" />
+      </button>
+      <button type="button" className="map-toolbar-btn" onClick={onExtent} aria-label="Extent" title="Extent">
+        <Frame size={16} strokeWidth={2} className="icon" />
+      </button>
+      <MeasureMenu mode={measureMode} onSelect={onSelectMeasureMode} {...menuProps("measure")} />
+      <DrawMenu mode={drawMode} onSelect={onSelectDrawMode} {...menuProps("draw")} />
+      <button
+        type="button"
+        className={`map-toolbar-btn${measureMode === "inspect" && drawMode === "none" ? " map-toolbar-btn-active" : ""}`}
+        onClick={() => onSelectMeasureMode("inspect")}
+        aria-label="Identify"
+        title="Identify"
+      >
+        <Eye size={16} strokeWidth={2} className="icon" />
+      </button>
+      <span className="map-toolbar-divider" aria-hidden="true" />
+      <BasemapToggle mode={basemapMode} onChange={onBasemapChange} />
+      <MoreMenu
+        compareProps={{ options: compareOptions, compare, onChange: onCompareChange }}
+        bookmarksProps={{ projectId, center, zoom, onJump }}
+        onExportImage={onExportImage}
+        {...menuProps("more")}
+      />
+      <JumpToCoords onJump={onJump} />
     </div>
   );
 }

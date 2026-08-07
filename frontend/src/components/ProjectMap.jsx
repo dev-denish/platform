@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   MapContainer,
   TileLayer,
@@ -17,7 +18,7 @@ import {
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { toPng } from "html-to-image";
-import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { Layers as LayersIcon, Wrench } from "lucide-react";
 import { apiFetch, API_BASE } from "../config.js";
 import { DATASET_TYPE_COLORS } from "../lib/colors.js";
 import { basemapFor } from "../lib/basemap.js";
@@ -168,6 +169,92 @@ function ScaleControl() {
     return () => control.remove();
   }, [map]);
   return null;
+}
+
+/**
+ * Live Lat/Lon/Zoom/Scale readout (Wave: floating map controls) - relocated
+ * out of the (now floating, collapsed-by-default) toolbar into its own small
+ * badge in the map's bottom-right corner, sharing that corner with Leaflet's
+ * own scale bar above (ScaleControl). A plain sibling React overlay at a
+ * hand-picked bottom/right offset would have to guess the scale bar's own
+ * height to avoid overlapping it, and that guess breaks the moment either
+ * badge's content changes size. Adding this as a genuine `L.control` at the
+ * same "bottomright" position instead lets Leaflet's own corner-stacking
+ * (same mechanism that already places the scale bar) lay the two badges out
+ * for free, in DOM order - "two small badges sharing that corner" with no
+ * manual math.
+ *
+ * The control's DOM node is created once (onAdd) and handed to a React
+ * portal rather than built with string/innerHTML updates, so click-to-copy
+ * (carried over from the old toolbar readout) stays real React state/JSX -
+ * same "keep the actual rendering inside React's model" reasoning this
+ * file's other hand-rolled Leaflet integrations (SwipeClip, etc.) already
+ * follow.
+ */
+function CoordinateBadge({ lat, lon, zoom, scaleLabel }) {
+  const map = useMap();
+  const [container, setContainer] = useState(null);
+  const [copied, setCopied] = useState(false);
+  const copyTimerRef = useRef(null);
+
+  useEffect(() => {
+    const control = L.control({ position: "bottomright" });
+    control.onAdd = () => {
+      const div = L.DomUtil.create("div", "map-coord-badge");
+      // Without this, a click on the copy button also reaches the map
+      // underneath (pixel-inspect / measure-point), same as any other
+      // interactive control content sitting over the map canvas.
+      L.DomEvent.disableClickPropagation(div);
+      return div;
+    };
+    control.addTo(map);
+    setContainer(control.getContainer());
+    return () => {
+      control.remove();
+      setContainer(null);
+    };
+  }, [map]);
+
+  useEffect(() => () => clearTimeout(copyTimerRef.current), []);
+
+  async function copyCoords() {
+    if (lat == null || lon == null) return;
+    try {
+      await navigator.clipboard.writeText(`${lat.toFixed(5)}, ${lon.toFixed(5)}`);
+      setCopied(true);
+      // Restart rather than stack, so a second click doesn't have the first
+      // click's timer cut its own confirmation short.
+      clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard permission denied / insecure context - nothing useful to say
+      // in a one-line readout, and the coordinates are still visible to select.
+    }
+  }
+
+  if (!container) return null;
+
+  return createPortal(
+    <button
+      type="button"
+      className="map-toolbar-copy"
+      onClick={copyCoords}
+      disabled={lat == null || lon == null}
+      title="Copy these coordinates"
+    >
+      {lat != null && lon != null ? (
+        <>
+          Lat: {lat.toFixed(5)}° Lon: {lon.toFixed(5)}°
+        </>
+      ) : (
+        "Lat: — Lon: —"
+      )}
+      {copied ? <span className="map-toolbar-copied"> Copied!</span> : null}
+      {" | "}Zoom: {zoom ?? "—"}
+      {" | "}Scale: {scaleLabel ?? "—"}
+    </button>,
+    container
+  );
 }
 
 /**
@@ -482,10 +569,16 @@ export default function ProjectMap({ layers, onRefreshLayers, onLegendChanged, p
   const [swipeLayer, setSwipeLayer] = useState(null);
   const canvasRef = useRef(null);
 
-  // Whole-panel collapse (not LayersPanel's own internal accordion, which is
-  // untouched): hides the entire docked column to give the map its width back.
-  // sessionStorage-backed via the same useCollapse the panel's own groups use.
-  const [panelOpen, togglePanel] = useCollapse("collapse:map-layers-column", true);
+  // Wave: floating map controls. The toolbar and Layers panel are now
+  // floating overlays, not docked-in-flow columns - each toggle is its own
+  // sessionStorage-backed useCollapse, same pattern the rest of the app
+  // already uses for collapsible state, but now defaulting to CLOSED so the
+  // map gets full width/space on first load. Neither toggle affects the map
+  // canvas's own box size any more (they float on top of it), so there is no
+  // longer an invalidateSize effect tied to either - see the old
+  // `panelOpen`-driven one this replaced.
+  const [toolbarOpen, toggleToolbar] = useCollapse("collapse:map-toolbar-panel", false);
+  const [layersOpen, toggleLayers] = useCollapse("collapse:map-layers-panel", false);
 
   // Phase 3 Wave F: real browser Fullscreen API (not a CSS-only fake) on the
   // whole `.map-frame` card, so the map AND its overlaid chrome (toolbar,
@@ -723,13 +816,6 @@ export default function ProjectMap({ layers, onRefreshLayers, onLegendChanged, p
     }
   }, [mapRef]);
 
-  // Leaflet caches its container size (same reason FullscreenInvalidate
-  // exists) - collapsing the Layers column changes the map's width without any
-  // event Leaflet listens to, so tell it to re-measure.
-  useEffect(() => {
-    if (mapRef) setTimeout(() => mapRef.invalidateSize(), 0);
-  }, [panelOpen, mapRef]);
-
   // Dated raster layers are the only ones a before/after swipe is meaningful
   // for (and the only kind that renders as a plain <TileLayer>, which is what
   // SwipeClip clips). Oldest first, so the toolbar's defaults read
@@ -964,88 +1050,102 @@ export default function ProjectMap({ layers, onRefreshLayers, onLegendChanged, p
         onRetry={() => window.location.reload()}
       />
       <div className="map-frame" ref={mapFrameRef}>
-        <MapToolbar
-          onZoomIn={zoomIn}
-          onZoomOut={zoomOut}
-          onExtent={fitExtent}
-          measureMode={measureMode}
-          onSelectMeasureMode={selectMeasureMode}
-          drawMode={drawMode}
-          onSelectDrawMode={selectDrawMode}
-          basemapMode={basemapMode}
-          onBasemapChange={setBasemapMode}
-          compareOptions={compareOptions}
-          compare={compare}
-          onCompareChange={setCompare}
-          onExportImage={exportImage}
-          onJump={jumpTo}
-          projectId={projectId}
-          center={mapView.center}
-          lat={(mapView.pos ?? mapView.center)?.lat}
-          lon={(mapView.pos ?? mapView.center)?.lng}
-          zoom={mapView.zoom}
-          scaleLabel={mapView.zoom != null ? scaleRatioLabel(mapView.zoom, (mapView.pos ?? mapView.center)?.lat ?? 0) : null}
-        />
-        <div className="map-body">
-          {panelOpen ? (
-            <LayersPanel
-              layers={layers}
-              layerState={layerState}
-              symbologyState={symbologyState}
-              vectorData={vectorData}
-              onToggleVisibility={toggle}
-              onOpacityChange={setOpacity}
-              onSymbologyChange={updateSymbology}
-              onRefreshLayers={onRefreshLayers}
-              onLegendChanged={onLegendChanged}
-              projectId={projectId}
-            />
-          ) : null}
-          <div className="map-canvas-wrap" ref={canvasRef}>
-            {/* Phase 3 Wave E: plain React overlays, siblings of
-             * <MapContainer> (not react-leaflet children) - none of these
-             * need Leaflet's map context, just `.map-canvas-wrap` itself as
-             * the positioned ancestor. */}
-            <div className="map-overlay-topleft">
-              {/* Whole-column show/hide. Lives here, not in LayersPanel: it
-               * has to stay reachable once that panel is gone. */}
+        <div className="map-canvas-wrap" ref={canvasRef}>
+          {/* Phase 3 Wave E: plain React overlays, siblings of
+           * <MapContainer> (not react-leaflet children) - none of these
+           * need Leaflet's map context, just `.map-canvas-wrap` itself as
+           * the positioned ancestor.
+           *
+           * Wave: floating map controls. The toolbar and Layers panel used
+           * to be docked-in-flow (a full-width bar above the map, a fixed
+           * column beside it) - both are now floating overlays living here
+           * instead, so the map canvas gets the full frame. The two toggles
+           * sit in their own row; the toolbar/Layers panels (when open) and
+           * the measure/draw floating badges are simply later children of
+           * this same flex-column overlay, which is what keeps them all
+           * stacked without overlap whether one, both, or neither panel is
+           * open - no extra positioning math needed. */}
+          <div className="map-overlay-topleft">
+            <div className="map-floating-toggle-row">
+              <button
+                type="button"
+                className="map-floating-toggle map-floating-toggle-toolbar"
+                onClick={toggleToolbar}
+                aria-expanded={toolbarOpen}
+                aria-label={toolbarOpen ? "Hide map tools" : "Show map tools"}
+                title={toolbarOpen ? "Hide map tools" : "Show map tools"}
+              >
+                <Wrench size={16} strokeWidth={2} className="icon" />
+              </button>
               {layers.length > 0 ? (
                 <button
                   type="button"
-                  className="icon-button"
-                  onClick={togglePanel}
-                  aria-expanded={panelOpen}
-                  aria-label={panelOpen ? "Hide the Layers panel" : "Show the Layers panel"}
-                  title={panelOpen ? "Hide the Layers panel" : "Show the Layers panel"}
+                  className="map-floating-toggle map-floating-toggle-layers"
+                  onClick={toggleLayers}
+                  aria-expanded={layersOpen}
+                  aria-label={layersOpen ? "Hide the Layers panel" : "Show the Layers panel"}
+                  title={layersOpen ? "Hide the Layers panel" : "Show the Layers panel"}
                 >
-                  {panelOpen ? (
-                    <PanelLeftClose size={16} strokeWidth={2} className="icon" />
-                  ) : (
-                    <PanelLeftOpen size={16} strokeWidth={2} className="icon" />
-                  )}
+                  <LayersIcon size={16} strokeWidth={2} className="icon" />
                 </button>
               ) : null}
-              <MeasureTools
-                mode={measureMode}
-                onClear={clearMeasurement}
-                result={measureResult}
-                pointCount={measurePoints.length}
-              />
-              <DrawTools
-                mode={drawMode}
-                points={drawPoints}
-                finished={drawFinished}
-                onFinish={() => setDrawFinished(true)}
-                onReset={() => resetDraw(drawMode)}
-                onCancel={() => resetDraw("none")}
+            </div>
+            {toolbarOpen ? (
+              <MapToolbar
+                onZoomIn={zoomIn}
+                onZoomOut={zoomOut}
+                onExtent={fitExtent}
+                measureMode={measureMode}
+                onSelectMeasureMode={selectMeasureMode}
+                drawMode={drawMode}
+                onSelectDrawMode={selectDrawMode}
+                basemapMode={basemapMode}
+                onBasemapChange={setBasemapMode}
+                compareOptions={compareOptions}
+                compare={compare}
+                onCompareChange={setCompare}
+                onExportImage={exportImage}
+                onJump={jumpTo}
                 projectId={projectId}
-                onRefreshLayers={onRefreshLayers}
+                center={mapView.center}
+                zoom={mapView.zoom}
               />
-            </div>
-            <div className="map-overlay-topright">
-              <FullscreenToggle active={isFullscreen} onClick={toggleFullscreen} />
-            </div>
-            {compare ? (
+            ) : null}
+            {layersOpen && layers.length > 0 ? (
+              <LayersPanel
+                layers={layers}
+                layerState={layerState}
+                symbologyState={symbologyState}
+                vectorData={vectorData}
+                onToggleVisibility={toggle}
+                onOpacityChange={setOpacity}
+                onSymbologyChange={updateSymbology}
+                onRefreshLayers={onRefreshLayers}
+                onLegendChanged={onLegendChanged}
+                projectId={projectId}
+              />
+            ) : null}
+            <MeasureTools
+              mode={measureMode}
+              onClear={clearMeasurement}
+              result={measureResult}
+              pointCount={measurePoints.length}
+            />
+            <DrawTools
+              mode={drawMode}
+              points={drawPoints}
+              finished={drawFinished}
+              onFinish={() => setDrawFinished(true)}
+              onReset={() => resetDraw(drawMode)}
+              onCancel={() => resetDraw("none")}
+              projectId={projectId}
+              onRefreshLayers={onRefreshLayers}
+            />
+          </div>
+          <div className="map-overlay-topright">
+            <FullscreenToggle active={isFullscreen} onClick={toggleFullscreen} />
+          </div>
+          {compare ? (
               <div
                 className="map-swipe-divider"
                 style={{ left: `${swipePct}%` }}
@@ -1158,7 +1258,6 @@ export default function ProjectMap({ layers, onRefreshLayers, onLegendChanged, p
                 <TileLayer key={overlayTileUrl} url={overlayTileUrl} opacity={0.8} zIndex={400} maxZoom={22} />
               ) : null}
             </MapContainer>
-          </div>
         </div>
       </div>
     </div>
