@@ -45,11 +45,17 @@ no Cloud Score+ equivalent (would need QA_PIXEL bit-mask instead), 30m vs
 10m resolution, and a likely fake "trend break" at the sensor handoff year -
 real complications, not a drop-in extension.
 
-UNLIKE the first six, these run as an async job (app/workers/gee_analysis_
+UNLIKE the first five (the sync land-cover/forest-change dataset queries
+above), all five of these run as an async job (app/workers/gee_analysis_
 jobs.py), not synchronously - decided from real measured timing, not a
-guess: the isolated reduceRegion-only estimate looked like ~3.5-4s, but the
-actual end-to-end call (same code path a real request uses) measured 5-59s
-across repeated runs against real boundaries, well past "a few seconds".
+guess: NDVI's isolated reduceRegion-only estimate looked like ~3.5-4s, but
+the actual end-to-end call (same code path a real request uses) measured
+5-59s across repeated runs against real boundaries, well past "a few
+seconds". EVI/SAVI/MNDWI/NBR share NDVI's exact compositing/reduceRegion
+path via `_annual_index_series` (only the final band-math formula differs,
+a negligible marginal cost) and were spot-checked live rather than assumed:
+same order of magnitude as NDVI, so the same async decision applies to all
+five without re-measuring each one from a blank slate.
 `refresh()` below is for "sync"-execution catalog entries only;
 `enqueue_refresh()` is the "async" path, mirroring POST /datasets/upload's
 own job-queue dispatch exactly (validate synchronously so a bad request
@@ -263,6 +269,14 @@ def _compute(
         return _modis_lulc(boundary)
     if analysis_id == "ndvi":
         return _ndvi_query(boundary)
+    if analysis_id == "evi":
+        return _evi_query(boundary)
+    if analysis_id == "savi":
+        return _savi_query(boundary)
+    if analysis_id == "mndwi":
+        return _mndwi_query(boundary)
+    if analysis_id == "nbr":
+        return _nbr_query(boundary)
     # refresh() already rejects any non-"available" analysis_id before calling this.
     raise AssertionError(f"no query function wired for {analysis_id!r}")
 
@@ -498,17 +512,17 @@ def _annual_index_series(
     `ee.Image -> ee.Image` formula (e.g. NDVI's normalizedDifference) applied
     to each year's reflectance composite. Builds the whole N-year
     computation graph in a Python loop but calls .getInfo() exactly once for
-    the whole series (verified live: ~3.5-4s for the full 2017-present range
-    over a real boundary - comfortably synchronous, same one-round-trip
-    convention as the two annual analyses above).
+    the whole series - one round trip regardless of year count, same
+    convention as the two annual (per-year) analyses above, but still slow
+    enough end-to-end (5-59s measured for NDVI, see this module's own
+    docstring) that every caller of this function runs async, not sync.
 
     Only the LATEST year gets a map tile (one extra getMapId() call) - not
     all N years. A per-year tile for the timeline scrubber to switch between
-    was considered; deferred until real timing shows there's headroom for
-    N extra getMapId() round trips without risking the sync budget this
-    whole batch was measured against. The scrubber still has a real job:
-    it drives which year's point is highlighted on the trend chart, using
-    the already-fetched series - no extra backend call for that part."""
+    was considered; deferred rather than adding N extra getMapId() round
+    trips to an already-async path. The scrubber still has a real job: it
+    drives which year's point is highlighted on the trend chart, using the
+    already-fetched series - no extra backend call for that part."""
     per_year_value = {}
     latest_year = max(_VEG_INDEX_YEARS)
     latest_image = None
@@ -539,6 +553,45 @@ def _annual_index_series(
 
 
 def _ndvi_query(boundary: ee.Geometry) -> tuple[dict[str, Any], None, str]:
+    # NDVI = (NIR - Red) / (NIR + Red). S2: NIR=B8, Red=B4.
     return _annual_index_series(
         boundary, lambda refl: refl.normalizedDifference(["B8", "B4"])
+    )
+
+
+def _evi_query(boundary: ee.Geometry) -> tuple[dict[str, Any], None, str]:
+    # EVI = 2.5 * (NIR - Red) / (NIR + 6*Red - 7.5*Blue + 1). S2: NIR=B8, Red=B4, Blue=B2.
+    return _annual_index_series(
+        boundary,
+        lambda refl: refl.expression(
+            "2.5 * (NIR - RED) / (NIR + 6 * RED - 7.5 * BLUE + 1)",
+            {"NIR": refl.select("B8"), "RED": refl.select("B4"), "BLUE": refl.select("B2")},
+        ),
+    )
+
+
+def _savi_query(boundary: ee.Geometry) -> tuple[dict[str, Any], None, str]:
+    # SAVI = ((NIR - Red) / (NIR + Red + L)) * (1 + L), L=0.5 (soil brightness
+    # correction). S2: NIR=B8, Red=B4.
+    soil_l = 0.5
+    return _annual_index_series(
+        boundary,
+        lambda refl: refl.expression(
+            "((NIR - RED) / (NIR + RED + L)) * (1 + L)",
+            {"NIR": refl.select("B8"), "RED": refl.select("B4"), "L": soil_l},
+        ),
+    )
+
+
+def _mndwi_query(boundary: ee.Geometry) -> tuple[dict[str, Any], None, str]:
+    # MNDWI = (Green - SWIR1) / (Green + SWIR1). S2: Green=B3, SWIR1=B11.
+    return _annual_index_series(
+        boundary, lambda refl: refl.normalizedDifference(["B3", "B11"])
+    )
+
+
+def _nbr_query(boundary: ee.Geometry) -> tuple[dict[str, Any], None, str]:
+    # NBR = (NIR - SWIR2) / (NIR + SWIR2). S2: NIR=B8, SWIR2=B12.
+    return _annual_index_series(
+        boundary, lambda refl: refl.normalizedDifference(["B8", "B12"])
     )

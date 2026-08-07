@@ -19,12 +19,14 @@ from typing import Literal, NotRequired, TypedDict
 AnalysisStatus = Literal["available", "in-development"]
 # Decided per entry from REAL measured timing (Wave: vegetation indices), not
 # guessed: "sync" analyses query a pre-built GEE dataset and return in a
-# normal request/response (the 6 land-cover/forest-change ones, all a few
+# normal request/response (the 5 land-cover/forest-change ones, all a few
 # seconds). "async" analyses compute fresh from raw imagery (cloud-free
 # compositing across multiple years) and go through the same job-queue/
 # polling pattern as dataset uploads instead - measured 5-59s end-to-end
-# across repeated real runs for NDVI's 2017-present series, well past "a few
-# seconds". Only meaningful for status="available" entries.
+# across repeated real runs for NDVI's 2017-present series (the other 4
+# vegetation indices share NDVI's exact compositing path and were spot-
+# checked at the same order of magnitude, see gee_analysis_service.py), well
+# past "a few seconds". Only meaningful for status="available" entries.
 AnalysisExecution = Literal["sync", "async"]
 
 
@@ -38,7 +40,7 @@ class AnalysisCatalogEntry(TypedDict):
 
 
 CATALOG: tuple[AnalysisCatalogEntry, ...] = (
-    # --- Real (6), status "available" ---
+    # --- Real (10), status "available" ---
     {
         "id": "hansen_gfc",
         "name": "Global Forest Change (Hansen)",
@@ -97,15 +99,51 @@ CATALOG: tuple[AnalysisCatalogEntry, ...] = (
             "(2017-present) from cloud-masked Sentinel-2 composites."
         ),
     },
-    # --- Deferred (7), status "in-development" ---
-    {"id": "evi", "name": "EVI", "category": "Vegetation Indices", "status": "in-development",
-     "description": "Enhanced Vegetation Index time series."},
-    {"id": "savi", "name": "SAVI", "category": "Vegetation Indices", "status": "in-development",
-     "description": "Soil-Adjusted Vegetation Index time series."},
-    {"id": "mndwi", "name": "MNDWI", "category": "Vegetation Indices", "status": "in-development",
-     "description": "Modified Normalized Difference Water Index time series."},
-    {"id": "nbr", "name": "NBR", "category": "Vegetation Indices", "status": "in-development",
-     "description": "Normalized Burn Ratio time series."},
+    {
+        "id": "evi",
+        "name": "EVI",
+        "category": "Vegetation Indices",
+        "status": "available",
+        "execution": "async",
+        "description": (
+            "Enhanced Vegetation Index, one value per year (2017-present) from "
+            "cloud-masked Sentinel-2 composites."
+        ),
+    },
+    {
+        "id": "savi",
+        "name": "SAVI",
+        "category": "Vegetation Indices",
+        "status": "available",
+        "execution": "async",
+        "description": (
+            "Soil-Adjusted Vegetation Index, one value per year (2017-present) from "
+            "cloud-masked Sentinel-2 composites."
+        ),
+    },
+    {
+        "id": "mndwi",
+        "name": "MNDWI",
+        "category": "Vegetation Indices",
+        "status": "available",
+        "execution": "async",
+        "description": (
+            "Modified Normalized Difference Water Index, one value per year "
+            "(2017-present) from cloud-masked Sentinel-2 composites."
+        ),
+    },
+    {
+        "id": "nbr",
+        "name": "NBR",
+        "category": "Vegetation Indices",
+        "status": "available",
+        "execution": "async",
+        "description": (
+            "Normalized Burn Ratio, one value per year (2017-present) from "
+            "cloud-masked Sentinel-2 composites."
+        ),
+    },
+    # --- Deferred (5), status "in-development" ---
     {"id": "sar", "name": "SAR", "category": "Radar", "status": "in-development",
      "description": "Sentinel-1 radar backscatter composite."},
     {"id": "landtrendr", "name": "LandTrendr", "category": "Forest Change",
