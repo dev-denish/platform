@@ -1168,6 +1168,12 @@ export default function ProjectMap({ layers, onRefreshLayers, onLegendChanged, p
               <FullscreenInvalidate />
               <MapViewSync onReady={setMapRef} onChange={setMapView} />
               <ScaleControl />
+              <CoordinateBadge
+                lat={(mapView.pos ?? mapView.center)?.lat}
+                lon={(mapView.pos ?? mapView.center)?.lng}
+                zoom={mapView.zoom}
+                scaleLabel={mapView.zoom != null ? scaleRatioLabel(mapView.zoom, (mapView.pos ?? mapView.center)?.lat ?? 0) : null}
+              />
               <MapClickRouter
                 mode={measureMode}
                 drawMode={drawMode}
