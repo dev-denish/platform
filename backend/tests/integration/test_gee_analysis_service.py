@@ -8,7 +8,7 @@ convention this file follows).
 `_compute` - the ONLY function that actually calls Google Earth Engine (see
 app/services/gee_analysis_service.py's own docstring) - is monkeypatched to a
 canned result for every test here, so this suite is fast/deterministic/CI-safe
-and needs no GEE credentials. The 5 real query functions were verified
+and needs no GEE credentials. The 10 real query functions were verified
 separately, end-to-end, against the live ee-kdenish4 project.
 
 Run locally with, e.g.:
@@ -219,10 +219,10 @@ def test_refresh_in_development_analysis_id_is_a_validation_error(db, analysis_s
     pid = _make_project(db, f"Proj-{uuid.uuid4()}")
     _add_boundary(db, pid)
 
-    # "evi" - still in-development (unlike "ndvi", which this test used before
-    # Wave: vegetation indices made it real).
+    # "sar" - still in-development (unlike "ndvi"/"evi"/"savi"/"mndwi"/"nbr",
+    # which this test used before Wave: vegetation indices made them real).
     with pytest.raises(ValidationError):
-        analysis_service.refresh(pid, "evi", admin)
+        analysis_service.refresh(pid, "sar", admin)
 
     assert fake_compute == []  # rejected before ever reaching GEE
 
@@ -235,6 +235,25 @@ def test_refresh_without_a_boundary_layer_is_a_validation_error(db, analysis_ser
         analysis_service.refresh(pid, "hansen_gfc", admin)
 
     assert fake_compute == []  # never called GEE with no AOI
+
+
+@pytest.mark.parametrize("analysis_id", ["ndvi", "evi", "savi", "mndwi", "nbr"])
+def test_refresh_rejects_an_async_execution_analysis(db, analysis_service, fake_compute, analysis_id):
+    """refresh() is the "sync"-execution path only (see its own docstring's
+    routing-invariant assert) - the route (app/api/v1/analyses.py) sends every
+    vegetation index through enqueue_refresh() instead, since all five share
+    NDVI's "async" execution mode. This proves that invariant holds for the
+    boundary/permission-validated request path, not just NDVI, so a future
+    catalog edit that flips one back to "sync" without updating its query
+    function fails loudly here rather than silently in production."""
+    admin = _make_user(db, Role.ADMINISTRATOR)
+    pid = _make_project(db, f"Proj-{uuid.uuid4()}")
+    _add_boundary(db, pid)
+
+    with pytest.raises(AssertionError):
+        analysis_service.refresh(pid, analysis_id, admin)
+
+    assert fake_compute == []  # never reached _compute - failed on the routing assert first
 
 
 # --------------------------------------------------------------- permission gating
