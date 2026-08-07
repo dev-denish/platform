@@ -459,7 +459,6 @@ export default function AnalysisPanel({ projectId, layers, onRefreshLayers, onLe
       <ErrorBanner message={listError} />
       <div className="analysis-layout">
         <aside className="analysis-column">
-          <div className="analysis-column-toolbar-spacer" aria-hidden="true" />
           <div className="analysis-column-title">Analyses</div>
           <div className="analysis-column-body">
             {groups.map((g) => (
@@ -483,7 +482,6 @@ export default function AnalysisPanel({ projectId, layers, onRefreshLayers, onLe
         />
 
         <aside className="analysis-column">
-          <div className="analysis-column-toolbar-spacer" aria-hidden="true" />
           <div className="analysis-column-title">
             {selected ? selected.name : "Results"}
             {result ? <span className="analysis-column-meta">Computed {formatDate(result.computed_at)}</span> : null}

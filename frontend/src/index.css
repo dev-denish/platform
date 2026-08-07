@@ -1489,35 +1489,34 @@ button:not(:disabled):active,
 
 /* ---------------------------------------------------------- map chrome (Wave: map UI redesign) */
 
-/* Full-width bar above the map - zoom/Extent/Measure/Identify/basemap on the
- * left, a live Lat/Lon/Zoom/Scale readout on the right. Replaces the old
- * floating GEE-style controls; every control inside is the same tool as
- * before, just relocated here (see MapToolbar.jsx). */
-/* Wave: toolbar overflow. A column of fixed rows, not one wide row - see
- * .map-toolbar-row below for why. */
+/* Wave: floating map controls. A small floating card revealed by the wrench
+ * toggle (map-overlay-topleft in ProjectMap.jsx), not a full-width docked
+ * bar any more - now that it floats free of the Analysis panel's side
+ * columns (the thing that used to force a two-row/readout-row split just to
+ * fit ~525px), one row is plenty for the whole icon-only control set. Same
+ * floating-chrome treatment (border/radius/shadow) as .map-toolbar-menu and
+ * .symbology-popover, the app's other floating map surfaces - no new tokens
+ * invented for this one. */
 .map-toolbar {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
-  flex: none;
-  padding: 6px 10px;
+  padding: 6px;
   background: var(--surface);
-  border-bottom: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lift);
   font-size: 12.5px;
 }
 
-/* Deliberately flex-wrap: NOWRAP - each row's own control set is sized to
- * always fit even the narrowest real toolbar width (measured ~525px at the
- * Analysis panel's 3-column breakpoint), so it never needs to wrap itself.
- * Two of these (nav/inspect controls, then settings/extras) instead of one
- * auto-wrapping row is what makes the split controlled and identical at
- * every width, rather than flex-wrap picking a different, ragged break
- * point depending on exactly how much room happens to be left over. */
-.map-toolbar-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: nowrap;
+/* Between the nav/inspect group (zoom/Extent/Measure/Draw/Identify) and the
+ * settings/extras group (basemap/More/jump-to-coordinates). */
+.map-toolbar-divider {
+  align-self: stretch;
+  width: 1px;
+  margin: 2px 0;
+  background: var(--border-strong);
 }
 
 .map-toolbar-btn {
@@ -1626,19 +1625,6 @@ button:not(:disabled):active,
   justify-content: flex-start;
 }
 
-/* Its own row (Wave: toolbar overflow) - right-aligned, matching where it
- * used to sit at the far end of the single wide row. */
-.map-toolbar-readout-row {
-  display: flex;
-  justify-content: flex-end;
-}
-
-.map-toolbar-readout {
-  font-family: var(--font-mono);
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-
 /* Wave: map toolbar capabilities ------------------------------------------- */
 
 /* Compare / Views menus hold selects and named rows, not just short verbs. */
@@ -1709,8 +1695,10 @@ button:not(:disabled):active,
   border-color: #a8332f;
 }
 
-/* The live coordinate readout is itself the copy button (click-to-copy) - it
- * has to look like the plain text it replaced, not like a control. */
+/* The live coordinate readout (now the bottom-right CoordinateBadge, see
+ * ProjectMap.jsx - moved off the toolbar itself in Wave: floating map
+ * controls) is itself the copy button (click-to-copy) - it has to look like
+ * the plain text it replaced, not like a control. */
 .map-toolbar-copy {
   padding: 0;
   border: none;
@@ -1760,18 +1748,13 @@ button:not(:disabled):active,
   box-shadow: 0 0 0 2px #ffffff;
 }
 
-/* The docked Layers column + the actual map, side by side, filling the rest
- * of .map-frame below the toolbar. */
-.map-body {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-}
-
+/* The map canvas now fills the whole .map-frame (Wave: floating map
+ * controls removed the docked toolbar bar + Layers column that used to sit
+ * beside/above it - see .map-overlay-topleft below for where both went). */
 .map-canvas-wrap {
   position: relative;
   flex: 1;
-  min-width: 0;
+  min-height: 0;
 }
 
 .map-overlay-topleft,
@@ -1784,13 +1767,61 @@ button:not(:disabled):active,
   gap: 8px;
 }
 
+/* align-items: flex-start - without it, flex's default `stretch` would widen
+ * every child (the toggle row, the toolbar panel, the Layers panel) to
+ * match whichever is widest, which is harmless visually (none of them paint
+ * a background of their own beyond their real content) but pointless; this
+ * keeps each child's own natural width instead. */
 .map-overlay-topleft {
   left: 10px;
+  align-items: flex-start;
 }
 
 .map-overlay-topright {
   right: 10px;
   align-items: flex-end;
+}
+
+/* Wave: floating map controls. The two toggles that reveal the toolbar/
+ * Layers floating panels - same small floating-button footprint as
+ * .icon-button (FullscreenToggle uses that one), but a solid fill instead
+ * of a translucent chrome-wash: these two need to read as distinct from
+ * each other at a glance (one dark/neutral, one the brand orange) rather
+ * than as a matched pair, since they open two unrelated panels. */
+.map-floating-toggle-row {
+  display: flex;
+  gap: 8px;
+}
+
+.map-floating-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lift);
+  color: #ffffff;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.12s ease-out, opacity 0.12s ease-out;
+}
+
+.map-floating-toggle-toolbar {
+  background: var(--sidebar-bg);
+}
+
+.map-floating-toggle-toolbar:hover {
+  background: var(--sidebar-bg-elevated);
+}
+
+.map-floating-toggle-layers {
+  background: var(--accent);
+}
+
+.map-floating-toggle-layers:hover {
+  background: var(--accent-strong);
 }
 
 /* Leaflet's default scale control, restyled to match the app's chrome
@@ -1809,6 +1840,26 @@ button:not(:disabled):active,
   font-size: 11px !important;
   padding: 2px 6px !important;
   border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  box-shadow: var(--shadow-card);
+}
+
+/* CoordinateBadge (ProjectMap.jsx) - a genuine Leaflet "bottomright" control
+ * sharing the scale bar's own corner (see that component's docstring for
+ * why), so it gets the exact same visual treatment as
+ * .leaflet-control-scale-line above: same wash background, hairline border,
+ * mono numerals, one shared corner. `L.Control.addTo` adds the standard
+ * `leaflet-control` class automatically (confirmed in leaflet-src.js), which
+ * already supplies this corner's float/clear/margin stacking - no extra
+ * spacing rule needed here for that. */
+.map-coord-badge {
+  background: var(--chrome-wash);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: nowrap;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
   box-shadow: var(--shadow-card);
 }
 
@@ -1833,19 +1884,28 @@ button:not(:disabled):active,
   color: var(--accent-strong);
 }
 
+/* Wave: floating map controls - a floating card (same border/radius/shadow
+ * treatment as .map-toolbar and every other floating map surface) revealed
+ * by the orange Layers toggle, instead of a column docked the full height
+ * of the map frame. `max-height` caps it well within .map-frame's 460px so
+ * it never runs off the bottom of the map it's floating over; the internal
+ * scroll this needs is still .layers-panel-groups's job, unchanged below. */
 .layers-panel {
   /* anchors .symbology-popover to this panel, not the viewport - deliberately
-   * NOT overflow:auto here even though it's the fixed-height docked column:
-   * that would clip the popover, which is positioned outside this element's
-   * own width (see .symbology-popover's `left: calc(100% + 10px)`).
+   * NOT overflow:auto here even though it's already height-capped: that
+   * would clip the popover, which is positioned outside this element's own
+   * width (see .symbology-popover's `left: calc(100% + 10px)`).
    * .layers-panel-groups below carries the actual scrolling instead. */
   position: relative;
   flex: none;
   width: 260px;
+  max-height: 400px;
   display: flex;
   flex-direction: column;
   background: var(--surface);
-  border-right: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lift);
   font-size: 12.5px;
 }
 
@@ -1858,6 +1918,10 @@ button:not(:disabled):active,
   background: var(--accent);
   color: #ffffff;
   border: none;
+  /* Matches .layers-panel's own border-radius (Wave: floating map controls) -
+   * this header's solid fill is the panel's very first pixel row, so without
+   * this it would square off the floating card's rounded top corners. */
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
   padding: 8px 12px;
   font-size: 12.5px;
   font-weight: 600;
@@ -2689,27 +2753,6 @@ button:not(:disabled):active,
   background: var(--surface);
   overflow: hidden;
   font-size: 12.5px;
-}
-
-/* The middle column's MapToolbar (zoom/measure/draw/etc.) sits above ONLY
- * .map-body, not above these two side columns - without this, their
- * .analysis-column-title headers start right at the top of the row while
- * Layers' header (below the toolbar) starts lower, a staircase instead of
- * one straight line. This is a blank placeholder row of the exact same
- * height as .map-toolbar, not a second real toolbar - it exists purely so
- * both titles start at Layers' Y position instead of above it.
- *
- * Height is measured, not computed from the box model: Wave: toolbar
- * overflow changed .map-toolbar from one row to a 3-row column (two fixed
- * nowrap control rows + the coordinate readout's own row), so this must
- * track whatever .map-toolbar actually renders at (100px as of that
- * change) - if the toolbar's row count/padding changes again, remeasure
- * this rather than guess. */
-.analysis-column-toolbar-spacer {
-  flex: none;
-  height: 100px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
 }
 
 /* Same accent bar as .layers-panel-header, but a plain label - this column
