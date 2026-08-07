@@ -1,5 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
+import {
+  CartesianGrid,
+  Line,
+  LineChart,
+  ReferenceDot,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import { apiFetch } from "../config.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useCollapse } from "../lib/useCollapse.js";
@@ -26,7 +36,19 @@ import ProjectMap from "./ProjectMap.jsx";
  * Stat shapes differ per analysis and are rendered by three small branches
  * (Hansen's totals, a single class breakdown, a per-year class breakdown) -
  * deliberately not a generic renderer for five real shapes.
+ *
+ * Wave: vegetation indices adds a 6th shape (`stats.series`, a per-year
+ * value) plus the timeline scrubber - see IndexTrendChart below - and an
+ * async job-queue path (POST refresh can return either the result directly
+ * or a {job_id} to poll, per the catalog entry's execution mode; see
+ * runAnalysis).
  */
+
+// Same polling pattern as UploadPage.jsx's job-status wait - job-kind
+// agnostic on the backend, so reused verbatim here rather than re-derived.
+const POLL_INTERVAL_MS = 2000;
+const POLL_TIMEOUT_MS = 5 * 60 * 1000;
+const TERMINAL_STATUSES = ["succeeded", "failed", "dead_letter"];
 
 /** Rows are keyed on the analysis id; a whole result object is only ever
  * fetched for the one currently selected. */
@@ -187,6 +209,70 @@ function HansenStats({ stats }) {
   );
 }
 
+/** NDVI/EVI/SAVI/MNDWI/NBR: one value per year, 2017-present. The timeline
+ * scrubber (a plain range input - no dedicated scrubber component existed
+ * anywhere in this app before) drives which year's point is highlighted
+ * here, using the already-fetched series - no extra backend call per drag.
+ * The map overlay is always the LATEST year regardless of scrubber position
+ * (the backend only generates one tile, to stay inside the timing budget
+ * this whole batch was measured against - see gee_analysis_service.py) -
+ * the caption below says so rather than implying otherwise. */
+function IndexTrendChart({ series }) {
+  const years = useMemo(() => Object.keys(series).sort(), [series]);
+  const [selectedYear, setSelectedYear] = useState(years[years.length - 1]);
+  const data = useMemo(
+    () => years.map((y) => ({ year: y, value: series[y] })),
+    [years, series]
+  );
+  const activeValue = series[selectedYear];
+
+  return (
+    <>
+      <ResponsiveContainer width="100%" height={160}>
+        <LineChart data={data} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#E5ECE8" />
+          <XAxis dataKey="year" tick={{ fontSize: 11 }} axisLine={{ stroke: "#E5ECE8" }} tickLine={false} />
+          <YAxis
+            domain={[-1, 1]}
+            tick={{ fontSize: 11 }}
+            axisLine={{ stroke: "#E5ECE8" }}
+            tickLine={false}
+            width={32}
+          />
+          <Tooltip formatter={(v) => (v == null ? "no data" : v.toFixed(4))} />
+          <Line
+            type="monotone"
+            dataKey="value"
+            stroke="var(--accent)"
+            strokeWidth={2}
+            dot={{ r: 3 }}
+            connectNulls
+          />
+          {activeValue != null ? (
+            <ReferenceDot x={selectedYear} y={activeValue} r={6} fill="var(--accent)" stroke="#fff" strokeWidth={2} />
+          ) : null}
+        </LineChart>
+      </ResponsiveContainer>
+      <label className="analysis-year-select">
+        <span>Year</span>
+        <input
+          type="range"
+          min={0}
+          max={years.length - 1}
+          step={1}
+          value={years.indexOf(selectedYear)}
+          onChange={(e) => setSelectedYear(years[Number(e.target.value)])}
+          aria-label="Select year"
+        />
+        <span className="mono-cell">
+          {selectedYear}: {activeValue != null ? activeValue.toFixed(3) : "no data"}
+        </span>
+      </label>
+      <p className="analysis-note">Map shows the latest year ({years[years.length - 1]}).</p>
+    </>
+  );
+}
+
 function AnalysisStats({ result }) {
   const { stats, legend } = result;
   return (
@@ -196,6 +282,7 @@ function AnalysisStats({ result }) {
       {stats.class_area_ha_by_year ? (
         <YearlyClassBreakdown byYear={stats.class_area_ha_by_year} legend={legend} />
       ) : null}
+      {stats.series ? <IndexTrendChart series={stats.series} /> : null}
       {stats.note ? <p className="analysis-note">{stats.note}</p> : null}
     </>
   );
@@ -209,6 +296,16 @@ export default function AnalysisPanel({ projectId, layers, onRefreshLayers, onLe
   const [result, setResult] = useState(null);
   const [resultError, setResultError] = useState(null);
   const [running, setRunning] = useState(false);
+  const [runStatus, setRunStatus] = useState(null); // async-job status while polling, else null
+
+  // Race guard for the async (job-polling) path below: if the user switches
+  // to a different analysis while one is still polling (can take a minute+
+  // for a fresh multi-year composite), that stale poll's eventual result
+  // must not overwrite whatever's now selected.
+  const selectedIdRef = useRef(selectedId);
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+  }, [selectedId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -258,22 +355,53 @@ export default function AnalysisPanel({ projectId, layers, onRefreshLayers, onLe
     return out;
   }, [entries]);
 
-  /** Real GEE compute, a few seconds per analysis (Hansen ~7s, Dynamic World
-   * ~13s) - hence the in-flight button state. The 422s this can return
-   * ("no Boundary layer yet") are end-user-readable and surfaced verbatim. */
+  /** Real GEE compute. Two shapes come back from POST refresh, depending on
+   * the catalog entry's execution mode (app/domain/analysis_catalog.py):
+   * "sync" analyses (Hansen ~7s, Dynamic World ~13s, etc.) return the result
+   * directly, same as before. "async" ones (NDVI et al. - a fresh multi-year
+   * composite measured 5-101s end-to-end, not "a few seconds") return
+   * {job_id, status_url} instead; this polls GET /jobs/{id} until terminal
+   * (same pattern as UploadPage.jsx's dataset-upload wait), then re-fetches
+   * the now-cached real result. The 422s this can return ("no Boundary layer
+   * yet") are end-user-readable and surfaced verbatim either way. */
   async function runAnalysis() {
+    const analysisId = selected.id;
     setRunning(true);
     setResultError(null);
+    setRunStatus(null);
     try {
-      const data = await apiFetch(`/projects/${projectId}/analyses/${selected.id}/refresh`, { method: "POST" });
-      setResult(data);
+      const data = await apiFetch(`/projects/${projectId}/analyses/${analysisId}/refresh`, { method: "POST" });
+      let final = data;
+      if (data.job_id) {
+        const deadline = Date.now() + POLL_TIMEOUT_MS;
+        let job = data;
+        while (!TERMINAL_STATUSES.includes(job.status)) {
+          if (selectedIdRef.current !== analysisId) return; // switched away mid-poll
+          if (Date.now() > deadline) {
+            throw new Error("This is taking longer than expected. It may still finish - check back shortly.");
+          }
+          setRunStatus(job.status ?? "queued");
+          await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+          job = await apiFetch(`/jobs/${data.job_id}`);
+        }
+        if (job.status !== "succeeded") {
+          throw new Error(job.error?.message ?? "This analysis failed to compute.");
+        }
+        if (selectedIdRef.current !== analysisId) return;
+        final = await apiFetch(`/projects/${projectId}/analyses/${analysisId}`);
+      }
+      if (selectedIdRef.current !== analysisId) return;
+      setResult(final);
       setEntries((prev) =>
-        prev.map((e) => (e.id === selected.id ? { ...e, computed_at: data.computed_at } : e))
+        prev.map((e) => (e.id === analysisId ? { ...e, computed_at: final.computed_at } : e))
       );
     } catch (err) {
-      setResultError(err.message ?? "Could not run this analysis.");
+      if (selectedIdRef.current === analysisId) setResultError(err.message ?? "Could not run this analysis.");
     } finally {
-      setRunning(false);
+      if (selectedIdRef.current === analysisId) {
+        setRunning(false);
+        setRunStatus(null);
+      }
     }
   }
 
