@@ -30,13 +30,15 @@ async function gotoAnalysisView(page, creds = ADMIN) {
 test.describe("Analysis view", () => {
   test("lists the whole registry, in-development entries included but de-emphasized", async ({ page }) => {
     await gotoAnalysisView(page);
-    // 16 catalog entries, grouped by category.
+    // 16 catalog entries, grouped by category. 10 are "available" (Wave:
+    // vegetation indices flipped NDVI/EVI/SAVI/MNDWI/NBR on) - 6 remain
+    // "in-development" and render muted.
     await expect(page.locator(".analysis-row")).toHaveCount(16);
-    await expect(page.locator(".analysis-row-muted")).toHaveCount(11);
+    await expect(page.locator(".analysis-row-muted")).toHaveCount(6);
     await expect(page.getByRole("button", { name: /^Forest Change$/ })).toBeVisible();
 
     // An in-development entry: honest empty state, no numbers, no run button.
-    await page.getByRole("button", { name: /^NDVI/ }).click();
+    await page.getByRole("button", { name: /^SAR/ }).click();
     const results = page.locator(".analysis-results-body");
     await expect(results.getByText("This analysis isn't built yet")).toBeVisible();
     await expect(page.getByRole("button", { name: /Run analysis|Refresh/ })).toHaveCount(0);
@@ -93,6 +95,58 @@ test.describe("Analysis view", () => {
     expect(barCount).toBeGreaterThan(0);
     await year.selectOption("2018");
     await expect(page.locator(".analysis-bar-row")).toHaveCount(barCount);
+  });
+
+  test("computing NDVI polls the async job to completion and renders a real per-year trend", async ({ page }) => {
+    // NDVI (execution: "async" - Wave: vegetation indices) computes fresh
+    // from raw Sentinel-2 imagery via the job-queue/polling path, not a
+    // direct request/response - measured 5-59s end-to-end against real
+    // boundaries, hence the long timeout (matches the other slow specs here).
+    test.setTimeout(180_000);
+    await gotoAnalysisView(page);
+    const results = page.locator(".analysis-results-body");
+
+    await page.getByRole("button", { name: /^NDVI/ }).click();
+    await expect(results.getByText("Not computed yet")).toBeVisible();
+    await expect(page.locator('.leaflet-container img[src*="earthengine"]')).toHaveCount(0);
+
+    const runButton = page.getByRole("button", { name: "Run analysis" });
+    await runButton.click();
+    // The in-flight label reflects the real job status while polling
+    // (queued, then running) rather than a static "Computing…" the whole
+    // time - see runningLabel() in AnalysisPanel.jsx.
+    await expect(runButton).toHaveText(/Queued…|Computing…/);
+
+    const yearInput = page.locator(".analysis-year-select input[type=range]");
+    await expect(yearInput).toBeVisible({ timeout: 120_000 });
+
+    // A real computed series: the mono-cell caption next to the scrubber
+    // shows "<year>: <value>", never "no data" for a boundary with real
+    // land cover, and the value is a plausible NDVI reading (-1..1, and in
+    // practice well above 0 for vegetated land).
+    const valueLabel = page.locator(".analysis-year-select .mono-cell");
+    await expect(valueLabel).not.toContainText("no data");
+    const [, latestValueText] = (await valueLabel.textContent()).match(/:\s*(-?[\d.]+)/);
+    const latestValue = Number(latestValueText);
+    expect(latestValue).toBeGreaterThan(-1);
+    expect(latestValue).toBeLessThan(1);
+
+    // The compositing note (cloud-masked, pre-monsoon Sentinel-2) is always
+    // rendered, and the map caption says which year's tile is showing.
+    await expect(page.locator(".analysis-note").filter({ hasText: "cloud-masked" })).toBeVisible();
+    await expect(page.locator(".analysis-note").filter({ hasText: "Map shows the latest year" })).toBeVisible();
+    await expect(page.locator('.leaflet-container img[src*="earthengine"]').first()).toBeVisible({
+      timeout: 60_000,
+    });
+
+    // The scrubber drives which year is highlighted using the already-
+    // fetched series - dragging it changes the caption with no new request.
+    const initialLabel = await valueLabel.textContent();
+    await yearInput.fill("0");
+    await expect(valueLabel).not.toHaveText(initialLabel);
+
+    await expect(page.getByRole("button", { name: "Refresh" })).toBeVisible();
+    if (process.env.ANALYSIS_SHOT) await page.screenshot({ path: process.env.ANALYSIS_SHOT });
   });
 });
 
