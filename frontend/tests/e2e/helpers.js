@@ -69,6 +69,27 @@ export async function uiLogin(page, { username, password }) {
   await page.waitForURL(/\/(?!login)/);
 }
 
+/**
+ * Opens the map's two floating panels (Wave: floating map controls) - the
+ * toolbar (wrench toggle) and the Layers panel (orange toggle), both
+ * collapsed by default so the map gets full width/space on first load. Most
+ * existing map specs were written against the old always-visible docked
+ * toolbar/Layers column and just want their contents reachable; call this
+ * right after navigating to a project's map view instead of updating every
+ * individual test to click both toggles itself. A no-op (idempotent) if a
+ * panel is already open - checks aria-expanded rather than blindly clicking,
+ * so it's safe to call more than once in the same test.
+ */
+export async function openMapPanels(page) {
+  const toolbarToggle = page.getByRole("button", { name: /Show map tools|Hide map tools/ });
+  if ((await toolbarToggle.getAttribute("aria-expanded")) !== "true") await toolbarToggle.click();
+
+  const layersToggle = page.getByRole("button", { name: /Show the Layers panel|Hide the Layers panel/ });
+  if (await layersToggle.isVisible()) {
+    if ((await layersToggle.getAttribute("aria-expanded")) !== "true") await layersToggle.click();
+  }
+}
+
 /** Collects console "error"-level messages + uncaught page errors for the
  * duration of the test. Call once per test, inspect the returned array.
  *

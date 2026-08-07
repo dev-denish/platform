@@ -3,7 +3,7 @@ import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
 import { test, expect } from "@playwright/test";
 import {
-  login, readTokens, ADMIN, GIS_ASSOCIATE, QA_PROJECT_NAME, API_BASE, collectConsoleErrors,
+  login, readTokens, ADMIN, GIS_ASSOCIATE, QA_PROJECT_NAME, API_BASE, collectConsoleErrors, openMapPanels,
 } from "./helpers.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -20,6 +20,12 @@ async function gotoQaProject(page, { role = ADMIN } = {}) {
   await page.goto("/projects");
   await page.getByRole("link", { name: QA_PROJECT_NAME }).click();
   await expect(page).toHaveURL(/\/projects\/[\w-]+/);
+  // Wave: floating map controls - the toolbar/Layers panel are collapsed by
+  // default (floating overlays, not always-visible docked chrome), but almost
+  // every test in this file was written against the old always-open docked
+  // versions and reaches straight into their contents - open both here once
+  // instead of touching every individual test.
+  await openMapPanels(page);
   // The map's initial fitBounds (fitting the QA project's seeded layers) pans
   // and zooms on load - under load (the full suite, not this file run in
   // isolation) that animation can still be settling when a test starts
@@ -27,7 +33,7 @@ async function gotoQaProject(page, { role = ADMIN } = {}) {
   // that never matches the readout's later, fully-settled value (confirmed:
   // reproduces 2/2 in the full suite, 0/3 isolated). Wait for two consecutive
   // identical reads before treating the view as ready to interact with.
-  const readout = page.locator(".map-toolbar-readout");
+  const readout = page.locator(".map-coord-badge");
   await expect(async () => {
     const a = await readout.textContent();
     await page.waitForTimeout(150);
@@ -168,49 +174,47 @@ test.describe("Symbology popover scroll (9-class LULC)", () => {
     expect(footerBoxAfter).toEqual(footerBoxBefore);
   });
 
-  test("popover paints above the map's panel-collapse toggle, expanded or after a collapse/re-expand cycle", async ({ page }) => {
+  test("popover always resolves to the shared above-map-chrome z-index tier, expanded or after a collapse/re-expand cycle", async ({ page }) => {
     await gotoQaProject(page);
     const panelToggle = page.getByRole("button", { name: "Hide the Layers panel" });
 
-    async function openPopoverAndAssertOnTop() {
+    // Wave: floating map controls restructured .map-overlay-topleft so the
+    // floating Layers panel (and this popover, anchored off it) always
+    // renders BELOW the toggle row/toolbar panel now, not beside them at the
+    // same Y - the two literally don't share screen space to overlap any
+    // more (confirmed: their bounding boxes never intersect in the new
+    // layout, toolbar open or collapsed). The real invariant the original
+    // bug was about - this popover must always resolve above map-overlay-
+    // topleft's whole chrome tier, wherever it happens to sit on screen - is
+    // still real and still worth guarding, just checked directly via the
+    // shared z-index tokens (see index.css's --z-map-chrome/--z-map-overlay)
+    // instead of a screen-position collision that no longer occurs.
+    async function openPopoverAndAssertAboveChrome() {
       const row = page.locator(".layer-row", { hasText: "LULC · 2024-06-01" }).first();
       await row.getByRole("button", { name: "Visualization parameters" }).click();
       const popover = page.locator(".symbology-popover", { hasText: "visualization parameters" });
       await expect(popover).toBeVisible();
-      // Their bounding boxes overlapping is EXPECTED and fine (the popover
-      // opens right where .map-overlay-topleft sits) - a plain bounding-box
-      // check would flag that as "overlap" even with paint order already
-      // correct. What actually broke before the fix was the toggle button
-      // painting on top and clipping the popover's own title text; the
-      // real regression check is which element the browser hit-tests at
-      // the overlap point, not whether the boxes touch.
       const title = popover.locator(".symbology-popover-header");
       await expect(title).toContainText("LULC");
-      const titleBox = await title.boundingBox();
-      const toggleBox = await panelToggle.boundingBox();
-      const overlapX = Math.max(titleBox.x, toggleBox.x) + Math.min(titleBox.x + titleBox.width, toggleBox.x + toggleBox.width);
-      const overlapY = Math.max(titleBox.y, toggleBox.y) + Math.min(titleBox.y + titleBox.height, toggleBox.y + toggleBox.height);
-      const topElementIsPopover = await page.evaluate(
-        ([x, y]) => {
-          const el = document.elementFromPoint(x / 2, y / 2);
-          return !!el?.closest(".symbology-popover");
-        },
-        [overlapX, overlapY]
-      );
-      expect(topElementIsPopover).toBe(true);
+
+      const [popoverZ, chromeZ] = await Promise.all([
+        popover.evaluate((el) => Number(getComputedStyle(el).zIndex)),
+        page.locator(".map-overlay-topleft").evaluate((el) => Number(getComputedStyle(el).zIndex)),
+      ]);
+      expect(popoverZ).toBeGreaterThan(chromeZ);
+
       await popover.getByRole("button", { name: "Close" }).click();
     }
 
     // Panel expanded (the reported case).
-    await openPopoverAndAssertOnTop();
+    await openPopoverAndAssertAboveChrome();
 
-    // Collapse, then re-expand - the toggle button's own screen position
-    // shifts (it's anchored to the map canvas, which widens/narrows as the
-    // docked Layers column disappears/reappears), so this isn't redundant
-    // with the check above.
+    // Collapse, then re-expand - a basic regression-safety re-run confirming
+    // the popover still renders (and still resolves above chrome) after a
+    // full collapse/reopen cycle of the panel it's anchored off.
     await panelToggle.click();
     await page.getByRole("button", { name: "Show the Layers panel" }).click();
-    await openPopoverAndAssertOnTop();
+    await openPopoverAndAssertAboveChrome();
   });
 });
 
@@ -237,7 +241,7 @@ test.describe("Map toolbar: new capabilities", () => {
     // pin icon until clicked (JumpToCoords's own `open` state).
     await page.getByRole("button", { name: "Go to coordinates" }).click();
     const input = page.getByLabel("Go to coordinates (latitude, longitude)");
-    const readout = page.locator(".map-toolbar-readout");
+    const readout = page.locator(".map-coord-badge");
     await input.fill("12.9716, 77.5946");
     await page.getByRole("button", { name: "Go" }).click();
     await expect(readout).toContainText("Lat: 12.9716");
@@ -316,7 +320,7 @@ test.describe("Map toolbar: new capabilities", () => {
     // assertion stays zoom-only anyway since that's sufficient to prove the
     // bookmark mechanism itself works; full lat/lon jump behavior is already
     // covered by the "Jump to coordinates" test above.
-    const readout = page.locator(".map-toolbar-readout");
+    const readout = page.locator(".map-coord-badge");
     const zoomBefore = await readout.textContent();
     await page.getByRole("button", { name: "Zoom in" }).click();
     await expect(async () => expect(await readout.textContent()).not.toEqual(zoomBefore)).toPass();
@@ -431,7 +435,7 @@ test.describe("Map toolbar: new capabilities", () => {
     await expect(menus).toHaveCount(0);
   });
 
-  test("whole-panel collapse hides and reshows the docked Layers column", async ({ page }) => {
+  test("whole-panel collapse hides and reshows the floating Layers panel", async ({ page }) => {
     await gotoQaProject(page);
     const toggle = page.getByRole("button", { name: /Hide the Layers panel|Show the Layers panel/ });
     await expect(toggle).toHaveAttribute("aria-label", "Hide the Layers panel");
@@ -573,7 +577,7 @@ test.describe("Press-feedback (:active scale/opacity) doesn't break click handle
     await gotoQaProject(page);
 
     // map-toolbar-btn: Zoom in changes the readout exactly once per click.
-    const readout = page.locator(".map-toolbar-readout");
+    const readout = page.locator(".map-coord-badge");
     const zoomBefore = await readout.textContent();
     await page.getByRole("button", { name: "Zoom in" }).click();
     await expect(async () => expect(await readout.textContent()).not.toEqual(zoomBefore)).toPass();
@@ -685,6 +689,7 @@ test.describe("Delete-a-dataset (Administrator-only)", () => {
     await page.goto("/projects");
     await page.getByRole("link", { name: QA_PROJECT_NAME }).click();
     await expect(page).toHaveURL(/\/projects\/[\w-]+/);
+    await openMapPanels(page);
 
     const row = page.locator(".layer-row", { hasText: "2022-01-01" });
     await expect(row).toBeVisible();
@@ -708,6 +713,7 @@ test.describe("Delete-a-dataset (Administrator-only)", () => {
     await page.goto("/projects");
     await page.getByRole("link", { name: QA_PROJECT_NAME }).click();
     await expect(page).toHaveURL(/\/projects\/[\w-]+/);
+    await openMapPanels(page);
     await expect(page.locator(".layer-row").first()).toBeVisible();
     await expect(page.getByRole("button", { name: "Delete this dataset" })).toHaveCount(0);
   });

@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { login, ADMIN, QA_PROJECT_NAME } from "./helpers.js";
+import { login, ADMIN, QA_PROJECT_NAME, openMapPanels } from "./helpers.js";
 
 /** Generic assertions for one collapsible-header button: starts expanded,
  * click collapses (aria-expanded=false), Enter/Space on focus re-expands,
@@ -84,6 +84,10 @@ test.describe("LayersPanel (map) collapsible groups", () => {
     await login(page, ADMIN);
     await page.goto("/projects");
     await page.getByRole("link", { name: QA_PROJECT_NAME }).click();
+    // Wave: floating map controls - the floating Layers panel (and
+    // everything inside it, including its own "Layers" header below) is
+    // collapsed by default now; open it first via the orange toggle.
+    await openMapPanels(page);
     // exact: true - "Layers" alone would also match "Vector layers" (a
     // per-kind group header) and "Hide the Layers panel" (the map's separate
     // whole-panel-collapse button, see redesign.spec.js) under Playwright's
@@ -101,6 +105,7 @@ test.describe("LayersPanel (map) collapsible groups", () => {
     await login(page, ADMIN);
     await page.goto("/projects");
     await page.getByRole("link", { name: QA_PROJECT_NAME }).click();
+    await openMapPanels(page);
     const group = page.getByRole("button", { name: /Classified imagery/i });
     await expect(group).toBeVisible();
     await checkCollapse(page, group);

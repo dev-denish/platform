@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { login, ADMIN, QA_PROJECT_NAME, collectConsoleErrors } from "./helpers.js";
+import { login, ADMIN, QA_PROJECT_NAME, collectConsoleErrors, openMapPanels } from "./helpers.js";
 
 async function gotoProjectWithMap(page) {
   await login(page, ADMIN);
@@ -8,6 +8,10 @@ async function gotoProjectWithMap(page) {
   await expect(page).toHaveURL(/\/projects\/[\w-]+/);
   const map = page.locator(".leaflet-container");
   await expect(map).toBeVisible();
+  // Wave: floating map controls - the toolbar/Layers panel are collapsed by
+  // default now (floating overlays, not always-visible docked chrome), so
+  // every test below that reaches into either one needs them open first.
+  await openMapPanels(page);
   // Click once first - scroll-zoom and most interaction is gated on the map
   // having been clicked/focused at least once (ScrollZoomOnActivate).
   await map.click({ position: { x: 400, y: 300 } });
@@ -17,7 +21,7 @@ async function gotoProjectWithMap(page) {
 test.describe("Map: core controls after memoization/throttling changes", () => {
   test("zoom in/out buttons change the live Zoom readout", async ({ page }) => {
     await gotoProjectWithMap(page);
-    const readout = page.locator(".map-toolbar-readout");
+    const readout = page.locator(".map-coord-badge");
     const zoomText = () => readout.textContent();
     const before = await zoomText();
     await page.getByRole("button", { name: "Zoom in" }).click();
@@ -34,7 +38,7 @@ test.describe("Map: core controls after memoization/throttling changes", () => {
 
   test("pan (drag) moves the map center", async ({ page }) => {
     await gotoProjectWithMap(page);
-    const readout = page.locator(".map-toolbar-readout");
+    const readout = page.locator(".map-coord-badge");
     const map = page.locator(".leaflet-container");
     const box = await map.boundingBox();
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
@@ -42,7 +46,7 @@ test.describe("Map: core controls after memoization/throttling changes", () => {
     await page.mouse.move(box.x + box.width / 2 + 120, box.y + box.height / 2 + 60, { steps: 10 });
     await page.mouse.up();
     // moveend fires -> readout's Lat/Lon (center) updates. Just assert no
-    // crash and the toolbar readout is still rendering coordinates.
+    // crash and the coordinate badge is still rendering coordinates.
     await expect(readout).toContainText(/Lat: /);
   });
 

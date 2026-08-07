@@ -11,9 +11,11 @@ import { useAuth } from "../context/AuthContext.jsx";
 import { canDeleteDataset, canManageReferenceLayers, canRenameLayer, canUpload } from "../lib/roles.js";
 
 /**
- * The GEE Code Editor's "Layers" panel, now a docked left column beside the
- * map (Wave: map UI redesign) rather than a floating top-right overlay -
- * grouped into the four real layer kinds the multi-format wave introduced
+ * The GEE Code Editor's "Layers" panel - a floating overlay top-left of the
+ * map (Wave: floating map controls), behind its own orange toggle, after a
+ * stint as a docked left column (Wave: map UI redesign) and before that a
+ * floating top-right overlay - grouped into the four real layer kinds the
+ * multi-format wave introduced
  * (classified imagery / raw imagery / vector / WMS-WFS), each independently
  * collapsible. "Reference Layers" and "Added Layers" are explicitly a later
  * wave's concept and are NOT built here - this only reorganizes/restyles a
@@ -272,9 +274,10 @@ function LayersPanel({
       />
       {/* The shared `.collapsible-body` grid-rows animation, on the existing
        * panel classes. `flex` is inline rather than in the stylesheet because
-       * this wrapper is now the flex child that has to fill the docked column
-       * when open (and take zero height when closed), and `.layers-panel-groups`
-       * inside it needs a bounded height to keep scrolling. */}
+       * this wrapper is now the flex child that has to fill the floating
+       * panel's own max-height when open (and take zero height when closed),
+       * and `.layers-panel-groups` inside it needs a bounded height to keep
+       * scrolling. */}
       <div
         className="collapsible-body"
         data-open={expanded}

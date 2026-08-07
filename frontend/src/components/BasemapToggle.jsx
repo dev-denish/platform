@@ -1,7 +1,7 @@
 import { BASEMAPS } from "../lib/basemap.js";
 
 /**
- * Basemap picker docked in the top toolbar - still the same plain <select> it
+ * Basemap picker inside the floating toolbar panel - still the same plain <select> it
  * became in the map UI redesign, now driven off lib/basemap.js's BASEMAPS list
  * instead of two hardcoded options (Wave: map toolbar capabilities). A <select>
  * IS the gallery at five entries: it's already a native dropdown with keyboard
