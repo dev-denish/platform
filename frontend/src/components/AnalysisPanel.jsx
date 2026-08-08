@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import {
+  Bar,
+  BarChart,
   CartesianGrid,
   Line,
   LineChart,
@@ -42,6 +44,14 @@ import ProjectMap from "./ProjectMap.jsx";
  * async job-queue path (POST refresh can return either the result directly
  * or a {job_id} to poll, per the catalog entry's execution mode; see
  * runAnalysis).
+ *
+ * Wave: enriched index results adds `stats.summary` (a plain-language
+ * synthesis, rendered as a lead callout above everything else - see
+ * IndexSummaryCallout) and `stats.distribution` (per-year mean/std
+ * dev/min/max plus a pixel-value histogram - see IndexDistribution). Both
+ * are additive to the existing `stats.series` trend chart, not a
+ * replacement for it - the raw per-year numbers stay exactly where they
+ * were.
  */
 
 // Same polling pattern as UploadPage.jsx's job-status wait - job-kind
@@ -281,16 +291,141 @@ function IndexTrendChart({ series }) {
   );
 }
 
+/** NDVI/EVI/SAVI/MNDWI/NBR: a one- or two-sentence plain-language synthesis
+ * of the same numbers the rest of this column renders as figures and
+ * charts ("2025: NDVI averages 0.62... risen from 0.44 to 0.62"). Additive,
+ * not a replacement - it sits above the raw numbers (stat grid, trend
+ * chart, histogram), it never substitutes for them, per the field-team
+ * readability goal without hiding the underlying data a VVB would need to
+ * trace. Reuses the callout container HansenStats already established for
+ * a single lead metric; `.analysis-callout-text` only resets that
+ * pattern's mono/bold numeric styling back to prose, since this callout's
+ * content is a paragraph, not a number. */
+function IndexSummaryCallout({ summary }) {
+  return (
+    <div className="analysis-callout">
+      <span className="stat-label">Summary</span>
+      <p className="analysis-callout-value analysis-callout-text">{summary}</p>
+    </div>
+  );
+}
+
+/** One year's pixel-value histogram for a vegetation index. Bin edges come
+ * from the backend fixed every year (21 edges / 20 bins spanning the
+ * index's valid range), so the x-axis is already physically bounded - nothing
+ * to clamp here, unlike a freely auto-scaled axis. */
+function IndexHistogramChart({ histogram }) {
+  const { bin_edges: edges, counts } = histogram;
+  const data = useMemo(
+    () =>
+      counts.map((count, i) => ({
+        label: edges[i].toFixed(2),
+        rangeLabel: `${edges[i].toFixed(2)} to ${edges[i + 1].toFixed(2)}`,
+        count,
+      })),
+    [edges, counts]
+  );
+  // Thin out x-axis ticks so 20 bins don't collide into an unreadable
+  // smear of labels - shows roughly 6-7 evenly spaced edges.
+  const tickInterval = Math.max(0, Math.ceil(data.length / 7) - 1);
+  return (
+    <ResponsiveContainer width="100%" height={160}>
+      <BarChart data={data} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#E5ECE8" />
+        <XAxis
+          dataKey="label"
+          interval={tickInterval}
+          tick={{ fontSize: 10 }}
+          axisLine={{ stroke: "#E5ECE8" }}
+          tickLine={false}
+        />
+        <YAxis
+          domain={[0, "dataMax"]}
+          allowDecimals={false}
+          tick={{ fontSize: 11 }}
+          axisLine={{ stroke: "#E5ECE8" }}
+          tickLine={false}
+          width={44}
+        />
+        <Tooltip
+          formatter={(value) => [`${formatNumber(value, 0)} px`, "Pixels"]}
+          labelFormatter={(_, payload) => payload?.[0]?.payload?.rangeLabel ?? ""}
+        />
+        <Bar dataKey="count" fill="var(--accent)" radius={[2, 2, 0, 0]} />
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
+/** NDVI/EVI/SAVI/MNDWI/NBR: per-year pixel-value distribution (mean/std
+ * dev/min/max + the histogram above). Defaults to the most recent year
+ * that HAS distribution data, deliberately independent of
+ * IndexTrendChart's own timeline scrubber just above it - that scrubber
+ * drives the single per-year value in the trend line, and wiring a second
+ * chart to the same piece of state would only be worth the complexity once
+ * there's an actual reason to inspect an older year's distribution; until
+ * then "latest year" is the one reviewers will want by default and keeps
+ * this section stateless.
+ *
+ * No unit suffix on the four stat values, matching IndexTrendChart's own
+ * convention just above (also unitless index values, same file) - these
+ * are dimensionless vegetation indices, not a physical quantity like ha or
+ * tCO2e. */
+function IndexDistribution({ distribution }) {
+  const years = useMemo(() => Object.keys(distribution).sort(), [distribution]);
+  const year = years[years.length - 1];
+  const yearStats = distribution[year];
+  if (!yearStats) return null;
+  return (
+    <>
+      <div className="stat-grid">
+        <div className="stat-card">
+          <span className="stat-label">Mean ({year})</span>
+          <span className="stat-value">{formatNumber(yearStats.mean, 3)}</span>
+        </div>
+        <div className="stat-card">
+          <span className="stat-label">Std dev ({year})</span>
+          <span className="stat-value">{formatNumber(yearStats.std_dev, 3)}</span>
+        </div>
+        <div className="stat-card">
+          <span className="stat-label">Min ({year})</span>
+          <span className="stat-value">{formatNumber(yearStats.min, 3)}</span>
+        </div>
+        <div className="stat-card">
+          <span className="stat-label">Max ({year})</span>
+          <span className="stat-value">{formatNumber(yearStats.max, 3)}</span>
+        </div>
+      </div>
+      {yearStats.histogram ? (
+        <>
+          <IndexHistogramChart histogram={yearStats.histogram} />
+          <p className="analysis-note">Pixel-value distribution across the boundary, {year}.</p>
+        </>
+      ) : null}
+      {/* Parked feature - comparing this boundary's distribution against a
+       * reference (unmanaged / undisturbed) region. Shown so the intent is
+       * visible to reviewers, but visually de-emphasized rather than
+       * looking like a broken chart. */}
+      <div className="analysis-placeholder-row">
+        <span className="stat-label">Reference-region comparison</span>
+        <span className="stat-value-muted">Not yet available</span>
+      </div>
+    </>
+  );
+}
+
 function AnalysisStats({ result }) {
   const { stats, legend } = result;
   return (
     <>
+      {stats.summary ? <IndexSummaryCallout summary={stats.summary} /> : null}
       {stats.canopy_cover_threshold_pct != null ? <HansenStats stats={stats} /> : null}
       {stats.class_area_ha ? <ClassBreakdown classAreaHa={stats.class_area_ha} legend={legend} /> : null}
       {stats.class_area_ha_by_year ? (
         <YearlyClassBreakdown byYear={stats.class_area_ha_by_year} legend={legend} />
       ) : null}
       {stats.series ? <IndexTrendChart series={stats.series} /> : null}
+      {stats.distribution ? <IndexDistribution distribution={stats.distribution} /> : null}
       {stats.note ? <p className="analysis-note">{stats.note}</p> : null}
     </>
   );
