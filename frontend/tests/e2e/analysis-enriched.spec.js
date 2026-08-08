@@ -7,10 +7,23 @@ import { gotoAnalysisView } from "./helpers.js";
  * Same "no meaningful mock for a real GEE dataset query" reasoning as
  * analysis.spec.js's own NDVI test - this hits the real backend/worker
  * against real Google Earth Engine (see docker-compose.test.yml's
- * DMRV_GEE_PROJECT_ID/credentials mount), computing a fresh NDVI result and
+ * DMRV_GEE_PROJECT_ID/credentials mount), computing a fresh EVI result and
  * asserting the NEW parts of the results panel (IndexSummaryCallout,
  * IndexDistribution, IndexHistogramChart, the reference-region placeholder -
  * see AnalysisPanel.jsx) render genuinely computed numbers, not stubs.
+ *
+ * EVI, not NDVI: this shared seeded QA project's NDVI analysis already has
+ * its own dedicated fresh-state test in analysis.spec.js ("computing NDVI
+ * polls the async job to completion..."), which asserts "Not computed yet"
+ * as its starting condition. Reusing NDVI here would leave a cached result
+ * behind (this file sorts before analysis.spec.js and workers:1/
+ * fullyParallel:false in playwright.config.js means file order is exec
+ * order), breaking that test's fresh-state assumption - exactly the class
+ * of bug fixed once already for the Identify+NDVI test (commit 3ba1fdf).
+ * EVI exercises the same _annual_index_series/index_summary pipeline as
+ * NDVI (identical code path, only the band formula differs) without
+ * touching NDVI's cached state, and as a bonus exercises the EVI
+ * out-of-range range-masking fix (commit 88c0900) against live data.
  *
  * A separate file rather than another test in analysis.spec.js: that file
  * already carries the (long, deliberately real-GEE) trend-chart and Identify
@@ -27,7 +40,7 @@ const DESCRIPTIVE_ONLY_TRAILER =
   "Descriptive only - not a forest-definition, eligibility or carbon determination.";
 
 test.describe("Enriched vegetation-index results", () => {
-  test("computing NDVI renders a real composed summary, real distribution stats consistent with the trend chart, a real histogram, and a correctly-parked reference-region placeholder", async ({
+  test("computing EVI renders a real composed summary, real distribution stats consistent with the trend chart, a real histogram, and a correctly-parked reference-region placeholder", async ({
     page,
   }) => {
     // Same timing budget as analysis.spec.js's NDVI test: async job-queue
@@ -36,13 +49,11 @@ test.describe("Enriched vegetation-index results", () => {
     await gotoAnalysisView(page);
     const results = page.locator(".analysis-results-body");
 
-    await page.getByRole("button", { name: /^NDVI/ }).click();
-    // NDVI may already have a cached result on this shared seeded QA project
-    // (analysis.spec.js's own NDVI/Identify tests run against the same
-    // project) - .primary-button reads "Run analysis" OR "Refresh" either
-    // way, and either one (re)computes a FRESH real result, which is what
-    // every assertion below needs (same reasoning as analysis.spec.js's
-    // Identify test).
+    await page.getByRole("button", { name: /^EVI/ }).click();
+    // EVI may already have a cached result on this shared seeded QA project
+    // if this spec has run before - .primary-button reads "Run analysis" OR
+    // "Refresh" either way, and either one (re)computes a FRESH real result,
+    // which is what every assertion below needs.
     await results.locator(".primary-button").click();
     const yearInput = page.locator(".analysis-year-select input[type=range]");
     await expect(yearInput).toBeVisible({ timeout: 120_000 });
@@ -54,7 +65,7 @@ test.describe("Enriched vegetation-index results", () => {
     await expect(summary).toBeVisible();
     const summaryText = (await summary.textContent()).trim();
     // eslint-disable-next-line no-console
-    console.log("NDVI summary callout:", summaryText);
+    console.log("EVI summary callout:", summaryText);
 
     // A stub or static placeholder string could never match this: only a
     // REAL computed boundary mean, interpolated by describe_level() in
@@ -89,7 +100,7 @@ test.describe("Enriched vegetation-index results", () => {
       statsByKind[kind] = Number(valueText);
     }
     // eslint-disable-next-line no-console
-    console.log(`NDVI distribution stats (${statYear}):`, statsByKind);
+    console.log(`EVI distribution stats (${statYear}):`, statsByKind);
 
     const values = Object.values(statsByKind);
     // Real numbers, not "—" (formatNumber's null placeholder) or NaN text.
@@ -117,12 +128,11 @@ test.describe("Enriched vegetation-index results", () => {
     const bars = page.locator(".recharts-bar-rectangle");
     await expect(bars).toHaveCount(20);
     // Not bars.first(): the leftmost (lowest-value) bin(s) legitimately hold
-    // zero pixels on real data whenever the boundary's min is well above -1
-    // (confirmed live: this run's real Min was -0.68, so every bin below
-    // that is empty) - Recharts degenerates a zero-count bar's rounded-rect
-    // path to a zero-size shape, which is correct rendering of a real empty
-    // bin, not a broken chart. Checking the MAX across all 20 instead proves
-    // at least the bin holding the bulk of the boundary's pixels rendered
+    // zero pixels on real data whenever the boundary's min is well above -1 -
+    // Recharts degenerates a zero-count bar's rounded-rect path to a
+    // zero-size shape, which is correct rendering of a real empty bin, not a
+    // broken chart. Checking the MAX across all 20 instead proves at least
+    // the bin holding the bulk of the boundary's pixels rendered
     // real, non-degenerate geometry - a genuinely empty/broken chart would
     // leave every one of the 20 rectangles at zero height AND zero width.
     const barBoxes = [];
