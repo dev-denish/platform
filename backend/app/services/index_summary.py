@@ -382,11 +382,14 @@ _MODEST_SAMPLE_PIXELS = 1000  # ~10 ha
 def describe_sample(counts: list[int] | None) -> str | None:
     """Caveat when the year's cloud-free sample is too thin to lean on.
 
-    NOTE: `counts` counts IN-RANGE pixels only. ee.Reducer.fixedHistogram
-    discards values outside [-1, 1], and EVI genuinely can exceed that range
-    where its denominator approaches zero - so this total is a lower bound on
-    valid pixels, not an exact count. Erring low is the safe direction for a
-    "sample is thin" warning."""
+    NOTE: `counts` counts IN-RANGE pixels only - gee_analysis_service.py's
+    `_annual_index_series` masks each index to its natural [-1, 1] range
+    BEFORE reduceRegion, so mean/std_dev/min/max above are computed over
+    that same in-range set and `counts` is an EXACT count of it, not a lower
+    bound (EVI's denominator approaching zero, e.g. under thin haze/cloud
+    edges, is the main source of out-of-range pixels; that count is surfaced
+    separately as `distribution[year]["out_of_range_pixel_count"]`, not
+    folded in here)."""
     total = sum(counts) if counts else 0
     if total <= 0:
         return (

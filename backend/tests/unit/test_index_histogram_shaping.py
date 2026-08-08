@@ -33,6 +33,7 @@ from app.services.gee_analysis_service import (
     _VEG_INDEX_HISTOGRAM_BINS,
     _VEG_INDEX_HISTOGRAM_RANGE,
     _index_stats_reducer,
+    _index_stats_reducer_with_raw_count,
     _shape_index_histogram,
 )
 
@@ -194,3 +195,33 @@ def test_index_stats_reducer_histogram_range_matches_module_constants(local_ee_s
     # still checking the RIGHT numbers, not stale hardcoded ones.
     assert _VEG_INDEX_HISTOGRAM_RANGE == (-1.0, 1.0)
     assert _VEG_INDEX_HISTOGRAM_BINS == 20
+
+
+# ------------------------------------------ _index_stats_reducer_with_raw_count
+
+
+def test_index_stats_reducer_with_raw_count_wraps_the_unmodified_stats_tree(
+    local_ee_session,
+):
+    """Bug-fix regression test (out-of-range EVI/SAVI pixels corrupting
+    mean/std_dev/min/max, not just the histogram): `_annual_index_series` now
+    masks each index to its natural [-1, 1] range before reduceRegion, and
+    recovers how many pixels that excluded via ONE extra unshared count()
+    band on the SAME reduceRegion call rather than a second round trip. This
+    asserts that wrapper reducer's shape: outer combine has
+    `sharedInputs=False` (so count() reads the SECOND band, not a copy of
+    the first band's already-range-masked pixels - sharedInputs=True would
+    make it reproduce index_histogram's own bucket sum and defeat the
+    point), reducer2 is a bare Reducer.count(), and reducer1 is EXACTLY the
+    same, untouched, already-tested tree `_index_stats_reducer()` builds -
+    this addition must not perturb that existing, separately-tested tree."""
+    wrapped = _index_stats_reducer_with_raw_count()
+
+    assert _func_name(wrapped) == "Reducer.combine"
+    assert wrapped.args["sharedInputs"] is False
+    assert _func_name(wrapped.args["reducer2"]) == "Reducer.count"
+
+    # reducer1 must be the exact, unmodified _index_stats_reducer() tree -
+    # compare serialized structure rather than object identity (each call
+    # constructs a fresh graph).
+    assert wrapped.args["reducer1"].serialize() == _index_stats_reducer().serialize()

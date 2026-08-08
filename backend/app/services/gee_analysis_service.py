@@ -63,7 +63,7 @@ fails immediately, then hand the actual compute to the worker).
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -652,7 +652,6 @@ def _modis_lulc(boundary: ee.Geometry) -> tuple[dict[str, Any], list[dict[str, A
 # ----------------------------------------------- vegetation/water/burn indices
 
 
-_VEG_INDEX_YEARS = range(2017, datetime.utcnow().year + 1)  # Sentinel-2 available since 2017
 _VEG_SEASON_START_MD = "02-01"  # pre-monsoon window - same convention as
 _VEG_SEASON_END_MD = "05-31"  # scripts/gee_phase1_agb_proxy.py's usage example
 _VEG_CLOUD_BAND = "cs_cdf"
@@ -686,6 +685,42 @@ _VEG_INDEX_PALETTE = [
     "a50026", "d73027", "f46d43", "fdae61", "fee08b",
     "d9ef8b", "a6d96a", "66bd63", "1a9850", "006837",
 ]
+
+_VEG_INDEX_FIRST_YEAR = 2017  # Sentinel-2 available since 2017
+
+
+def _current_veg_index_years(today: date | None = None) -> range:
+    """Which calendar years get a composite this call, evaluated FRESH every
+    time (a function, not a module-level constant frozen at import time) -
+    this service runs inside a long-lived worker process, so a constant
+    computed once at container start would freeze the "current year" at
+    whatever it was on startup and never pick up a new year becoming
+    eligible without a restart.
+
+    Excludes the current year until ITS OWN pre-monsoon window
+    (_VEG_SEASON_START_MD..._VEG_SEASON_END_MD, Feb-May) has fully closed:
+    from Jan 1 up to May 31 the current year's Feb-May ImageCollection is
+    either empty or only partially populated, and _s2_reflectance_composite's
+    `.median()` over zero images returns a bandless ee.Image - the
+    `_INDEX_FORMULAS` band math (`.select("B8")`/`.normalizedDifference(...)`)
+    then errors on that bandless image. Because `_annual_index_series`
+    batches every requested year into ONE `ee.Dictionary(...).getInfo()`
+    call, a single bad (not-yet-closed) year would fail the ENTIRE multi-year
+    series for all 5 indices at once, not just that year - so this excludes
+    it before it ever reaches the compute graph rather than trying to handle
+    a bandless image gracefully at reduce time.
+
+    `today` is an injectable parameter (defaults to `date.today()`) purely so
+    this is unit-testable against fixed boundary dates (Jan 1, May 31, Jun 1)
+    without patching the system clock - see
+    tests/unit/test_veg_index_years.py."""
+    if today is None:
+        today = date.today()
+    season_end_md = tuple(int(p) for p in _VEG_SEASON_END_MD.split("-"))  # (month, day)
+    last_eligible_year = today.year
+    if (today.month, today.day) < season_end_md:
+        last_eligible_year -= 1
+    return range(_VEG_INDEX_FIRST_YEAR, last_eligible_year + 1)
 
 
 def _s2_reflectance_composite(boundary: ee.Geometry, year: int) -> ee.Image:
@@ -739,6 +774,39 @@ def _index_stats_reducer() -> ee.Reducer:
     )
 
 
+def _index_stats_reducer_with_raw_count() -> ee.Reducer:
+    """`_index_stats_reducer()` plus an UNSHARED `ee.Reducer.count()` that
+    consumes a SECOND input band, still in the same single reduceRegion call
+    (no extra round trip). Exists to recover, per year, how many pixels this
+    module's [-1, 1] range mask (see `_annual_index_series`) excluded -
+    without that, EVI/SAVI's occasional out-of-range pixels (a near-zero
+    denominator blowing the formula up to an arbitrarily large/negative
+    value - see this module's own note in `_annual_index_series`) would be
+    silently dropped with no trace of how many there were.
+
+    `sharedInputs=False` on the outer `.combine()` is the whole trick: with
+    the DEFAULT `sharedInputs=True`, `count()` would consume the SAME first
+    band as the stats reducer (the already range-masked "index" band) and
+    just reproduce `index_histogram`'s own bucket sum - useless for this.
+    With `sharedInputs=False`, GEE's combine-reducer convention feeds each
+    sub-reducer its OWN slice of the input image's bands, in band order: the
+    stats reducer (1 input) gets band 0, `count()` (1 input) gets band 1. The
+    caller (`_annual_index_series`) must therefore pass a 2-band image,
+    band 0 = the range-masked index ("index"), band 1 = the SAME index
+    cloud-masked only, range NOT yet applied ("index_raw") - so this
+    reducer's extra output key is `index_raw_count`, the "before" total;
+    `index_histogram`'s bucket sum is the "after" total; the difference is
+    `out_of_range_pixel_count`.
+
+    Kept as a separate function from `_index_stats_reducer()` (rather than
+    folding raw-count into that one) so the existing, already-exhaustive
+    shape test for `_index_stats_reducer()`
+    (test_index_histogram_shaping.py::test_index_stats_reducer_is_one_
+    combine_tree_of_mean_stddev_minmax_histogram) keeps asserting on exactly
+    the tree it already knows about, undisturbed by this addition."""
+    return _index_stats_reducer().combine(ee.Reducer.count(), sharedInputs=False)
+
+
 def _shape_index_histogram(rows: list[list[float]] | None) -> dict[str, list[Any]]:
     """Pure Python: turns ee.Reducer.fixedHistogram()'s raw reduceRegion
     output - a list of [bucket_lower_edge, count] rows, `_VEG_INDEX_HISTOGRAM_
@@ -781,14 +849,46 @@ def _annual_index_series(
     convention as the two annual (per-year) analyses above, but still slow
     enough end-to-end (5-59s measured for NDVI, see this module's own
     docstring) that every caller of this function runs async, not sync. The
-    per-year reduceRegion now runs a combined reducer (_index_stats_reducer)
-    instead of bare mean - more work per pixel pass, but still exactly ONE
-    reduceRegion call per year and ONE .getInfo() for the whole series, so
-    the "one round trip" contract this module's docstring documents is
-    unchanged; only the per-call server-side compute cost grows a bit
-    (histogram binning is not free), which may push the low end of the
-    previously measured 5-59s range up somewhat - not re-measured live here,
-    flagging rather than asserting a number.
+    per-year reduceRegion now runs a combined reducer (_index_stats_reducer_
+    with_raw_count, itself built on _index_stats_reducer) instead of bare
+    mean - more work per pixel pass, but still exactly ONE reduceRegion call
+    per year and ONE .getInfo() for the whole series, so the "one round
+    trip" contract this module's docstring documents is unchanged; only the
+    per-call server-side compute cost grows a bit (histogram binning is not
+    free), which may push the low end of the previously measured 5-59s range
+    up somewhat - not re-measured live here, flagging rather than asserting
+    a number.
+
+    Each year's index image is masked to its own natural range (`idx = idx.
+    updateMask(idx.gte(range_lo).And(idx.lte(range_hi)))`) BEFORE reduction,
+    for every one of the 5 indices uniformly, not just EVI/SAVI (the two
+    that most often need it). Why this matters: EVI's formula has a
+    denominator that can approach/cross zero under real conditions (thin
+    haze/cirrus surviving the cs_cdf>=0.60 cloud mask, cloud edges, cloud
+    shadow - exactly the pre-monsoon Feb-May Karnataka window this module
+    composites over), sending EVI to arbitrarily large or negative values
+    far outside [-1, 1]; SAVI can exceed the range more mildly too (scaled
+    reflectance >1.0 at bright/specular pixel edges, since bands are
+    UINT16/10000 DN and can exceed 10000 at cloud edges). Before this fix,
+    `ee.Reducer.fixedHistogram` silently dropped those out-of-range pixels
+    from ITS bucket assignment while `combine(..., sharedInputs=True)` still
+    fed them to mean/stdDev/minMax - `sharedInputs=True` only means the
+    sub-reducers share the same input TUPLE, not that one sub-reducer's
+    internal range-filtering propagates to the others - so the histogram and
+    the scalar stats silently disagreed about which pixels they counted.
+    Masking (not clamping) up front makes every sub-reducer in the combined
+    reducer see the identical pixel set, so that disagreement is gone by
+    construction; a masked-out pixel is honestly excluded from every stat,
+    the same way cloud-masked pixels already are in this same pipeline -
+    a clamped 39.69 -> 1.0 would instead be a fabricated observation.
+
+    How many pixels that range-mask excludes is surfaced, not hidden:
+    `distribution[year]["out_of_range_pixel_count"]` (see below) is the
+    difference between the cloud-masked-only pixel count and the
+    range-masked pixel count, computed by adding ONE extra unshared count()
+    band to the SAME reduceRegion call rather than a second round trip -
+    see `_index_stats_reducer_with_raw_count`'s own docstring for the
+    mechanics.
 
     Only the LATEST year gets a map tile (one extra getMapId() call) - not
     all N years. A per-year tile for the timeline scrubber to switch between
@@ -797,17 +897,22 @@ def _annual_index_series(
     drives which year's point is highlighted on the trend chart, using the
     already-fetched series - no extra backend call for that part."""
     index_band = _INDEX_FORMULAS[index_id]
+    years = _current_veg_index_years()
     per_year_stats = {}
-    latest_year = max(_VEG_INDEX_YEARS)
+    latest_year = max(years)
     latest_image = None
-    for year in _VEG_INDEX_YEARS:
+    range_lo, range_hi = _VEG_INDEX_HISTOGRAM_RANGE
+    for year in years:
         refl = _s2_reflectance_composite(boundary, year)
-        idx = index_band(refl).rename("index")
+        # cloud-masked only, natural range not yet enforced (see docstring above)
+        idx_raw = index_band(refl).rename("index")
+        idx = idx_raw.updateMask(idx_raw.gte(range_lo).And(idx_raw.lte(range_hi)))
         if year == latest_year:
             latest_image = idx
-        per_year_stats[str(year)] = idx.reduceRegion(
-            reducer=_index_stats_reducer(), geometry=boundary, scale=10, crs=AOI_CRS,
-            maxPixels=1e10, bestEffort=True,
+        stack = idx.addBands(idx_raw.rename("index_raw"))
+        per_year_stats[str(year)] = stack.reduceRegion(
+            reducer=_index_stats_reducer_with_raw_count(), geometry=boundary, scale=10,
+            crs=AOI_CRS, maxPixels=1e10, bestEffort=True,
         )
     raw = ee.Dictionary(per_year_stats).getInfo()  # ONE round trip for every year
 
@@ -817,12 +922,25 @@ def _annual_index_series(
         values = values or {}
         mean = _round_or_none(values.get("index_mean"))
         series[year] = mean
+        histogram = _shape_index_histogram(values.get("index_histogram"))
+        in_range_count = sum(histogram["counts"]) if histogram["counts"] else 0
+        raw_count = values.get("index_raw_count")
         distribution[year] = {
             "mean": mean,
             "std_dev": _round_or_none(values.get("index_stdDev")),
             "min": _round_or_none(values.get("index_min")),
             "max": _round_or_none(values.get("index_max")),
-            "histogram": _shape_index_histogram(values.get("index_histogram")),
+            "histogram": histogram,
+            # Pixels this year's cloud-masked composite had that fell outside
+            # the natural [-1, 1] range and were therefore excluded from
+            # mean/std_dev/min/max/histogram above, not silently folded into
+            # them - see _annual_index_series's own docstring for why this
+            # can be nonzero (EVI's near-zero-denominator blowup is the main
+            # case; SAVI more mildly). None (not 0) when raw_count itself is
+            # unavailable (e.g. a year with literally zero cloud-free pixels).
+            "out_of_range_pixel_count": (
+                int(raw_count) - in_range_count if raw_count is not None else None
+            ),
         }
 
     stats = {
@@ -831,10 +949,18 @@ def _annual_index_series(
         "summary": summarize_index_result(index_id, series, distribution),
         "note": (
             "Boundary-mean of a cloud-masked, pre-monsoon (Feb-May) Sentinel-2 "
-            "composite per year, 2017-present. Sentinel-2 only - a Landsat "
+            f"composite per year, {min(years)}-{max(years)}. The current calendar "
+            "year is only included once its own Feb-May window has closed (no "
+            "partial-season composite is ever computed). Sentinel-2 only - a Landsat "
             "extension back to 2013 would need different cloud-masking (no Cloud "
             "Score+ equivalent) and risks a false 'trend break' at the sensor "
-            "handoff year, so isn't included in this batch. `distribution` adds "
+            "handoff year, so isn't included in this batch. Each year's pixels are "
+            "masked to the natural "
+            f"[{_VEG_INDEX_HISTOGRAM_RANGE[0]:g}, {_VEG_INDEX_HISTOGRAM_RANGE[1]:g}] "
+            "index range BEFORE mean/std_dev/min/max/histogram are computed (EVI's "
+            "denominator can cross zero under thin haze/cloud edges, sending it far "
+            "outside that range) - `distribution[year][\"out_of_range_pixel_count\"]` "
+            "records how many pixels that excluded, per year. `distribution` adds "
             "per-year std dev/min/max and a pixel-value histogram fixed to the "
             f"[{_VEG_INDEX_HISTOGRAM_RANGE[0]:g}, {_VEG_INDEX_HISTOGRAM_RANGE[1]:g}] "
             f"range in {_VEG_INDEX_HISTOGRAM_BINS} bins (same edges every year, so "
@@ -903,7 +1029,7 @@ def _index_point_value(boundary: ee.Geometry, point: ee.Geometry, analysis_id: s
     documented 5-59s round trip) - a pixel click needs only the same
     latest-year image the map tile already shows, so this samples just that
     one year's composite at the clicked point."""
-    refl = _s2_reflectance_composite(boundary, max(_VEG_INDEX_YEARS))
+    refl = _s2_reflectance_composite(boundary, max(_current_veg_index_years()))
     idx = _INDEX_FORMULAS[analysis_id](refl).rename("index")
     value = idx.reduceRegion(
         reducer=ee.Reducer.first(), geometry=point, scale=10, crs=AOI_CRS, bestEffort=True,
