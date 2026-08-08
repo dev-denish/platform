@@ -92,6 +92,7 @@ from app.repositories.analysis_results import AnalysisResultRepository
 from app.repositories.audit import AuditRepository
 from app.repositories.forest_definition import ForestDefinitionRepository
 from app.services.gee_client import init_ee
+from app.services.index_summary import summarize_index_result
 from app.services.jobs_service import JobService
 from app.workers.queue import TaskRunner
 
@@ -766,13 +767,15 @@ def _round_or_none(value: float | None, ndigits: int = 4) -> float | None:
 
 
 def _annual_index_series(
-    boundary: ee.Geometry, index_band
+    boundary: ee.Geometry, index_id: str
 ) -> tuple[dict[str, Any], None, str]:
     """Shared by every vegetation/water/burn index - one composite + one
     index value PER YEAR (2017-present), not a single snapshot, matching the
-    trend-chart framing these were designed for. `index_band` is a
-    `ee.Image -> ee.Image` formula (e.g. NDVI's normalizedDifference) applied
-    to each year's reflectance composite. Builds the whole N-year
+    trend-chart framing these were designed for. `index_id` looks up the
+    `ee.Image -> ee.Image` formula (e.g. NDVI's normalizedDifference) in
+    `_INDEX_FORMULAS` below, applied to each year's reflectance composite,
+    and is also passed to `summarize_index_result()` to pick the right
+    index-specific wording. Builds the whole N-year
     computation graph in a Python loop but calls .getInfo() exactly once for
     the whole series - one round trip regardless of year count, same
     convention as the two annual (per-year) analyses above, but still slow
@@ -793,6 +796,7 @@ def _annual_index_series(
     trips to an already-async path. The scrubber still has a real job: it
     drives which year's point is highlighted on the trend chart, using the
     already-fetched series - no extra backend call for that part."""
+    index_band = _INDEX_FORMULAS[index_id]
     per_year_stats = {}
     latest_year = max(_VEG_INDEX_YEARS)
     latest_image = None
@@ -824,6 +828,7 @@ def _annual_index_series(
     stats = {
         "series": series,
         "distribution": distribution,
+        "summary": summarize_index_result(index_id, series, distribution),
         "note": (
             "Boundary-mean of a cloud-masked, pre-monsoon (Feb-May) Sentinel-2 "
             "composite per year, 2017-present. Sentinel-2 only - a Landsat "
@@ -834,7 +839,12 @@ def _annual_index_series(
             f"[{_VEG_INDEX_HISTOGRAM_RANGE[0]:g}, {_VEG_INDEX_HISTOGRAM_RANGE[1]:g}] "
             f"range in {_VEG_INDEX_HISTOGRAM_BINS} bins (same edges every year, so "
             "bars are directly comparable across years) alongside the existing "
-            "boundary-mean `series`."
+            "boundary-mean `series`. `summary` is a deterministic plain-language "
+            "reading of the most recent usable year plus the whole-series trend - "
+            "composed in Python from these same numbers "
+            "(app/services/index_summary.py), no LLM and no external call, so it "
+            "is reproducible from the stored stats. Descriptive only: it is not a "
+            "forest-definition, eligibility or carbon determination."
         ),
     }
     map_id = latest_image.visualize(min=-1, max=1, palette=_VEG_INDEX_PALETTE).getMapId()
@@ -868,23 +878,23 @@ _INDEX_FORMULAS: dict[str, Any] = {
 
 
 def _ndvi_query(boundary: ee.Geometry) -> tuple[dict[str, Any], None, str]:
-    return _annual_index_series(boundary, _INDEX_FORMULAS["ndvi"])
+    return _annual_index_series(boundary, "ndvi")
 
 
 def _evi_query(boundary: ee.Geometry) -> tuple[dict[str, Any], None, str]:
-    return _annual_index_series(boundary, _INDEX_FORMULAS["evi"])
+    return _annual_index_series(boundary, "evi")
 
 
 def _savi_query(boundary: ee.Geometry) -> tuple[dict[str, Any], None, str]:
-    return _annual_index_series(boundary, _INDEX_FORMULAS["savi"])
+    return _annual_index_series(boundary, "savi")
 
 
 def _mndwi_query(boundary: ee.Geometry) -> tuple[dict[str, Any], None, str]:
-    return _annual_index_series(boundary, _INDEX_FORMULAS["mndwi"])
+    return _annual_index_series(boundary, "mndwi")
 
 
 def _nbr_query(boundary: ee.Geometry) -> tuple[dict[str, Any], None, str]:
-    return _annual_index_series(boundary, _INDEX_FORMULAS["nbr"])
+    return _annual_index_series(boundary, "nbr")
 
 
 def _index_point_value(boundary: ee.Geometry, point: ee.Geometry, analysis_id: str) -> float | None:
