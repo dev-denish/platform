@@ -159,6 +159,173 @@ test.describe("Analysis view", () => {
     await expect(page.getByRole("button", { name: "Refresh" })).toBeVisible();
     if (process.env.ANALYSIS_SHOT) await page.screenshot({ path: process.env.ANALYSIS_SHOT });
   });
+
+  test("Identify on a computed NDVI result shows a real per-pixel value, not a raw code or a no-op", async ({
+    page,
+  }) => {
+    // Real value = real GEE round trip through GET .../analyses/ndvi/point,
+    // same as the trend chart above - there is no meaningful mock for this.
+    test.setTimeout(180_000);
+    await gotoAnalysisView(page);
+    const results = page.locator(".analysis-results-body");
+
+    await page.getByRole("button", { name: /^NDVI/ }).click();
+    await expect(results.getByText("Not computed yet")).toBeVisible();
+    await results.locator(".primary-button").click();
+    await expect(page.locator(".analysis-year-select input[type=range]")).toBeVisible({ timeout: 120_000 });
+    await expect(page.locator('.leaflet-container img[src*="earthengine"]').first()).toBeVisible({
+      timeout: 60_000,
+    });
+
+    // Toolbar/Layers panel default collapsed (Wave: floating map controls) -
+    // reach in via the same wrench toggle map.spec.js's openMapPanels() uses,
+    // scoped to THIS view's own map instance rather than importing that
+    // helper (it assumes a single map on the page; the Analysis view is a
+    // second, independently-mounted ProjectMap - see that component's own
+    // "two separate ProjectMap instances" note).
+    const toolbarToggle = page.getByRole("button", { name: /Show map tools|Hide map tools/ });
+    if ((await toolbarToggle.getAttribute("aria-expanded")) !== "true") await toolbarToggle.click();
+    await page.getByRole("button", { name: "Identify" }).click();
+
+    const popup = page.locator(".pixel-popup");
+
+    // The project's OTHER layers (seeded by other specs sharing this same QA
+    // project) span a much wider extent than this Boundary, and even INSIDE
+    // the Boundary's own on-screen bounding box a cloud-masked Sentinel-2
+    // composite has real gaps (confirmed live: at some points every layer -
+    // the uploaded COG rasters too, not just NDVI - agreed "No data", so
+    // that's real per-pixel coverage, not a bug in the new endpoint).
+    // Guessing a screen pixel to click is unreliable; instead, ask the SAME
+    // endpoint under test directly (GET .../analyses/ndvi/point) for a grid
+    // of candidate lon/lats inside the Boundary's real bounds, keep the
+    // first one with real data, then convert that lon/lat to a screen pixel
+    // via the standard spherical-Mercator slippy-map formula (Leaflet's own
+    // projection) using the map's current center/zoom (read from
+    // CoordinateBadge) - so the final UI click lands on a point already
+    // proven to have data, instead of hoping a visually-guessed spot does.
+    const projectId = page.url().match(/\/projects\/([\w-]+)/)[1];
+    const token = await page.evaluate(() => sessionStorage.getItem("dmrv.access_token"));
+    const apiBase = "http://localhost:8091/api/v1";
+    const authHeaders = { Authorization: `Bearer ${token}` };
+
+    const layersRes = await page.request.get(`${apiBase}/projects/${projectId}/layers`, {
+      headers: authHeaders,
+    });
+    const { layers: projectLayers } = await layersRes.json();
+    const boundaryLayer = projectLayers.find((l) => l.type === "Boundary");
+    const [[latMin, lngMin], [latMax, lngMax]] = boundaryLayer.bounds;
+
+    // Leaflet's default spherical-Mercator slippy-map projection: world
+    // pixel coordinates at a given zoom, standard 256px tiles.
+    function worldPx(lat, lon, zoom) {
+      const scale = 256 * 2 ** zoom;
+      const sin = Math.sin((lat * Math.PI) / 180);
+      return {
+        x: ((lon + 180) / 360) * scale,
+        y: (0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)) * scale,
+      };
+    }
+    const badgeText = await page.locator(".map-coord-badge").innerText();
+    const [, centerLatText, centerLonText, zoomText] = badgeText.match(
+      /Lat:\s*(-?[\d.]+).*Lon:\s*(-?[\d.]+).*Zoom:\s*(\d+)/s
+    );
+    const zoom = Number(zoomText);
+    const centerPx = worldPx(Number(centerLatText), Number(centerLonText), zoom);
+    const mapBox = await page.locator(".leaflet-container").boundingBox();
+    // The coordinate badge (a Leaflet control, bottom-right of the map,
+    // `L.DomEvent.disableClickPropagation`'d) never forwards clicks to the
+    // map underneath - confirmed live: a computed click point that happened
+    // to land on it produced no popup at all, not even a nodata one. Any
+    // candidate whose screen position falls under it must be skipped, not
+    // just clicked anyway.
+    const badgeBox = await page.locator(".map-coord-badge").boundingBox();
+    function toScreenPx(lat, lon) {
+      const p = worldPx(lat, lon, zoom);
+      return {
+        x: mapBox.x + mapBox.width / 2 + (p.x - centerPx.x),
+        y: mapBox.y + mapBox.height / 2 + (p.y - centerPx.y),
+      };
+    }
+    function underBadge(pt) {
+      const pad = 6;
+      return (
+        pt.x >= badgeBox.x - pad &&
+        pt.x <= badgeBox.x + badgeBox.width + pad &&
+        pt.y >= badgeBox.y - pad &&
+        pt.y <= badgeBox.y + badgeBox.height + pad
+      );
+    }
+
+    // Ask the SAME endpoint under test directly (GET .../analyses/ndvi/point)
+    // for a grid of candidate lon/lats inside the Boundary's real bounds -
+    // even INSIDE the Boundary's own on-screen bounding box a cloud-masked
+    // Sentinel-2 composite has real gaps (confirmed live: at some points
+    // every layer - the uploaded COG rasters too, not just NDVI - agreed
+    // "No data", so that's real per-pixel coverage, not a bug in the new
+    // endpoint) - so a visually-guessed screen pixel is unreliable, but a
+    // point already proven (via this same API) to have data is not.
+    let target = null;
+    outer: for (const yf of [0.5, 0.3, 0.7, 0.15, 0.85]) {
+      for (const xf of [0.5, 0.3, 0.7, 0.15, 0.85]) {
+        const lat = latMin + (latMax - latMin) * yf;
+        const lon = lngMin + (lngMax - lngMin) * xf;
+        const pt = toScreenPx(lat, lon);
+        if (pt.x < mapBox.x || pt.x > mapBox.x + mapBox.width) continue;
+        if (pt.y < mapBox.y || pt.y > mapBox.y + mapBox.height) continue;
+        if (underBadge(pt)) continue;
+        const res = await page.request.get(
+          `${apiBase}/projects/${projectId}/analyses/ndvi/point?lon=${lon}&lat=${lat}`,
+          { headers: authHeaders }
+        );
+        const body = await res.json();
+        if (body.value != null) {
+          target = { lat, lon, pt };
+          break outer;
+        }
+      }
+    }
+    expect(target, "no candidate lon/lat in the Boundary's bounds returned a real NDVI value").not.toBeNull();
+
+    let ndviRow = null;
+    // A tight jitter around the computed pixel absorbs any small rounding
+    // error in the badge's displayed (5-decimal) lat/lon/zoom read above.
+    for (const [dx, dy] of [
+      [0, 0],
+      [-2, 0],
+      [2, 0],
+      [0, -2],
+      [0, 2],
+    ]) {
+      await page.mouse.click(target.pt.x + dx, target.pt.y + dy);
+      await expect(popup).toBeVisible();
+      // inspectPixel is async (real GET .../point round trips, one per
+      // active target) - the popup stays visible with its PREVIOUS content
+      // while "Reading pixel…" loads, so checking rows immediately would
+      // read stale data from the last click, not this one.
+      await expect(popup).not.toContainText("Reading pixel", { timeout: 60_000 });
+      const row = popup.locator(".pixel-popup-row", { hasText: "NDVI" });
+      if ((await row.count()) > 0 && !(await row.innerText()).includes("No data at this point")) {
+        ndviRow = row;
+        break;
+      }
+    }
+    expect(ndviRow, "no candidate point returned a real NDVI value - all were nodata").not.toBeNull();
+
+    // The row is labeled by analysis name (not a raw layer id/date - GEE rows
+    // use activeAnalysis.name, not layer.type) and shows a plausible NDVI
+    // reading, not "Run 'NDVI' first" (this ran successfully above) and not
+    // a raw class code (NDVI has no legend - only the land-cover analyses
+    // translate through gee_class_legends.py).
+    const rowText = await ndviRow.innerText();
+    expect(rowText).not.toContain("Run 'NDVI' first");
+    const [, valueText] = rowText.match(/(-?\d+\.\d+)\s*NDVI/) ?? [];
+    expect(valueText, `NDVI row text was: ${rowText}`).toBeDefined();
+    const value = Number(valueText);
+    expect(value).toBeGreaterThan(-1);
+    expect(value).toBeLessThan(1);
+
+    if (process.env.ANALYSIS_SHOT) await page.screenshot({ path: process.env.ANALYSIS_SHOT });
+  });
 });
 
 // Not covered here: the refresh button's role gating (a plain canUpload check
