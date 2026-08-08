@@ -656,6 +656,27 @@ _VEG_SEASON_START_MD = "02-01"  # pre-monsoon window - same convention as
 _VEG_SEASON_END_MD = "05-31"  # scripts/gee_phase1_agb_proxy.py's usage example
 _VEG_CLOUD_BAND = "cs_cdf"
 _VEG_CLOUD_THRESHOLD = 0.60
+
+# All five indices (NDVI/EVI/SAVI/MNDWI/NBR) are defined on the same natural
+# range, ~-1..1 (already the assumption baked into this module's map-tile
+# visualize(min=-1, max=1, ...) below) - so the per-year distribution
+# histogram uses a FIXED [-1, 1] range with a FIXED bin count
+# (ee.Reducer.fixedHistogram), not GEE's default ee.Reducer.histogram(),
+# which is equal-COUNT/data-driven: its bucket boundaries are derived from
+# whatever min/max actually occurred THAT year, so two years' histograms
+# would use different bin edges and couldn't be overlaid or diffed on one
+# chart - defeating the entire point of a year-over-year distribution field.
+# 20 bins over [-1, 1] gives a fixed 0.1-wide bucket - fine enough that
+# common domain thresholds (e.g. NDVI's ~0.4 "healthy vegetation" cutoff)
+# land cleanly on a bin edge rather than being smeared across one, coarse
+# enough that per-bin pixel counts stay meaningful even for a small
+# microlandscape boundary (10m pixels over a few dozen hectares is only a
+# few thousand pixels total; Sturges'/Scott's rule would suggest a similar
+# ballpark - low teens to ~20 bins - for that sample size, so 20 is not an
+# arbitrary round number, it's within the range those rules would suggest
+# while also being a clean, memorable, easy-to-explain fixed width).
+_VEG_INDEX_HISTOGRAM_RANGE = (-1.0, 1.0)
+_VEG_INDEX_HISTOGRAM_BINS = 20
 # Diverging red-yellow-green - low (sparse/no vegetation) to high (dense vegetation).
 # Same ramp for all 5 indices: they all range roughly -1..1 with "more vegetation/
 # water/burn signal" at the high end, and reusing one palette keeps every index's
@@ -692,6 +713,58 @@ def _s2_reflectance_composite(boundary: ee.Geometry, year: int) -> ee.Image:
     return composite.divide(10000)
 
 
+def _index_stats_reducer() -> ee.Reducer:
+    """One combined reducer -> one reduceRegion call per year, still one
+    .getInfo() round trip for the whole series (see _annual_index_series):
+    mean (unchanged - stats["series"] reads this), stdDev, min/max, and a
+    fixed-range histogram, all computed in a single pass over the pixels
+    (sharedInputs=True) rather than four/five separate reduceRegion calls.
+    Combined-reducer output keys follow GEE's own
+    "<band>_<reducer output name>" convention - for our single "index" band
+    that's index_mean/index_stdDev/index_min/index_max/index_histogram, which
+    _annual_index_series unpacks below."""
+    return (
+        ee.Reducer.mean()
+        .combine(ee.Reducer.stdDev(), sharedInputs=True)
+        .combine(ee.Reducer.minMax(), sharedInputs=True)
+        .combine(
+            ee.Reducer.fixedHistogram(
+                _VEG_INDEX_HISTOGRAM_RANGE[0],
+                _VEG_INDEX_HISTOGRAM_RANGE[1],
+                _VEG_INDEX_HISTOGRAM_BINS,
+            ),
+            sharedInputs=True,
+        )
+    )
+
+
+def _shape_index_histogram(rows: list[list[float]] | None) -> dict[str, list[Any]]:
+    """Pure Python: turns ee.Reducer.fixedHistogram()'s raw reduceRegion
+    output - a list of [bucket_lower_edge, count] rows, `_VEG_INDEX_HISTOGRAM_
+    BINS` of them, each `count` from a pass over `_VEG_INDEX_HISTOGRAM_RANGE`
+    - into {bin_edges, counts} arrays a frontend chart can draw directly, no
+    `ee` import needed. bin_edges has len(counts)+1 entries (every bucket's
+    lower edge plus the final bucket's upper edge, derived from the bucket
+    width) - the same edge convention numpy.histogram uses, so a consumer
+    doesn't have to separately carry the bin width around. No `ee` types
+    anywhere in this function - qa-backend-tester/qa-geospatial-validator can
+    unit test it directly with a canned rows list, no live GEE session
+    needed. Returns empty arrays for `None`/empty input (e.g. a year whose
+    composite had zero valid pixels within the boundary after cloud
+    masking)."""
+    if not rows:
+        return {"bin_edges": [], "counts": []}
+    lower_edges = [float(r[0]) for r in rows]
+    counts = [int(r[1]) for r in rows]
+    bin_width = lower_edges[1] - lower_edges[0] if len(lower_edges) > 1 else 0.0
+    bin_edges = lower_edges + [lower_edges[-1] + bin_width]
+    return {"bin_edges": bin_edges, "counts": counts}
+
+
+def _round_or_none(value: float | None, ndigits: int = 4) -> float | None:
+    return round(value, ndigits) if value is not None else None
+
+
 def _annual_index_series(
     boundary: ee.Geometry, index_band
 ) -> tuple[dict[str, Any], None, str]:
@@ -704,7 +777,15 @@ def _annual_index_series(
     the whole series - one round trip regardless of year count, same
     convention as the two annual (per-year) analyses above, but still slow
     enough end-to-end (5-59s measured for NDVI, see this module's own
-    docstring) that every caller of this function runs async, not sync.
+    docstring) that every caller of this function runs async, not sync. The
+    per-year reduceRegion now runs a combined reducer (_index_stats_reducer)
+    instead of bare mean - more work per pixel pass, but still exactly ONE
+    reduceRegion call per year and ONE .getInfo() for the whole series, so
+    the "one round trip" contract this module's docstring documents is
+    unchanged; only the per-call server-side compute cost grows a bit
+    (histogram binning is not free), which may push the low end of the
+    previously measured 5-59s range up somewhat - not re-measured live here,
+    flagging rather than asserting a number.
 
     Only the LATEST year gets a map tile (one extra getMapId() call) - not
     all N years. A per-year tile for the timeline scrubber to switch between
@@ -712,7 +793,7 @@ def _annual_index_series(
     trips to an already-async path. The scrubber still has a real job: it
     drives which year's point is highlighted on the trend chart, using the
     already-fetched series - no extra backend call for that part."""
-    per_year_value = {}
+    per_year_stats = {}
     latest_year = max(_VEG_INDEX_YEARS)
     latest_image = None
     for year in _VEG_INDEX_YEARS:
@@ -720,21 +801,40 @@ def _annual_index_series(
         idx = index_band(refl).rename("index")
         if year == latest_year:
             latest_image = idx
-        per_year_value[str(year)] = idx.reduceRegion(
-            reducer=ee.Reducer.mean(), geometry=boundary, scale=10, crs=AOI_CRS,
+        per_year_stats[str(year)] = idx.reduceRegion(
+            reducer=_index_stats_reducer(), geometry=boundary, scale=10, crs=AOI_CRS,
             maxPixels=1e10, bestEffort=True,
-        ).get("index")
-    series = ee.Dictionary(per_year_value).getInfo()
-    series = {year: (round(v, 4) if v is not None else None) for year, v in series.items()}
+        )
+    raw = ee.Dictionary(per_year_stats).getInfo()  # ONE round trip for every year
+
+    series: dict[str, float | None] = {}
+    distribution: dict[str, dict[str, Any]] = {}
+    for year, values in raw.items():
+        values = values or {}
+        mean = _round_or_none(values.get("index_mean"))
+        series[year] = mean
+        distribution[year] = {
+            "mean": mean,
+            "std_dev": _round_or_none(values.get("index_stdDev")),
+            "min": _round_or_none(values.get("index_min")),
+            "max": _round_or_none(values.get("index_max")),
+            "histogram": _shape_index_histogram(values.get("index_histogram")),
+        }
 
     stats = {
         "series": series,
+        "distribution": distribution,
         "note": (
             "Boundary-mean of a cloud-masked, pre-monsoon (Feb-May) Sentinel-2 "
             "composite per year, 2017-present. Sentinel-2 only - a Landsat "
             "extension back to 2013 would need different cloud-masking (no Cloud "
             "Score+ equivalent) and risks a false 'trend break' at the sensor "
-            "handoff year, so isn't included in this batch."
+            "handoff year, so isn't included in this batch. `distribution` adds "
+            "per-year std dev/min/max and a pixel-value histogram fixed to the "
+            f"[{_VEG_INDEX_HISTOGRAM_RANGE[0]:g}, {_VEG_INDEX_HISTOGRAM_RANGE[1]:g}] "
+            f"range in {_VEG_INDEX_HISTOGRAM_BINS} bins (same edges every year, so "
+            "bars are directly comparable across years) alongside the existing "
+            "boundary-mean `series`."
         ),
     }
     map_id = latest_image.visualize(min=-1, max=1, palette=_VEG_INDEX_PALETTE).getMapId()
