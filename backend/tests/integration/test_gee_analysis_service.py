@@ -348,19 +348,28 @@ def test_get_point_value_sync_analysis_returns_a_real_value_immediately(
 
 
 def test_get_point_value_async_analysis_before_any_refresh_is_a_clear_validation_error(
-    db, analysis_service, fake_compute_point
+    db, analysis_service, fake_compute, fake_compute_point
 ):
     admin = _make_user(db, Role.ADMINISTRATOR)
     pid = _make_project(db, f"Proj-{uuid.uuid4()}")
     _add_boundary(db, pid)
 
-    with pytest.raises(ValidationError, match="Run 'NDVI' first"):
+    with pytest.raises(ValidationError) as exc_info:
         analysis_service.get_point_value(pid, "ndvi", lon=77.5, lat=12.9, actor=admin)
 
-    assert fake_compute_point == []  # never reached GEE - rejected on the cache check
+    # Exact text (not a substring match) - this is what actually reaches
+    # Identify's popup verbatim (ProjectMap.jsx's renderGeePixelRow renders
+    # `error` as-is), so a wording regression here is a real user-facing bug,
+    # not just an internal message drifting.
+    assert exc_info.value.message == (
+        "Run 'NDVI' first - it hasn't been computed for this project yet."
+    )
+    assert exc_info.value.status_code == 422
+    assert fake_compute_point == []  # never reached the point-query path...
+    assert fake_compute == []  # ...and never reached the expensive refresh/compute path either
 
 
-def test_get_point_value_async_analysis_after_refresh_returns_a_real_value(
+def test_get_point_value_async_analysis_after_refresh_returns_a_real_value_without_recomputing(
     db, analysis_service, fake_compute, fake_compute_point
 ):
     admin = _make_user(db, Role.ADMINISTRATOR)
@@ -379,6 +388,12 @@ def test_get_point_value_async_analysis_after_refresh_returns_a_real_value(
 
     assert result.class_name == "crops"  # from the canned _compute_point stub
     assert fake_compute_point == [("ndvi", 77.5, 12.9)]
+    # The whole point of the cache check above: a cached result lets
+    # Identify read a real value WITHOUT re-running _compute() - the
+    # expensive multi-year _annual_index_series() path _compute() drives for
+    # NDVI/EVI/SAVI/MNDWI/NBR (5-59s measured, see gee_analysis_service.py's
+    # own module docstring) is never touched by a pixel click.
+    assert fake_compute == []
 
 
 def test_get_point_value_unknown_analysis_id_is_not_found(db, analysis_service, fake_compute_point):
