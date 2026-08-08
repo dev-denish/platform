@@ -1494,9 +1494,10 @@ button:not(:disabled):active,
  * bar any more - now that it floats free of the Analysis panel's side
  * columns (the thing that used to force a two-row/readout-row split just to
  * fit ~525px), one row is plenty for the whole icon-only control set. Same
- * floating-chrome treatment (border/radius/shadow) as .map-toolbar-menu and
- * .symbology-popover, the app's other floating map surfaces - no new tokens
- * invented for this one. */
+ * floating-card treatment as .symbology-popover, the app's other card-shaped
+ * floating map surface: --shadow-lift alone (it already bakes in a 1px
+ * border-strong ring - see :root) draws the hairline edge, no separate
+ * `border` declared on top of it (that would double the same ring). */
 .map-toolbar {
   display: flex;
   align-items: center;
@@ -1504,7 +1505,6 @@ button:not(:disabled):active,
   gap: 6px;
   padding: 6px;
   background: var(--surface);
-  border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-lift);
   font-size: 12.5px;
@@ -1783,11 +1783,15 @@ button:not(:disabled):active,
 }
 
 /* Wave: floating map controls. The two toggles that reveal the toolbar/
- * Layers floating panels - same small floating-button footprint as
- * .icon-button (FullscreenToggle uses that one), but a solid fill instead
- * of a translucent chrome-wash: these two need to read as distinct from
- * each other at a glance (one dark/neutral, one the brand orange) rather
- * than as a matched pair, since they open two unrelated panels. */
+ * Layers floating panels - close to .icon-button's small floating-button
+ * footprint (FullscreenToggle uses that one) but deliberately a touch
+ * bigger (32px vs 30px) and on --shadow-lift rather than --shadow-card:
+ * these are primary entry points into the map's whole control surface, not
+ * a secondary utility toggle like fullscreen, and earn slightly more visual
+ * weight for that. Solid fills instead of a translucent chrome-wash for the
+ * same reason, plus so the two read as distinct from each other at a glance
+ * (one dark/neutral, one the brand orange) - they open two unrelated
+ * panels, not a matched pair. */
 .map-floating-toggle-row {
   display: flex;
   gap: 8px;
@@ -1884,12 +1888,13 @@ button:not(:disabled):active,
   color: var(--accent-strong);
 }
 
-/* Wave: floating map controls - a floating card (same border/radius/shadow
- * treatment as .map-toolbar and every other floating map surface) revealed
- * by the orange Layers toggle, instead of a column docked the full height
- * of the map frame. `max-height` caps it well within .map-frame's 460px so
- * it never runs off the bottom of the map it's floating over; the internal
- * scroll this needs is still .layers-panel-groups's job, unchanged below. */
+/* Wave: floating map controls - a floating card (same treatment as
+ * .map-toolbar/.symbology-popover: --shadow-lift alone, no separate border -
+ * see .map-toolbar's own comment above) revealed by the orange Layers
+ * toggle, instead of a column docked the full height of the map frame.
+ * `max-height` caps it well within .map-frame's 460px so it never runs off
+ * the bottom of the map it's floating over; the internal scroll this needs
+ * is still .layers-panel-groups's job, unchanged below. */
 .layers-panel {
   /* anchors .symbology-popover to this panel, not the viewport - deliberately
    * NOT overflow:auto here even though it's already height-capped: that
@@ -1903,7 +1908,6 @@ button:not(:disabled):active,
   display: flex;
   flex-direction: column;
   background: var(--surface);
-  border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-lift);
   font-size: 12.5px;
