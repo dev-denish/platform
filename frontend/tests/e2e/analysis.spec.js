@@ -170,7 +170,13 @@ test.describe("Analysis view", () => {
     const results = page.locator(".analysis-results-body");
 
     await page.getByRole("button", { name: /^NDVI/ }).click();
-    await expect(results.getByText("Not computed yet")).toBeVisible();
+    // NDVI may already be computed here (this same seeded QA project is
+    // shared with the "computing NDVI…" test above, which runs first in a
+    // full suite run and leaves a cached result behind) - the primary
+    // button reads "Run analysis" OR "Refresh" depending on which, but
+    // either one (re)computes a FRESH result, which is what this test
+    // actually needs; asserting "Not computed yet" would only hold when
+    // this spec happens to run in isolation.
     await results.locator(".primary-button").click();
     await expect(page.locator(".analysis-year-select input[type=range]")).toBeVisible({ timeout: 120_000 });
     await expect(page.locator('.leaflet-container img[src*="earthengine"]').first()).toBeVisible({
