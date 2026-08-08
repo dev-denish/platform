@@ -479,6 +479,13 @@ export default function AnalysisPanel({ projectId, layers, onRefreshLayers, onLe
           onLegendChanged={onLegendChanged}
           projectId={projectId}
           overlayTileUrl={result?.tile_url_template ?? null}
+          // Identify support (GET .../analyses/{id}/point): only ever the ONE
+          // selected, real (catalog "available") analysis - selection here is
+          // single, not multi-select, so there is no "which of several GEE
+          // layers" ambiguity to resolve yet. Passed regardless of whether it
+          // has been run - an async index that hasn't gets a clear "run this
+          // first" popup row (renderGeePixelRow) instead of no row at all.
+          activeAnalysis={selected && selected.status === "available" ? { id: selected.id, name: selected.name } : null}
         />
 
         <aside className="analysis-column">

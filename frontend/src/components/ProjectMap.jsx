@@ -476,7 +476,14 @@ const PROACTIVE_REFRESH_INTERVAL_MS = 45 * 60 * 1000;
 // tiles (see AnalysisPanel.jsx). Deliberately a prop on THIS map rather than a
 // second independent MapContainer, so an analysis result is seen over the
 // project's own layers, with the same toolbar/measure/basemap chrome.
-export default function ProjectMap({ layers, onRefreshLayers, onLegendChanged, projectId, overlayTileUrl }) {
+export default function ProjectMap({
+  layers,
+  onRefreshLayers,
+  onLegendChanged,
+  projectId,
+  overlayTileUrl,
+  activeAnalysis = null,
+}) {
   const [layerState, setLayerState] = useState(() => initLayerState(layers));
   // Wave: map UI redesign. The Leaflet map instance (once mounted) and its
   // live zoom/center/hovered-position, both consumed by the toolbar above -
@@ -704,17 +711,22 @@ export default function ProjectMap({ layers, onRefreshLayers, onLegendChanged, p
   }, [measureMode, measurePoints]);
 
   // Inspects whichever layer(s) are currently checked/visible in
-  // LayersPanel - reused as-is instead of a second "which layer did you
-  // mean" resolution just for clicks. With several layers visible at once
-  // this naturally inspects all of them.
+  // LayersPanel, PLUS the Analysis tab's one selected GEE analysis
+  // (`activeAnalysis`, passed down from AnalysisPanel - null on the Layers
+  // tab's own ProjectMap instance, which has no such thing) - reused as-is
+  // instead of a second "which layer did you mean" resolution just for
+  // clicks. With several targets active at once this naturally inspects all
+  // of them, each labeled with its own source, rather than silently picking
+  // one - see renderGeePixelRow below for how a not-yet-computed async
+  // analysis surfaces as a row instead of a network error.
   async function inspectPixel(latlng) {
     // `symbologyLayers` is declared further down in this same function body,
     // but this closure only reads it when a click actually happens - always
     // after the full render (and its `const` assignments) has completed.
     const targets = symbologyLayers;
-    if (targets.length === 0) return;
+    if (targets.length === 0 && !activeAnalysis) return;
     setPixelPopup({ latlng, loading: true, rows: [] });
-    const rows = await Promise.all(
+    const cogRows = await Promise.all(
       targets.map(async (l) => {
         try {
           const data = await apiFetch(`/layers/${l.layer_id}/pixel?lon=${latlng.lng}&lat=${latlng.lat}`);
@@ -724,7 +736,22 @@ export default function ProjectMap({ layers, onRefreshLayers, onLegendChanged, p
         }
       })
     );
-    setPixelPopup({ latlng, loading: false, rows });
+    const geeRows = [];
+    if (activeAnalysis) {
+      try {
+        const data = await apiFetch(
+          `/projects/${projectId}/analyses/${activeAnalysis.id}/point?lon=${latlng.lng}&lat=${latlng.lat}`
+        );
+        geeRows.push({ gee: true, analysisName: activeAnalysis.name, data });
+      } catch (err) {
+        geeRows.push({
+          gee: true,
+          analysisName: activeAnalysis.name,
+          error: err.message ?? "Could not read this pixel.",
+        });
+      }
+    }
+    setPixelPopup({ latlng, loading: false, rows: [...cogRows, ...geeRows] });
   }
 
   // Wave: multi-format layers. An external_wms/external_wfs layer's stored
@@ -1039,6 +1066,35 @@ export default function ProjectMap({ layers, onRefreshLayers, onLegendChanged, p
     );
   }
 
+  // GEE-analysis counterpart to renderPixelRow above, for the one row
+  // `inspectPixel` adds from `activeAnalysis` (GET /projects/{id}/analyses/
+  // {id}/point). A 422 from that endpoint - e.g. an async vegetation index
+  // that's never been run yet - lands here as `error`, the SAME clear
+  // message the backend wrote ("Run 'NDVI' first - ..."), not a generic
+  // failure or a silent no-op.
+  function renderGeePixelRow({ error, data }) {
+    if (error) return <div className="pixel-popup-error">{error}</div>;
+    if (data.class_name) {
+      return (
+        <div className="pixel-popup-value">
+          <span className="legend-swatch" style={{ background: data.class_color || "#999" }} aria-hidden="true" />
+          {data.class_name}
+        </div>
+      );
+    }
+    if (data.value == null) return <div>No data at this point.</div>;
+    const digits = data.unit === "% tree cover (2000)" ? 1 : 3;
+    return (
+      <div className="pixel-popup-value-column">
+        <div className="pixel-popup-value">
+          {formatNumber(data.value, digits)}
+          {data.unit ? <span className="pixel-popup-unit"> {data.unit}</span> : null}
+        </div>
+        {data.detail ? <div className="pixel-popup-detail">{data.detail}</div> : null}
+      </div>
+    );
+  }
+
   return (
     <div>
       <ErrorBanner
@@ -1191,12 +1247,10 @@ export default function ProjectMap({ layers, onRefreshLayers, onLegendChanged, p
                     ) : pixelPopup.rows.length === 0 ? (
                       "No active layer to inspect."
                     ) : (
-                      pixelPopup.rows.map((row) => (
-                        <div className="pixel-popup-row" key={row.layer.layer_id}>
-                          <strong>
-                            {row.layer.type} · {row.layer.date_processed ?? "undated"}
-                          </strong>
-                          {renderPixelRow(row)}
+                      pixelPopup.rows.map((row, i) => (
+                        <div className="pixel-popup-row" key={row.gee ? `gee-${row.analysisName}` : row.layer.layer_id ?? i}>
+                          <strong>{row.gee ? row.analysisName : `${row.layer.type} · ${row.layer.date_processed ?? "undated"}`}</strong>
+                          {row.gee ? renderGeePixelRow(row) : renderPixelRow(row)}
                         </div>
                       ))
                     )}
