@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { login, ADMIN, QA_PROJECT_NAME, collectConsoleErrors, openMapPanels } from "./helpers.js";
+import { login, ADMIN, QA_PROJECT_NAME, collectConsoleErrors, openMapPanels, clickMapToActivate } from "./helpers.js";
 
 async function gotoProjectWithMap(page) {
   await login(page, ADMIN);
@@ -14,7 +14,7 @@ async function gotoProjectWithMap(page) {
   await openMapPanels(page);
   // Click once first - scroll-zoom and most interaction is gated on the map
   // having been clicked/focused at least once (ScrollZoomOnActivate).
-  await map.click({ position: { x: 400, y: 300 } });
+  await clickMapToActivate(map);
   return map;
 }
 
@@ -74,8 +74,12 @@ test.describe("Map: core controls after memoization/throttling changes", () => {
     await page.getByRole("button", { name: /Measure/i }).click();
     await page.getByRole("button", { name: "Distance" }).click();
     const box = await map.boundingBox();
-    await map.click({ position: { x: box.width * 0.3, y: box.height * 0.3 } });
-    await map.click({ position: { x: box.width * 0.6, y: box.height * 0.5 } });
+    // Right-of-center (>0.6) - openMapPanels() leaves the floating toolbar
+    // panel open, which spans roughly the left ~57% of the map canvas width
+    // (confirmed via a real run's failure screenshot) and would otherwise
+    // intercept these clicks.
+    await map.click({ position: { x: box.width * 0.7, y: box.height * 0.3 } });
+    await map.click({ position: { x: box.width * 0.9, y: box.height * 0.6 } });
     const result = page.locator(".measure-result");
     await expect(result).toContainText(/\d+(\.\d+)?\s*m/);
     await page.getByRole("button", { name: "Clear" }).click();
@@ -86,9 +90,10 @@ test.describe("Map: core controls after memoization/throttling changes", () => {
     await page.getByRole("button", { name: /Measure/i }).click();
     await page.getByRole("button", { name: "Area" }).click();
     const box = await map.boundingBox();
-    await map.click({ position: { x: box.width * 0.3, y: box.height * 0.3 } });
-    await map.click({ position: { x: box.width * 0.6, y: box.height * 0.3 } });
-    await map.click({ position: { x: box.width * 0.45, y: box.height * 0.55 } });
+    // Right-of-center - see the distance test above for why.
+    await map.click({ position: { x: box.width * 0.65, y: box.height * 0.25 } });
+    await map.click({ position: { x: box.width * 0.9, y: box.height * 0.25 } });
+    await map.click({ position: { x: box.width * 0.78, y: box.height * 0.55 } });
     const result = page.locator(".measure-result");
     await expect(result).toContainText(/ha/);
   });
@@ -101,7 +106,8 @@ test.describe("Map: core controls after memoization/throttling changes", () => {
     // selected if run in the same worker.
     await page.getByRole("button", { name: "Identify" }).click();
     const box = await map.boundingBox();
-    await map.click({ position: { x: box.width / 2, y: box.height / 2 } });
+    // Right-of-center, not the dead center - see the distance test above.
+    await map.click({ position: { x: box.width * 0.75, y: box.height / 2 } });
     const popup = page.locator(".pixel-popup");
     await expect(popup).toBeVisible();
     expect(errors).toEqual([]);

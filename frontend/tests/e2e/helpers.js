@@ -70,6 +70,27 @@ export async function uiLogin(page, { username, password }) {
 }
 
 /**
+ * Clicks the map canvas at a point guaranteed clear of every corner overlay
+ * (Wave: floating map controls) - the toolbar/Layers floating panels
+ * (top-left, together up to ~550px wide and, with several layer groups
+ * open, taller than the 460px map frame itself), the fullscreen toggle
+ * (top-right), and the coordinate badge/scale bar (bottom-right). A plain
+ * hardcoded (400, 300) - what every "click once to activate scroll-zoom"
+ * call in this suite used before the floating redesign - now lands ON the
+ * toolbar/Layers panel whenever openMapPanels() has opened them (confirmed:
+ * real Playwright run, "<div class=\"map-overlay-topleft\"> intercepts
+ * pointer events"), the same way a real user's click would if they aimed at
+ * that same pixel with both panels open - this isn't a bug in the app, the
+ * test just needs to click somewhere those real, visible panels don't cover.
+ * Right-of-center, vertically centered clears all four corners regardless of
+ * which panels are open.
+ */
+export async function clickMapToActivate(map) {
+  const box = await map.boundingBox();
+  await map.click({ position: { x: box.width - 80, y: box.height / 2 } });
+}
+
+/**
  * Opens the map's two floating panels (Wave: floating map controls) - the
  * toolbar (wrench toggle) and the Layers panel (orange toggle), both
  * collapsed by default so the map gets full width/space on first load. Most

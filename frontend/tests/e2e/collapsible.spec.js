@@ -88,11 +88,14 @@ test.describe("LayersPanel (map) collapsible groups", () => {
     // everything inside it, including its own "Layers" header below) is
     // collapsed by default now; open it first via the orange toggle.
     await openMapPanels(page);
-    // exact: true - "Layers" alone would also match "Vector layers" (a
-    // per-kind group header) and "Hide the Layers panel" (the map's separate
-    // whole-panel-collapse button, see redesign.spec.js) under Playwright's
-    // default substring matching.
-    const outer = page.getByRole("button", { name: "Layers", exact: true });
+    // Scoped to the header's own class, not just role+exact-text: the
+    // page-level Layers/Analysis segmented control (ProjectDetailPage.jsx)
+    // has its OWN button with the exact same accessible name "Layers" - a
+    // pre-existing collision (confirmed: present unmodified on main too,
+    // predates this branch) that `exact: true` alone doesn't resolve, since
+    // both buttons' names are identically "Layers", not one being a
+    // substring of the other.
+    const outer = page.locator(".layers-panel-header");
     await expect(outer).toBeVisible();
     await expect(outer).toHaveAttribute("aria-expanded", "true");
     await outer.click();

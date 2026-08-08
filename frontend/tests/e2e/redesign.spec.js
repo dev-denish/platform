@@ -4,6 +4,7 @@ import { fileURLToPath } from "url";
 import { test, expect } from "@playwright/test";
 import {
   login, readTokens, ADMIN, GIS_ASSOCIATE, QA_PROJECT_NAME, API_BASE, collectConsoleErrors, openMapPanels,
+  clickMapToActivate,
 } from "./helpers.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -73,12 +74,15 @@ test.describe("Admin-only layer rename", () => {
 test.describe("Measure tools: unit selector", () => {
   test("switching distance units changes the displayed unit and persists across reload", async ({ page }) => {
     const map = (await gotoQaProject(page), page.locator(".leaflet-container"));
-    await map.click({ position: { x: 400, y: 300 } });
+    await clickMapToActivate(map);
     await page.getByRole("button", { name: /Measure/i }).click();
     await page.getByRole("button", { name: "Distance" }).click();
     const box = await map.boundingBox();
-    await map.click({ position: { x: box.width * 0.3, y: box.height * 0.3 } });
-    await map.click({ position: { x: box.width * 0.6, y: box.height * 0.5 } });
+    // Right-of-center (>0.6) - the open floating toolbar panel spans roughly
+    // the left ~57% of the map canvas width (confirmed via a real run's
+    // failure screenshot) and would otherwise intercept these clicks.
+    await map.click({ position: { x: box.width * 0.7, y: box.height * 0.3 } });
+    await map.click({ position: { x: box.width * 0.9, y: box.height * 0.6 } });
     const result = page.locator(".measure-result");
     await expect(result).toContainText(/\bm\b/);
 
@@ -89,7 +93,7 @@ test.describe("Measure tools: unit selector", () => {
     // Preference persists (lib/measure.js's storeUnit -> localStorage), so a
     // reload defaults straight to km instead of resetting to meters.
     await page.reload();
-    await map.click({ position: { x: 400, y: 300 } });
+    await clickMapToActivate(map);
     await page.getByRole("button", { name: /Measure/i }).click();
     await page.getByRole("button", { name: "Distance" }).click();
     await expect(page.getByLabel("Distance units")).toHaveValue("km");
@@ -100,13 +104,14 @@ test.describe("Draw tools", () => {
   test("drawing a polygon and downloading it produces a shapefile zip", async ({ page }) => {
     await gotoQaProject(page);
     const map = page.locator(".leaflet-container");
-    await map.click({ position: { x: 400, y: 300 } });
+    await clickMapToActivate(map);
     await page.getByRole("button", { name: "Draw" }).click();
     await page.getByRole("button", { name: "Polygon" }).click();
     const box = await map.boundingBox();
-    await map.click({ position: { x: box.width * 0.3, y: box.height * 0.3 } });
-    await map.click({ position: { x: box.width * 0.6, y: box.height * 0.3 } });
-    await map.click({ position: { x: box.width * 0.45, y: box.height * 0.55 } });
+    // Right-of-center - see the Measure tools test above for why.
+    await map.click({ position: { x: box.width * 0.65, y: box.height * 0.25 } });
+    await map.click({ position: { x: box.width * 0.9, y: box.height * 0.25 } });
+    await map.click({ position: { x: box.width * 0.78, y: box.height * 0.55 } });
     await page.getByRole("button", { name: "Finish" }).click();
     await page.getByLabel("Shape name").fill("qa-drawn-shape");
 
@@ -120,13 +125,15 @@ test.describe("Draw tools", () => {
   test("drawing a point and saving it to the project adds an Added layer", async ({ page }) => {
     await gotoQaProject(page);
     const map = page.locator(".leaflet-container");
-    await map.click({ position: { x: 400, y: 300 } });
+    await clickMapToActivate(map);
     await page.getByRole("button", { name: "Draw" }).click();
     await page.getByRole("button", { name: "Point" }).click();
     const box = await map.boundingBox();
     // Single click IS the whole shape for point mode (ProjectMap.jsx's
     // addDrawPoint) - "finished" flips true with no separate Finish click.
-    await map.click({ position: { x: box.width * 0.5, y: box.height * 0.5 } });
+    // Right-of-center, not the dead center - see the Measure tools test
+    // above for why.
+    await map.click({ position: { x: box.width * 0.75, y: box.height / 2 } });
     const shapeName = `qa-saved-point-${Date.now()}`;
     await page.getByLabel("Shape name").fill(shapeName);
     await page.getByRole("button", { name: "Save to project" }).click();
@@ -222,7 +229,7 @@ test.describe("Map toolbar: new capabilities", () => {
   test("Compare shows a before/after swipe divider once 2+ dated layers exist", async ({ page }) => {
     await gotoQaProject(page);
     const map = page.locator(".leaflet-container");
-    await map.click({ position: { x: 400, y: 300 } });
+    await clickMapToActivate(map);
     // Wave: toolbar overflow - Compare now lives inside the "More" dropdown,
     // not directly on the main toolbar row.
     await page.getByRole("button", { name: "More" }).click();
@@ -236,7 +243,7 @@ test.describe("Map toolbar: new capabilities", () => {
   test("Jump to coordinates moves the map and rejects garbage input", async ({ page }) => {
     await gotoQaProject(page);
     const map = page.locator(".leaflet-container");
-    await map.click({ position: { x: 400, y: 300 } });
+    await clickMapToActivate(map);
     // Wave: toolbar overflow - the lat/lon field is now collapsed behind a
     // pin icon until clicked (JumpToCoords's own `open` state).
     await page.getByRole("button", { name: "Go to coordinates" }).click();
@@ -258,7 +265,7 @@ test.describe("Map toolbar: new capabilities", () => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await gotoQaProject(page);
     const map = page.locator(".leaflet-container");
-    await map.click({ position: { x: 400, y: 300 } });
+    await clickMapToActivate(map);
     await page.locator(".map-toolbar-copy").click();
     await expect(page.getByText("Copied!")).toBeVisible();
   });
@@ -266,7 +273,7 @@ test.describe("Map toolbar: new capabilities", () => {
   test("Save image downloads a PNG of the current view", async ({ page }) => {
     await gotoQaProject(page);
     const map = page.locator(".leaflet-container");
-    await map.click({ position: { x: 400, y: 300 } });
+    await clickMapToActivate(map);
     // Wave: toolbar overflow - Save image now lives inside "More".
     await page.getByRole("button", { name: "More" }).click();
     const [download] = await Promise.all([
@@ -287,8 +294,19 @@ test.describe("Map toolbar: new capabilities", () => {
     // center and exposing the pos/center gap as a real mismatch after
     // recall. Click the map's actual center instead, so pos and center are
     // the same point regardless of canvas size.
+    //
+    // Wave: floating map controls - gotoQaProject leaves both floating
+    // panels open, and unlike every other map-click in this suite, THIS
+    // click genuinely needs to land at the canvas's true pixel center (not
+    // just anywhere clear of the panels) for pos===center to hold - so
+    // close both panels first instead of relocating the click. A real user
+    // could do exactly this (collapse both, click center, reopen the
+    // toolbar for Views below).
+    await page.getByRole("button", { name: "Hide map tools" }).click();
+    await page.getByRole("button", { name: "Hide the Layers panel" }).click();
     const box = await map.boundingBox();
     await map.click({ position: { x: box.width / 2, y: box.height / 2 } });
+    await page.getByRole("button", { name: "Show map tools" }).click();
 
     // window.prompt() has no Playwright-native handler (unlike dialog()) for
     // a plain synchronous prompt - stub it directly on the already-loaded
