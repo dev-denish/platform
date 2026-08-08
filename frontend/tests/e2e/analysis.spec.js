@@ -110,7 +110,18 @@ test.describe("Analysis view", () => {
     await expect(results.getByText("Not computed yet")).toBeVisible();
     await expect(page.locator('.leaflet-container img[src*="earthengine"]')).toHaveCount(0);
 
-    const runButton = page.getByRole("button", { name: "Run analysis" });
+    // Scoped by container + class, not by name text: this button's own
+    // label changes under us (Run analysis -> Queued…/Computing… -> Refresh
+    // - see runningLabel() in AnalysisPanel.jsx), and a name-filtered
+    // getByRole re-queries on every use, so a locator bound to "Run
+    // analysis" stops matching anything the instant the label changes -
+    // confirmed: that's exactly what made the assertion below "element(s)
+    // not found" even though the button was on screen and correctly reading
+    // "Computing…". `.primary-button` is the only button
+    // AnalysisPanel.jsx's renderResults() ever renders inside
+    // .analysis-results-body, so this locator is stable across every one of
+    // its label changes, not just past this one instance of it.
+    const runButton = results.locator(".primary-button");
     await runButton.click();
     // The in-flight label reflects the real job status while polling
     // (queued, then running) rather than a static "Computing…" the whole
