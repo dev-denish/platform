@@ -1,6 +1,7 @@
 import { readFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { expect } from "@playwright/test";
 
 // Shared helpers for the collapsible-panel-redesign regression pass.
 //
@@ -109,6 +110,29 @@ export async function openMapPanels(page) {
   if (await layersToggle.isVisible()) {
     if ((await layersToggle.getAttribute("aria-expanded")) !== "true") await layersToggle.click();
   }
+}
+
+/**
+ * Maps tab -> Analysis view (Wave: GEE analysis registry). Shared by every
+ * spec that exercises the Analysis view (analysis.spec.js,
+ * analysis-enriched.spec.js) so there is exactly one place that knows how to
+ * get there, rather than near-identical copies drifting apart.
+ */
+export async function gotoAnalysisView(page, creds = ADMIN) {
+  // Wide enough for the three-across layout (see .analysis-layout's 1440px
+  // breakpoint) - the default 1280 test viewport stacks it into one column.
+  await page.setViewportSize({ width: 1800, height: 1000 });
+  await login(page, creds);
+  await page.goto("/projects");
+  // Filtered, not "click the link on page 1": the backend's own DB-backed
+  // integration tests can be pointed at this same ephemeral stack and leave
+  // hundreds of their own projects behind, which pushes this one off the
+  // first (client-side-limited) page of the list. Observed, not theoretical.
+  await page.locator(".projects-search").fill(QA_PROJECT_NAME);
+  await page.getByRole("link", { name: QA_PROJECT_NAME }).click();
+  await expect(page).toHaveURL(/\/projects\/[\w-]+/);
+  await page.getByRole("group", { name: "Maps view" }).getByRole("button", { name: "Analysis" }).click();
+  await expect(page.locator(".analysis-layout")).toBeVisible();
 }
 
 /** Collects console "error"-level messages + uncaught page errors for the

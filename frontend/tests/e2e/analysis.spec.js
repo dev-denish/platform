@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { login, ADMIN, QA_PROJECT_NAME } from "./helpers.js";
+import { gotoAnalysisView } from "./helpers.js";
 
 /**
  * Maps tab -> Analysis view (Wave: GEE analysis registry).
@@ -9,23 +9,12 @@ import { login, ADMIN, QA_PROJECT_NAME } from "./helpers.js";
  * there is no meaningful mock for a real dataset query, and a fake one would
  * only prove the mock works. Hence the long per-test timeout: Hansen takes
  * ~7s server-side, plus tile loading.
+ *
+ * gotoAnalysisView() itself now lives in helpers.js (Wave: enriched index
+ * results added a second spec file, analysis-enriched.spec.js, that needs
+ * the exact same "get to the Analysis view" steps - shared rather than
+ * copy-pasted).
  */
-async function gotoAnalysisView(page, creds = ADMIN) {
-  // Wide enough for the three-across layout (see .analysis-layout's 1440px
-  // breakpoint) - the default 1280 test viewport stacks it into one column.
-  await page.setViewportSize({ width: 1800, height: 1000 });
-  await login(page, creds);
-  await page.goto("/projects");
-  // Filtered, not "click the link on page 1": the backend's own DB-backed
-  // integration tests can be pointed at this same ephemeral stack and leave
-  // hundreds of their own projects behind, which pushes this one off the
-  // first (client-side-limited) page of the list. Observed, not theoretical.
-  await page.locator(".projects-search").fill(QA_PROJECT_NAME);
-  await page.getByRole("link", { name: QA_PROJECT_NAME }).click();
-  await expect(page).toHaveURL(/\/projects\/[\w-]+/);
-  await page.getByRole("group", { name: "Maps view" }).getByRole("button", { name: "Analysis" }).click();
-  await expect(page.locator(".analysis-layout")).toBeVisible();
-}
 
 test.describe("Analysis view", () => {
   test("lists the whole registry, in-development entries included but de-emphasized", async ({ page }) => {
