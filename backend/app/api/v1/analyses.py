@@ -23,7 +23,7 @@ import asyncio
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Query, Response
 
 from app.api.deps import (
     CurrentUserDep,
@@ -37,6 +37,7 @@ from app.core.config import Settings
 from app.domain.analysis_catalog import get_catalog_entry
 from app.domain.dtos import (
     AnalysisCatalogEntryOut,
+    AnalysisPointValue,
     AnalysisResultOut,
     CurrentUser,
     JobAccepted,
@@ -77,6 +78,25 @@ def get_analysis_result(
     svc: Annotated[GEEAnalysisService, Depends(get_gee_analysis_service)],
 ) -> AnalysisResultOut:
     return svc.get_result(project_id, analysis_id, user)
+
+
+@router.get(
+    "/projects/{project_id}/analyses/{analysis_id}/point", response_model=AnalysisPointValue
+)
+def get_analysis_point_value(
+    project_id: UUID,
+    analysis_id: str,
+    user: CurrentUserDep,
+    svc: Annotated[GEEAnalysisService, Depends(get_gee_analysis_service)],
+    lon: Annotated[float, Query(ge=-180, le=180)],
+    lat: Annotated[float, Query(ge=-90, le=90)],
+) -> AnalysisPointValue:
+    """Identify-tool support (GET /layers/{id}/pixel's GEE-layer analog): a
+    normal `def` route (not `async def`) so FastAPI's automatic thread-pool
+    offload applies to the blocking GEE call inside, same reasoning as
+    GET /layers/{id}/pixel and unlike refresh_analysis below (see that
+    route's own comment)."""
+    return svc.get_point_value(project_id, analysis_id, lon, lat, user)
 
 
 @router.post(

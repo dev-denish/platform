@@ -30,8 +30,9 @@ if not os.getenv("DMRV_TEST_DATABASE"):
 from app.core.config import get_settings  # noqa: E402
 from app.core.db import Database  # noqa: E402
 from app.core.errors import ForbiddenError, NotFoundError, ValidationError  # noqa: E402
-from app.domain.dtos import CurrentUser  # noqa: E402
+from app.domain.dtos import AnalysisPointValue, CurrentUser  # noqa: E402
 from app.domain.enums import Role  # noqa: E402
+from app.repositories.analysis_results import AnalysisResultRepository  # noqa: E402
 from app.repositories.datasets import DatasetRepository, LayerRepository  # noqa: E402
 from app.repositories.memberships import ProjectMembershipRepository  # noqa: E402
 from app.repositories.projects import ProjectRepository  # noqa: E402
@@ -83,6 +84,26 @@ def fake_compute(monkeypatch):
     monkeypatch.setattr(svc_module, "_compute", fake)
     monkeypatch.setattr(svc_module, "init_ee", lambda: None)
     monkeypatch.setattr(svc_module.ee, "Geometry", lambda geojson: geojson)
+    return calls
+
+
+_CANNED_POINT = {"value": 4, "class_name": "crops", "class_color": "#E49635"}
+
+
+@pytest.fixture
+def fake_compute_point(monkeypatch):
+    """get_point_value()'s analog of `fake_compute` above - stubs
+    _compute_point (the only function get_point_value() calls that touches
+    GEE) with a canned result, recording every (analysis_id, lon, lat) call
+    so a test can assert the "not yet computed" guard rejected a request
+    BEFORE ever reaching this stub."""
+    calls: list[tuple[str, float, float]] = []
+
+    def fake(analysis_id, boundary, canopy_cover_pct, lon, lat):
+        calls.append((analysis_id, lon, lat))
+        return _CANNED_POINT
+
+    monkeypatch.setattr(svc_module, "_compute_point", fake)
     return calls
 
 
@@ -301,3 +322,120 @@ def test_user_with_no_membership_gets_not_found_not_a_leaky_forbidden(db, analys
 
     with pytest.raises(NotFoundError):  # ...but no membership -> 404, never a 403
         analysis_service.refresh(pid, "hansen_gfc", outsider)
+
+
+# --------------------------------------------------------------- get_point_value (Identify)
+
+
+def test_get_point_value_sync_analysis_returns_a_real_value_immediately(
+    db, analysis_service, fake_compute_point
+):
+    # "sync" (dynamic_world here) analyses need no prior refresh() at all -
+    # unlike the async ones below, Identify can query them cold.
+    admin = _make_user(db, Role.ADMINISTRATOR)
+    pid = _make_project(db, f"Proj-{uuid.uuid4()}")
+    _add_boundary(db, pid)
+
+    result = analysis_service.get_point_value(pid, "dynamic_world", lon=77.5, lat=12.9, actor=admin)
+
+    assert isinstance(result, AnalysisPointValue)
+    assert result.analysis_id == "dynamic_world"
+    assert result.lon == 77.5
+    assert result.lat == 12.9
+    assert result.class_name == "crops"
+    assert result.class_color == "#E49635"
+    assert fake_compute_point == [("dynamic_world", 77.5, 12.9)]
+
+
+def test_get_point_value_async_analysis_before_any_refresh_is_a_clear_validation_error(
+    db, analysis_service, fake_compute_point
+):
+    admin = _make_user(db, Role.ADMINISTRATOR)
+    pid = _make_project(db, f"Proj-{uuid.uuid4()}")
+    _add_boundary(db, pid)
+
+    with pytest.raises(ValidationError, match="Run 'NDVI' first"):
+        analysis_service.get_point_value(pid, "ndvi", lon=77.5, lat=12.9, actor=admin)
+
+    assert fake_compute_point == []  # never reached GEE - rejected on the cache check
+
+
+def test_get_point_value_async_analysis_after_refresh_returns_a_real_value(
+    db, analysis_service, fake_compute, fake_compute_point
+):
+    admin = _make_user(db, Role.ADMINISTRATOR)
+    pid = _make_project(db, f"Proj-{uuid.uuid4()}")
+    _add_boundary(db, pid)
+    # Simulate the worker's own upsert (app/workers/gee_analysis_jobs.py) directly,
+    # rather than the full job-queue/runner plumbing enqueue_refresh() drives -
+    # this test is about get_point_value()'s cache check, not job dispatch.
+    with db.transaction() as cur:
+        AnalysisResultRepository(cur).upsert(
+            project_id=pid, analysis_id="ndvi", computed_by=admin.user_id,
+            stats=_CANNED[0], legend=_CANNED[1], tile_url_template=_CANNED[2],
+        )
+
+    result = analysis_service.get_point_value(pid, "ndvi", lon=77.5, lat=12.9, actor=admin)
+
+    assert result.class_name == "crops"  # from the canned _compute_point stub
+    assert fake_compute_point == [("ndvi", 77.5, 12.9)]
+
+
+def test_get_point_value_unknown_analysis_id_is_not_found(db, analysis_service, fake_compute_point):
+    admin = _make_user(db, Role.ADMINISTRATOR)
+    pid = _make_project(db, f"Proj-{uuid.uuid4()}")
+    _add_boundary(db, pid)
+
+    with pytest.raises(NotFoundError):
+        analysis_service.get_point_value(pid, "not-a-real-analysis", lon=0, lat=0, actor=admin)
+
+    assert fake_compute_point == []
+
+
+def test_get_point_value_in_development_analysis_id_is_a_validation_error(
+    db, analysis_service, fake_compute_point
+):
+    admin = _make_user(db, Role.ADMINISTRATOR)
+    pid = _make_project(db, f"Proj-{uuid.uuid4()}")
+    _add_boundary(db, pid)
+
+    with pytest.raises(ValidationError):
+        analysis_service.get_point_value(pid, "sar", lon=0, lat=0, actor=admin)
+
+    assert fake_compute_point == []
+
+
+def test_get_point_value_without_a_boundary_layer_is_a_validation_error(
+    db, analysis_service, fake_compute_point
+):
+    admin = _make_user(db, Role.ADMINISTRATOR)
+    pid = _make_project(db, f"Proj-{uuid.uuid4()}")  # no boundary layer inserted
+
+    with pytest.raises(ValidationError):
+        analysis_service.get_point_value(pid, "dynamic_world", lon=0, lat=0, actor=admin)
+
+    assert fake_compute_point == []
+
+
+def test_get_point_value_is_readable_by_a_viewer(db, analysis_service, fake_compute_point):
+    # Identify is a read, not a write - Viewer is enough (require_project_view,
+    # same tier get_result()/get_project_analyses() already use), unlike
+    # refresh() which needs an upload-tier role.
+    admin = _make_user(db, Role.ADMINISTRATOR)
+    pid = _make_project(db, f"Proj-{uuid.uuid4()}")
+    _add_boundary(db, pid)
+    viewer = _make_user(db, Role.VIEWER)
+    _add_member(db, pid, viewer, Role.VIEWER, added_by=admin)
+
+    result = analysis_service.get_point_value(pid, "dynamic_world", lon=0, lat=0, actor=viewer)
+    assert result.analysis_id == "dynamic_world"
+
+
+def test_get_point_value_user_with_no_membership_gets_not_found(
+    db, analysis_service, fake_compute_point
+):
+    pid = _make_project(db, f"Proj-{uuid.uuid4()}")
+    outsider = _make_user(db, Role.GIS_ASSOCIATE)
+
+    with pytest.raises(NotFoundError):
+        analysis_service.get_point_value(pid, "dynamic_world", lon=0, lat=0, actor=outsider)

@@ -417,6 +417,24 @@ class PixelValue(BaseModel):
     values: list[float | None]
 
 
+class AnalysisPointValue(BaseModel):
+    """The GEE-analysis analog of PixelValue: one clicked lon/lat's value for
+    one analysis_id's current result. `class_name`/`class_color` are set only
+    for the discrete land-cover analyses (translated server-side from
+    app/domain/gee_class_legends.py, same legend the stats panel already
+    uses) - continuous analyses (Hansen tree-cover%, the vegetation/water/
+    burn indices) leave those None and use `value`/`unit`/`detail` instead."""
+
+    analysis_id: str
+    lon: float
+    lat: float
+    value: float | None = None
+    unit: str | None = None
+    class_name: str | None = None
+    class_color: str | None = None
+    detail: str | None = None
+
+
 # ---------------------------------------------------------------- ingestion
 
 

@@ -74,6 +74,7 @@ from app.core.errors import DomainError, NotFoundError, ValidationError
 from app.domain.analysis_catalog import CATALOG, get_catalog_entry
 from app.domain.authz import require_project_upload, require_project_view
 from app.domain.dtos import (
+    AnalysisPointValue,
     AnalysisResultOut,
     CurrentUser,
     ProjectAnalysisCatalog,
@@ -134,6 +135,51 @@ class GEEAnalysisService:
         if row is None:
             raise NotFoundError("This analysis has not been computed for this project yet.")
         return AnalysisResultOut(**row)
+
+    def get_point_value(
+        self, project_id: UUID, analysis_id: str, lon: float, lat: float, actor: CurrentUser
+    ) -> AnalysisPointValue:
+        """Identify-tool support: the GEE-layer analog of
+        TileService.read_pixel for uploaded COGs. `require_project_view`
+        (not `_upload`) - same read-only tier as get_result()/get_pixel(),
+        since clicking a pixel costs the viewer nothing.
+
+        For "async"-execution analyses this refuses to compute anything IF
+        no result is cached yet: recomputing an index on every map click
+        would silently cost the same 5-59s _annual_index_series() timing
+        documented at the top of this module, for a "quick pixel click"
+        interaction that has to feel instant. The clear, cheap check instead
+        is "has this ever been run" (the same computed_at the catalog list
+        already surfaces) - if not, the caller (Identify's popup) shows
+        "run this analysis first" rather than either hanging or querying a
+        result that doesn't exist yet."""
+        entry = get_catalog_entry(analysis_id)
+        if entry is None:
+            raise NotFoundError("Unknown analysis.")
+        if entry["status"] != "available":
+            raise ValidationError(f"'{entry['name']}' is not implemented yet.")
+
+        with self.db.connection() as conn, conn.cursor() as cur:
+            require_project_view(cur, project_id, actor)
+            boundary_geojson = AnalysisResultRepository(cur).get_project_boundary_geojson(
+                project_id
+            )
+            canopy_cover_pct = float(ForestDefinitionRepository(cur).get()["canopy_cover_pct"])
+            if entry.get("execution") == "async":
+                cached = AnalysisResultRepository(cur).get(project_id, analysis_id)
+                if cached is None:
+                    raise ValidationError(
+                        f"Run '{entry['name']}' first - it hasn't been computed for this "
+                        "project yet."
+                    )
+
+        if boundary_geojson is None:
+            raise ValidationError(
+                "This project has no Boundary layer yet - upload one before running an analysis."
+            )
+
+        point_result = _compute_point(analysis_id, boundary_geojson, canopy_cover_pct, lon, lat)
+        return AnalysisPointValue(analysis_id=analysis_id, lon=lon, lat=lat, **point_result)
 
     # ---- refresh - the only things that actually call GEE ----
 
@@ -281,6 +327,123 @@ def _compute(
     raise AssertionError(f"no query function wired for {analysis_id!r}")
 
 
+def _compute_point(
+    analysis_id: str,
+    boundary_geojson: dict[str, Any],
+    canopy_cover_pct: float,
+    lon: float,
+    lat: float,
+) -> dict[str, Any]:
+    """Identify's per-pixel counterpart to _compute() above: same dispatch,
+    same init_ee()/boundary construction, but samples ONE point instead of
+    reducing over the whole boundary - reuses each analysis's own image
+    builder (the _*_image()/_*_latest_image() helpers _compute()'s own
+    functions above call) rather than re-deriving the query. get_point_value()
+    (GEEAnalysisService) has already confirmed, for async analyses, that a
+    cached result exists before this runs - it is never called otherwise."""
+    init_ee()
+    boundary = ee.Geometry(boundary_geojson)
+    point = ee.Geometry.Point([lon, lat])
+
+    if analysis_id == "hansen_gfc":
+        value, detail = _hansen_point(point, canopy_cover_pct)
+        return {"value": value, "unit": "% tree cover (2000)", "detail": detail}
+    if analysis_id == "dynamic_world":
+        code, name, color = _classified_point(
+            _dynamic_world_image(boundary), "label", DYNAMIC_WORLD_LEGEND, point, scale=10
+        )
+        return {"value": code, "class_name": name, "class_color": color}
+    if analysis_id == "esa_worldcover":
+        code, name, color = _classified_point(
+            _esa_worldcover_image(), "Map", ESA_WORLDCOVER_LEGEND, point, scale=10
+        )
+        return {"value": code, "class_name": name, "class_color": color}
+    if analysis_id == "io_lulc":
+        code, name, color = _classified_point(
+            _esri_lulc_latest_image(), "b1", ESRI_LULC_LEGEND, point, scale=10
+        )
+        return {"value": code, "class_name": name, "class_color": color}
+    if analysis_id == "modis_lulc":
+        code, name, color = _classified_point(
+            _modis_lulc_latest_image(), "LC_Type1", MODIS_IGBP_LEGEND, point, scale=500
+        )
+        return {"value": code, "class_name": name, "class_color": color}
+    if analysis_id in _INDEX_FORMULAS:
+        value = _index_point_value(boundary, point, analysis_id)
+        return {"value": value, "unit": analysis_id.upper()}
+    # get_point_value() already rejects any non-"available" analysis_id before calling this.
+    raise AssertionError(f"no point query function wired for {analysis_id!r}")
+
+
+def _legend_lookup(
+    code: int | None, legend: dict[int, tuple[str, str]]
+) -> tuple[int | None, str | None, str | None]:
+    """The pure code->(name, color) half of _classified_point, split out so
+    it's unit-testable (tests/unit/test_gee_point_query.py) without a live or
+    faked `ee` session - the SAME legend dict _class_breakdown()/
+    legend_entries() use for the stats panel, so Identify's popup and the
+    stats chart can never disagree about what a class code means. An
+    unrecognized code (a class the legend doesn't list) still returns a
+    label rather than silently dropping the pixel's value."""
+    if code is None:
+        return None, None, None
+    name, color = legend.get(code, (f"Unrecognized class {code}", "#999999"))
+    return code, name, color
+
+
+def _classified_point(
+    img: ee.Image,
+    band: str,
+    legend: dict[int, tuple[str, str]],
+    point: ee.Geometry,
+    scale: int,
+) -> tuple[int | None, str | None, str | None]:
+    """Samples one discrete-class band at one point, then translates it via
+    _legend_lookup."""
+    raw = img.select(band).reduceRegion(
+        reducer=ee.Reducer.first(), geometry=point, scale=scale, crs=AOI_CRS, bestEffort=True,
+    ).get(band).getInfo()
+    return _legend_lookup(int(raw) if raw is not None else None, legend)
+
+
+def _hansen_detail(
+    treecover: float | None,
+    loss: bool,
+    lossyear: int | None,
+    gain: bool,
+    canopy_cover_pct: float,
+) -> tuple[float | None, str | None]:
+    """The pure "phrase these four raw GFC band values as one sentence" half
+    of _hansen_point, split out so it's unit-testable without GEE. Hansen has
+    no discrete class legend (see _hansen_forest_change) - a clicked point
+    gets its raw 2000 tree-cover % plus whatever of loss/gain applies there,
+    phrased as one human-readable sentence rather than several separate
+    ambiguous numbers."""
+    if treecover is None:
+        return None, None
+    is_forest = treecover >= canopy_cover_pct
+    parts = ["forest" if is_forest else f"non-forest (below the {canopy_cover_pct:g}% threshold)"]
+    if loss:
+        parts.append(f"loss detected in {2000 + int(lossyear)}" if lossyear else "loss detected")
+    if gain:
+        parts.append("gain detected (2000-2012)")
+    return float(treecover), ", ".join(parts)
+
+
+def _hansen_point(point: ee.Geometry, canopy_cover_pct: float) -> tuple[float | None, str | None]:
+    gfc = ee.Image("UMD/hansen/global_forest_change_2025_v1_13")
+    sample = gfc.select(["treecover2000", "loss", "lossyear", "gain"]).reduceRegion(
+        reducer=ee.Reducer.first(), geometry=point, scale=30, crs=AOI_CRS, bestEffort=True,
+    ).getInfo()
+    return _hansen_detail(
+        sample.get("treecover2000"),
+        bool(sample.get("loss")),
+        sample.get("lossyear"),
+        bool(sample.get("gain")),
+        canopy_cover_pct,
+    )
+
+
 def _pixel_area_ha() -> ee.Image:
     return ee.Image.pixelArea().divide(10000)
 
@@ -372,16 +535,20 @@ def _hansen_forest_change(
     return stats, None, map_id["tile_fetcher"].url_format
 
 
-def _dynamic_world(boundary: ee.Geometry) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
+def _dynamic_world_image(boundary: ee.Geometry) -> ee.Image:
     end = datetime.utcnow()
     start = end - timedelta(days=365)
-    dw = (
+    return (
         ee.ImageCollection("GOOGLE/DYNAMICWORLD/V1")
         .filterBounds(boundary)
         .filterDate(start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
         .select("label")
         .mode()
     )
+
+
+def _dynamic_world(boundary: ee.Geometry) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
+    dw = _dynamic_world_image(boundary)
     counts = _histogram_counts(dw, "label", boundary, scale=10).getInfo() or {}
     px_area_ha = 100 / 10000.0  # 10m pixel
     class_ha = {int(k): v * px_area_ha for k, v in counts.items()}
@@ -390,8 +557,12 @@ def _dynamic_world(boundary: ee.Geometry) -> tuple[dict[str, Any], list[dict[str
     return stats, legend_entries(DYNAMIC_WORLD_LEGEND), map_id["tile_fetcher"].url_format
 
 
+def _esa_worldcover_image() -> ee.Image:
+    return ee.ImageCollection("ESA/WorldCover/v200").first()
+
+
 def _esa_worldcover(boundary: ee.Geometry) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
-    wc = ee.ImageCollection("ESA/WorldCover/v200").first()
+    wc = _esa_worldcover_image()
     counts = _histogram_counts(wc, "Map", boundary, scale=10).getInfo() or {}
     px_area_ha = 100 / 10000.0
     class_ha = {int(k): v * px_area_ha for k, v in counts.items()}
@@ -403,16 +574,24 @@ def _esa_worldcover(boundary: ee.Geometry) -> tuple[dict[str, Any], list[dict[st
     return stats, legend_entries(ESA_WORLDCOVER_LEGEND), map_id["tile_fetcher"].url_format
 
 
+def _esri_lulc_collection() -> ee.ImageCollection:
+    return ee.ImageCollection("projects/sat-io/open-datasets/landcover/ESRI_Global-LULC_10m_TS")
+
+
+def _esri_lulc_year_mosaic(coll: ee.ImageCollection, year: int) -> ee.Image:
+    # Tiled by MGRS tile; a project boundary may span more than one tile,
+    # so mosaic every tile tagged with this year rather than picking one.
+    return coll.filter(ee.Filter.stringContains("system:index", str(year))).mosaic()
+
+
+def _esri_lulc_latest_image() -> ee.Image:
+    return _esri_lulc_year_mosaic(_esri_lulc_collection(), max(_ESRI_LULC_YEARS)).select("b1")
+
+
 def _esri_lulc(boundary: ee.Geometry) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
-    coll = ee.ImageCollection("projects/sat-io/open-datasets/landcover/ESRI_Global-LULC_10m_TS")
-
-    def _year_mosaic(year: int) -> ee.Image:
-        # Tiled by MGRS tile; a project boundary may span more than one tile,
-        # so mosaic every tile tagged with this year rather than picking one.
-        return coll.filter(ee.Filter.stringContains("system:index", str(year))).mosaic()
-
+    coll = _esri_lulc_collection()
     counts_by_year = {
-        str(year): _histogram_counts(_year_mosaic(year), "b1", boundary, scale=10)
+        str(year): _histogram_counts(_esri_lulc_year_mosaic(coll, year), "b1", boundary, scale=10)
         for year in _ESRI_LULC_YEARS
     }
     combined = ee.Dictionary(counts_by_year).getInfo()  # ONE round trip for every year
@@ -424,19 +603,29 @@ def _esri_lulc(boundary: ee.Geometry) -> tuple[dict[str, Any], list[dict[str, An
         class_area_ha_by_year[year] = _class_breakdown(class_ha, ESRI_LULC_LEGEND)
     stats = {"class_area_ha_by_year": class_area_ha_by_year}
 
-    latest = _year_mosaic(max(_ESRI_LULC_YEARS)).select("b1")
+    latest = _esri_lulc_latest_image()
     map_id = _visualize_discrete(latest, ESRI_LULC_LEGEND).getMapId()
     return stats, legend_entries(ESRI_LULC_LEGEND), map_id["tile_fetcher"].url_format
 
 
+def _modis_lulc_collection() -> ee.ImageCollection:
+    return ee.ImageCollection("MODIS/061/MCD12Q1").select("LC_Type1")
+
+
+def _modis_lulc_year_image(coll: ee.ImageCollection, year: int) -> ee.Image:
+    return coll.filterDate(f"{year}-01-01", f"{year + 1}-01-01").first()
+
+
+def _modis_lulc_latest_image() -> ee.Image:
+    return _modis_lulc_year_image(_modis_lulc_collection(), max(_MODIS_YEARS))
+
+
 def _modis_lulc(boundary: ee.Geometry) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
-    coll = ee.ImageCollection("MODIS/061/MCD12Q1").select("LC_Type1")
-
-    def _year_image(year: int) -> ee.Image:
-        return coll.filterDate(f"{year}-01-01", f"{year + 1}-01-01").first()
-
+    coll = _modis_lulc_collection()
     counts_by_year = {
-        str(year): _histogram_counts(_year_image(year), "LC_Type1", boundary, scale=500)
+        str(year): _histogram_counts(
+            _modis_lulc_year_image(coll, year), "LC_Type1", boundary, scale=500
+        )
         for year in _MODIS_YEARS
     }
     combined = ee.Dictionary(counts_by_year).getInfo()  # ONE round trip for every year
@@ -454,7 +643,7 @@ def _modis_lulc(boundary: ee.Geometry) -> tuple[dict[str, Any], list[dict[str, A
         ),
     }
 
-    latest = _year_image(max(_MODIS_YEARS))
+    latest = _modis_lulc_latest_image()
     map_id = _visualize_discrete(latest, MODIS_IGBP_LEGEND).getMapId()
     return stats, legend_entries(MODIS_IGBP_LEGEND), map_id["tile_fetcher"].url_format
 
@@ -552,46 +741,61 @@ def _annual_index_series(
     return stats, None, map_id["tile_fetcher"].url_format
 
 
-def _ndvi_query(boundary: ee.Geometry) -> tuple[dict[str, Any], None, str]:
+# One formula per index, `ee.Image` (scaled reflectance) -> `ee.Image`
+# (the index band) - the single definition each of _annual_index_series
+# (full multi-year series, for refresh()) and _index_point_value (latest
+# year only, for Identify) both build off of, so the band math exists in
+# exactly one place per index.
+_INDEX_FORMULAS: dict[str, Any] = {
     # NDVI = (NIR - Red) / (NIR + Red). S2: NIR=B8, Red=B4.
-    return _annual_index_series(
-        boundary, lambda refl: refl.normalizedDifference(["B8", "B4"])
-    )
+    "ndvi": lambda refl: refl.normalizedDifference(["B8", "B4"]),
+    # EVI = 2.5 * (NIR - Red) / (NIR + 6*Red - 7.5*Blue + 1). S2: NIR=B8, Red=B4, Blue=B2.
+    "evi": lambda refl: refl.expression(
+        "2.5 * (NIR - RED) / (NIR + 6 * RED - 7.5 * BLUE + 1)",
+        {"NIR": refl.select("B8"), "RED": refl.select("B4"), "BLUE": refl.select("B2")},
+    ),
+    # SAVI = ((NIR - Red) / (NIR + Red + L)) * (1 + L), L=0.5 (soil brightness
+    # correction). S2: NIR=B8, Red=B4.
+    "savi": lambda refl: refl.expression(
+        "((NIR - RED) / (NIR + RED + L)) * (1 + L)",
+        {"NIR": refl.select("B8"), "RED": refl.select("B4"), "L": 0.5},
+    ),
+    # MNDWI = (Green - SWIR1) / (Green + SWIR1). S2: Green=B3, SWIR1=B11.
+    "mndwi": lambda refl: refl.normalizedDifference(["B3", "B11"]),
+    # NBR = (NIR - SWIR2) / (NIR + SWIR2). S2: NIR=B8, SWIR2=B12.
+    "nbr": lambda refl: refl.normalizedDifference(["B8", "B12"]),
+}
+
+
+def _ndvi_query(boundary: ee.Geometry) -> tuple[dict[str, Any], None, str]:
+    return _annual_index_series(boundary, _INDEX_FORMULAS["ndvi"])
 
 
 def _evi_query(boundary: ee.Geometry) -> tuple[dict[str, Any], None, str]:
-    # EVI = 2.5 * (NIR - Red) / (NIR + 6*Red - 7.5*Blue + 1). S2: NIR=B8, Red=B4, Blue=B2.
-    return _annual_index_series(
-        boundary,
-        lambda refl: refl.expression(
-            "2.5 * (NIR - RED) / (NIR + 6 * RED - 7.5 * BLUE + 1)",
-            {"NIR": refl.select("B8"), "RED": refl.select("B4"), "BLUE": refl.select("B2")},
-        ),
-    )
+    return _annual_index_series(boundary, _INDEX_FORMULAS["evi"])
 
 
 def _savi_query(boundary: ee.Geometry) -> tuple[dict[str, Any], None, str]:
-    # SAVI = ((NIR - Red) / (NIR + Red + L)) * (1 + L), L=0.5 (soil brightness
-    # correction). S2: NIR=B8, Red=B4.
-    soil_l = 0.5
-    return _annual_index_series(
-        boundary,
-        lambda refl: refl.expression(
-            "((NIR - RED) / (NIR + RED + L)) * (1 + L)",
-            {"NIR": refl.select("B8"), "RED": refl.select("B4"), "L": soil_l},
-        ),
-    )
+    return _annual_index_series(boundary, _INDEX_FORMULAS["savi"])
 
 
 def _mndwi_query(boundary: ee.Geometry) -> tuple[dict[str, Any], None, str]:
-    # MNDWI = (Green - SWIR1) / (Green + SWIR1). S2: Green=B3, SWIR1=B11.
-    return _annual_index_series(
-        boundary, lambda refl: refl.normalizedDifference(["B3", "B11"])
-    )
+    return _annual_index_series(boundary, _INDEX_FORMULAS["mndwi"])
 
 
 def _nbr_query(boundary: ee.Geometry) -> tuple[dict[str, Any], None, str]:
-    # NBR = (NIR - SWIR2) / (NIR + SWIR2). S2: NIR=B8, SWIR2=B12.
-    return _annual_index_series(
-        boundary, lambda refl: refl.normalizedDifference(["B8", "B12"])
-    )
+    return _annual_index_series(boundary, _INDEX_FORMULAS["nbr"])
+
+
+def _index_point_value(boundary: ee.Geometry, point: ee.Geometry, analysis_id: str) -> float | None:
+    """Identify's per-index point sample. Deliberately does NOT reuse
+    _annual_index_series (which builds and .getInfo()s ALL years, the
+    documented 5-59s round trip) - a pixel click needs only the same
+    latest-year image the map tile already shows, so this samples just that
+    one year's composite at the clicked point."""
+    refl = _s2_reflectance_composite(boundary, max(_VEG_INDEX_YEARS))
+    idx = _INDEX_FORMULAS[analysis_id](refl).rename("index")
+    value = idx.reduceRegion(
+        reducer=ee.Reducer.first(), geometry=point, scale=10, crs=AOI_CRS, bestEffort=True,
+    ).get("index").getInfo()
+    return round(value, 4) if value is not None else None
