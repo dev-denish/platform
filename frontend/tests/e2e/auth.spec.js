@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { login, uiLogin, ADMIN, VIEWER, GIS_ASSOCIATE, ANALYST, VERIFIER, collectConsoleErrors } from "./helpers.js";
+import { login, uiLogin, API_BASE, ADMIN, VIEWER, GIS_ASSOCIATE, ANALYST, VERIFIER, collectConsoleErrors } from "./helpers.js";
 
 test.describe("Login", () => {
   // Redesign: index route is now Projects (DashboardPage was deleted, its
@@ -19,6 +19,38 @@ test.describe("Login", () => {
     await page.getByRole("button", { name: /sign in/i }).click();
     await expect(page.getByRole("alert")).toBeVisible();
     await expect(page).toHaveURL(/\/login/);
+  });
+});
+
+test.describe("Logout", () => {
+  // Uses a REAL login (not the cached-token `login()` helper) so this test
+  // mints its own fresh access token to revoke - it must never touch the
+  // token pair `login()` shares with every other spec in this run, or
+  // revoking it here would break every later VIEWER-role test.
+  test("signing out revokes the session: the old access token is rejected on replay", async ({ page }) => {
+    await uiLogin(page, VIEWER);
+    // uiLogin's own waitForURL regex matches the "//" in "http://" immediately, so
+    // it resolves before the login request actually completes - wait for a real
+    // post-login signal (the shell only renders once `user` is hydrated from
+    // /auth/me) before trusting sessionStorage to hold the real token.
+    await expect(page.getByRole("button", { name: /sign out/i })).toBeVisible();
+    const oldToken = await page.evaluate(() => sessionStorage.getItem("dmrv.access_token"));
+
+    const before = await page.request.get(`${API_BASE}/auth/me`, {
+      headers: { Authorization: `Bearer ${oldToken}` },
+    });
+    expect(before.ok()).toBe(true);
+
+    await page.getByRole("button", { name: /sign out/i }).click();
+    await expect(page).toHaveURL(/\/login/);
+
+    // The same token, replayed directly against the API (not through this
+    // browser's own now-cleared storage), must be rejected - proving the
+    // server actually revoked it rather than the UI just forgetting it.
+    const after = await page.request.get(`${API_BASE}/auth/me`, {
+      headers: { Authorization: `Bearer ${oldToken}` },
+    });
+    expect(after.status()).toBe(401);
   });
 });
 
