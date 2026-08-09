@@ -32,6 +32,15 @@ dependencies = [
     "pyshp==2.3.1",
     "defusedxml==0.7.1",
     "earthengine-api==1.7.38",
+    # Wave: PDF report. No existing dependency writes a PDF container (checked
+    # first) - fpdf2 is pure-Python with no system libs (unlike weasyprint/
+    # pdfkit, which need Pango/Cairo or a wkhtmltopdf binary), matching this
+    # repo's existing all-Python-wheel geo stack (rio-cogeo/rio-tiler/Pillow).
+    "fpdf2==2.8.7",
+    # Renders the multi-year vegetation-index trend as a static PNG for the
+    # PDF - no charting library existed here before (Recharts is JS-only,
+    # frontend-side). Agg backend (see report_charts.py) needs no display.
+    "matplotlib==3.10.0",
 ]
 
 [project.optional-dependencies]
@@ -48,6 +57,9 @@ dev = [
     # tests import it directly, so it's pinned explicitly rather than relying
     # on someone else's transitive resolution.
     "morecantile==7.0.3",
+    # test-only: reading back the generated PDF's page count/text to assert
+    # report content, not a runtime dependency of report generation itself.
+    "pypdf==5.1.0",
 ]
 s3 = ["boto3==1.35.90"]
 
