@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { login, ADMIN } from "./helpers.js";
+import { login, ADMIN, API_BASE, QA_PROJECT_NAME } from "./helpers.js";
 
 test.describe("Users: create form + pagination + bulk delete", () => {
   test("create user form validates and submits", async ({ page }) => {
@@ -133,5 +133,80 @@ test.describe("Confused-user behaviors", () => {
     // succeeding, so the new row is already visible - a duplicate account
     // from a second POST would show up as a second matching row right here.
     await expect(page.locator("tbody").getByText(uniqueName, { exact: true })).toHaveCount(1);
+  });
+});
+
+test.describe("Upload: project-name matching (Wave: upload project-name footgun fix)", () => {
+  async function projectCount(page) {
+    const token = await page.evaluate(() => sessionStorage.getItem("dmrv.access_token"));
+    const res = await page.request.get(`${API_BASE}/projects?limit=200`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    return (await res.json()).total;
+  }
+
+  test("a typo'd project name is rejected, not silently forked into a duplicate project", async ({ page }) => {
+    // The exact reported bug: QA_PROJECT_NAME ("QA Regression Project")
+    // already exists (seeded by global-setup) - typing a mismatched variant
+    // (space -> underscore) used to silently create a second, empty-looking
+    // duplicate project instead of erroring.
+    await login(page, ADMIN);
+    const before = await projectCount(page);
+
+    await page.goto("/upload");
+    await page.setInputFiles('input[type="file"]', {
+      name: "typo-repro.geojson",
+      mimeType: "application/geo+json",
+      buffer: Buffer.from(
+        JSON.stringify({
+          type: "FeatureCollection",
+          features: [{ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: [76.3, 13.05] } }],
+        })
+      ),
+    });
+    await page.getByLabel("Project name").fill(QA_PROJECT_NAME.replace(/ /g, "_"));
+    // "This is a new project" left UNCHECKED (the default) - the caller
+    // never confirmed this should be a new project.
+    await page.getByRole("button", { name: /continue/i }).click();
+    await page.getByLabel("Source").fill("Typo repro (must be rejected)");
+    await page.getByLabel("Date processed").fill("2026-01-01");
+    // Step 1's own Continue button stays in the (inert) DOM after advancing,
+    // so scope to the last one - step 2's - to avoid a strict-mode ambiguity.
+    await page.getByRole("button", { name: /continue/i }).last().click();
+    await page.getByRole("button", { name: /submit for ingestion/i }).click();
+
+    await expect(page.getByRole("heading", { name: "Ingest failed" })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole("alert")).toContainText(/no project named/i);
+
+    expect(await projectCount(page)).toBe(before);
+  });
+
+  test("uploading with the exact existing project name still succeeds, no confirmation needed", async ({ page }) => {
+    // The regression risk: the common, valid case of re-uploading to the
+    // SAME correctly-named project must keep working unchanged.
+    await login(page, ADMIN);
+    const before = await projectCount(page);
+
+    await page.goto("/upload");
+    await page.setInputFiles('input[type="file"]', {
+      name: "matching-name-reupload.geojson",
+      mimeType: "application/geo+json",
+      buffer: Buffer.from(
+        JSON.stringify({
+          type: "FeatureCollection",
+          features: [{ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: [76.3, 13.05] } }],
+        })
+      ),
+    });
+    await page.getByLabel("Project name").fill(QA_PROJECT_NAME);
+    await page.getByRole("button", { name: /continue/i }).click();
+    await page.getByLabel("Source").fill("Legit re-upload");
+    await page.getByLabel("Date processed").fill("2026-01-01");
+    await page.getByRole("button", { name: /continue/i }).last().click();
+    await page.getByRole("button", { name: /submit for ingestion/i }).click();
+
+    await expect(page.getByRole("heading", { name: "Ingest complete" })).toBeVisible({ timeout: 20_000 });
+    // Reused the existing project, not a new one.
+    expect(await projectCount(page)).toBe(before);
   });
 });
