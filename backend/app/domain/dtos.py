@@ -430,7 +430,14 @@ class AnalysisPointValue(BaseModel):
     for the discrete land-cover analyses (translated server-side from
     app/domain/gee_class_legends.py, same legend the stats panel already
     uses) - continuous analyses (Hansen tree-cover%, the vegetation/water/
-    burn indices) leave those None and use `value`/`unit`/`detail` instead."""
+    burn indices) leave those None and use `value`/`unit`/`detail` instead.
+
+    Wave: AOI clip. `outside_boundary=True` is a THIRD, distinct "no value"
+    state from both "not yet computed" (a 422 - see get_point_value) and
+    "no data at this pixel" (a normal 200 with value/class_name left None,
+    e.g. a real cloud gap) - the click itself was valid, it just landed
+    outside the clipped AOI the map tile already visually shows as empty.
+    Every other field is left at its default when this is True."""
 
     analysis_id: str
     lon: float
@@ -440,6 +447,7 @@ class AnalysisPointValue(BaseModel):
     class_name: str | None = None
     class_color: str | None = None
     detail: str | None = None
+    outside_boundary: bool = False
 
 
 # ---------------------------------------------------------------- ingestion

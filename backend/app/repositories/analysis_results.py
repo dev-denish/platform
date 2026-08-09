@@ -43,6 +43,36 @@ class AnalysisResultRepository:
             return None
         return json.loads(row["geom"])
 
+    def boundary_contains_point(self, project_id: UUID | str, lon: float, lat: float) -> bool:
+        """Wave: AOI clip. True only if the project's unioned Boundary-layer
+        geometry actually contains this point - callers must gate a GEE
+        point-query with this BEFORE evaluating GEE at the raw coordinate,
+        since a clipped map tile now legitimately renders nothing outside
+        the boundary and a point-query that ignored that would silently
+        return a real value for a click on visually-empty area. A second,
+        separate query from get_project_boundary_geojson (not folded into
+        it) - callers that don't have a lon/lat (refresh()'s own boundary
+        lookup) keep using that one unchanged. Cheap: a single GIST-indexed
+        ST_Contains, no GEE round trip."""
+        self.cur.execute(
+            """
+            WITH boundary_layer AS (
+                SELECT sl.layer_id
+                FROM spatial_layer sl
+                JOIN dataset d ON d.dataset_id = sl.dataset_id
+                WHERE d.project_id = %s AND d.type = 'Boundary' AND d.deleted_at IS NULL
+                ORDER BY d.loaded_at DESC
+                LIMIT 1
+            )
+            SELECT ST_Contains(ST_Union(vf.geom), ST_SetSRID(ST_MakePoint(%s, %s), 4326)) AS contains
+            FROM vector_feature vf
+            JOIN boundary_layer bl ON bl.layer_id = vf.layer_id
+            """,
+            (str(project_id), lon, lat),
+        )
+        row = self.cur.fetchone()
+        return bool(row and row["contains"])
+
     def get(self, project_id: UUID | str, analysis_id: str) -> dict[str, Any] | None:
         self.cur.execute(
             """

@@ -336,15 +336,19 @@ def test_get_point_value_sync_analysis_returns_a_real_value_immediately(
     pid = _make_project(db, f"Proj-{uuid.uuid4()}")
     _add_boundary(db, pid)
 
-    result = analysis_service.get_point_value(pid, "dynamic_world", lon=77.5, lat=12.9, actor=admin)
+    # (0.5, 0.5) - inside _add_boundary's [0,0]-[1,1] unit-square boundary,
+    # not just anywhere - Wave: AOI clip's boundary_contains_point gate now
+    # rejects an outside point before ever reaching fake_compute_point.
+    result = analysis_service.get_point_value(pid, "dynamic_world", lon=0.5, lat=0.5, actor=admin)
 
     assert isinstance(result, AnalysisPointValue)
     assert result.analysis_id == "dynamic_world"
-    assert result.lon == 77.5
-    assert result.lat == 12.9
+    assert result.lon == 0.5
+    assert result.lat == 0.5
     assert result.class_name == "crops"
     assert result.class_color == "#E49635"
-    assert fake_compute_point == [("dynamic_world", 77.5, 12.9)]
+    assert result.outside_boundary is False
+    assert fake_compute_point == [("dynamic_world", 0.5, 0.5)]
 
 
 def test_get_point_value_async_analysis_before_any_refresh_is_a_clear_validation_error(
@@ -355,7 +359,10 @@ def test_get_point_value_async_analysis_before_any_refresh_is_a_clear_validation
     _add_boundary(db, pid)
 
     with pytest.raises(ValidationError) as exc_info:
-        analysis_service.get_point_value(pid, "ndvi", lon=77.5, lat=12.9, actor=admin)
+        # (0.5, 0.5) - inside the boundary, so this raises for the intended
+        # reason (not yet computed), not because of the boundary_contains_point
+        # gate that now runs first.
+        analysis_service.get_point_value(pid, "ndvi", lon=0.5, lat=0.5, actor=admin)
 
     # Exact text (not a substring match) - this is what actually reaches
     # Identify's popup verbatim (ProjectMap.jsx's renderGeePixelRow renders
@@ -384,10 +391,11 @@ def test_get_point_value_async_analysis_after_refresh_returns_a_real_value_witho
             stats=_CANNED[0], legend=_CANNED[1], tile_url_template=_CANNED[2],
         )
 
-    result = analysis_service.get_point_value(pid, "ndvi", lon=77.5, lat=12.9, actor=admin)
+    # (0.5, 0.5) - inside the boundary; see the sibling test above for why.
+    result = analysis_service.get_point_value(pid, "ndvi", lon=0.5, lat=0.5, actor=admin)
 
     assert result.class_name == "crops"  # from the canned _compute_point stub
-    assert fake_compute_point == [("ndvi", 77.5, 12.9)]
+    assert fake_compute_point == [("ndvi", 0.5, 0.5)]
     # The whole point of the cache check above: a cached result lets
     # Identify read a real value WITHOUT re-running _compute() - the
     # expensive multi-year _annual_index_series() path _compute() drives for
@@ -442,8 +450,57 @@ def test_get_point_value_is_readable_by_a_viewer(db, analysis_service, fake_comp
     viewer = _make_user(db, Role.VIEWER)
     _add_member(db, pid, viewer, Role.VIEWER, added_by=admin)
 
-    result = analysis_service.get_point_value(pid, "dynamic_world", lon=0, lat=0, actor=viewer)
+    # (0.5, 0.5), not (0,0) - (0,0) is a VERTEX of _add_boundary's polygon,
+    # and ST_Contains excludes the boundary itself, so it would trip the
+    # outside_boundary gate before reaching fake_compute_point at all.
+    result = analysis_service.get_point_value(pid, "dynamic_world", lon=0.5, lat=0.5, actor=viewer)
     assert result.analysis_id == "dynamic_world"
+    assert result.outside_boundary is False
+    assert result.class_name == "crops"
+
+
+# --------------------------------------------------------------- boundary_contains_point gate
+
+
+def test_get_point_value_outside_the_boundary_never_reaches_gee(
+    db, analysis_service, fake_compute, fake_compute_point
+):
+    """The actual regression this gate exists for: a click outside the AOI
+    (which the map tile now legitimately renders as empty, since Wave: AOI
+    clip) must come back as a normal, typed outside_boundary=True response -
+    not a real GEE-derived value, and not an error either."""
+    admin = _make_user(db, Role.ADMINISTRATOR)
+    pid = _make_project(db, f"Proj-{uuid.uuid4()}")
+    _add_boundary(db, pid)  # unit square [0,0]-[1,1]
+
+    result = analysis_service.get_point_value(pid, "dynamic_world", lon=5.0, lat=5.0, actor=admin)
+
+    assert result.analysis_id == "dynamic_world"
+    assert result.lon == 5.0
+    assert result.lat == 5.0
+    assert result.outside_boundary is True
+    assert result.value is None
+    assert result.class_name is None
+    assert fake_compute_point == []  # never reached the expensive point-query path
+    assert fake_compute == []  # ...and never touched GEE at all
+
+
+def test_get_point_value_outside_the_boundary_is_checked_before_the_async_cache_gate(
+    db, analysis_service, fake_compute, fake_compute_point
+):
+    """Order matters: an outside-boundary click on an async (never-refreshed)
+    analysis must report outside_boundary=True, not the "run this first"
+    validation error - the boundary check is the cheaper, more fundamental
+    gate and runs first (see get_point_value's own comment)."""
+    admin = _make_user(db, Role.ADMINISTRATOR)
+    pid = _make_project(db, f"Proj-{uuid.uuid4()}")
+    _add_boundary(db, pid)
+
+    result = analysis_service.get_point_value(pid, "ndvi", lon=5.0, lat=5.0, actor=admin)
+
+    assert result.outside_boundary is True
+    assert fake_compute_point == []
+    assert fake_compute == []
 
 
 def test_get_point_value_user_with_no_membership_gets_not_found(

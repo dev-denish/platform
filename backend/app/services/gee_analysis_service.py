@@ -171,22 +171,34 @@ class GEEAnalysisService:
 
         with self.db.connection() as conn, conn.cursor() as cur:
             require_project_view(cur, project_id, actor)
-            boundary_geojson = AnalysisResultRepository(cur).get_project_boundary_geojson(
-                project_id
-            )
+            repo = AnalysisResultRepository(cur)
+            boundary_geojson = repo.get_project_boundary_geojson(project_id)
+            if boundary_geojson is None:
+                raise ValidationError(
+                    "This project has no Boundary layer yet - upload one before running "
+                    "an analysis."
+                )
+            # Wave: AOI clip. Cheapest, most-fundamental gate first, before the
+            # async-cached-result check below: a click outside the boundary is
+            # a normal, valid interaction (not an error) now that the map tile
+            # itself is clipped and legitimately renders nothing there - GEE
+            # would otherwise happily return a real value for a point the map
+            # visually shows as empty, which is confusing, not "working as
+            # designed". Distinct from "not yet computed" (ValidationError
+            # below) and "no data at this pixel" (value=None) - three
+            # different reasons a click can come back with nothing.
+            if not repo.boundary_contains_point(project_id, lon, lat):
+                return AnalysisPointValue(
+                    analysis_id=analysis_id, lon=lon, lat=lat, outside_boundary=True
+                )
             canopy_cover_pct = float(ForestDefinitionRepository(cur).get()["canopy_cover_pct"])
             if entry.get("execution") == "async":
-                cached = AnalysisResultRepository(cur).get(project_id, analysis_id)
+                cached = repo.get(project_id, analysis_id)
                 if cached is None:
                     raise ValidationError(
                         f"Run '{entry['name']}' first - it hasn't been computed for this "
                         "project yet."
                     )
-
-        if boundary_geojson is None:
-            raise ValidationError(
-                "This project has no Boundary layer yet - upload one before running an analysis."
-            )
 
         point_result = _compute_point(analysis_id, boundary_geojson, canopy_cover_pct, lon, lat)
         return AnalysisPointValue(analysis_id=analysis_id, lon=lon, lat=lat, **point_result)
