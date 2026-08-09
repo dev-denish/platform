@@ -1,5 +1,6 @@
 """Auth endpoints (v1). Login accepts JSON now (typed LoginRequest) and returns an
-access+refresh pair; /refresh rotates the access token; /me echoes the caller.
+access+refresh pair; /refresh rotates the access token; /logout revokes the
+current session (Wave: session revocation); /me echoes the caller.
 Login, refresh, and change-password (Wave: password reset) are all rate-limited
 5/minute per client address via the shared `limiter`."""
 
@@ -7,12 +8,13 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
 
-from app.api.deps import CurrentUserDep, get_auth_service
+from app.api.deps import CurrentUserDep, get_auth_service, get_bearer_token
 from app.core.ratelimit import limiter
 from app.domain.dtos import (
     ChangePasswordRequest,
     CurrentUser,
     LoginRequest,
+    LogoutRequest,
     RefreshRequest,
     TokenPair,
 )
@@ -39,6 +41,20 @@ def refresh(
     auth: Annotated[AuthService, Depends(get_auth_service)],
 ) -> TokenPair:
     return auth.refresh(body.refresh_token)
+
+
+@router.post("/logout", status_code=204, response_model=None)
+def logout(
+    body: LogoutRequest,
+    token: Annotated[str, Depends(get_bearer_token)],
+    auth: Annotated[AuthService, Depends(get_auth_service)],
+) -> None:
+    """Revokes the access token this call itself authenticates with, plus the
+    refresh token in the body if the caller supplies one - so neither can be
+    used again even though both would otherwise still pass signature/expiry
+    checks. Not rate-limited like /login and /change-password: those guard a
+    password-guessing surface, this doesn't (there's no secret to guess)."""
+    auth.logout(token, body.refresh_token)
 
 
 @router.get("/me", response_model=CurrentUser)

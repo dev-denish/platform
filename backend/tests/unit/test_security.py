@@ -42,6 +42,19 @@ def test_access_token_roundtrip():
     assert claims["typ"] == "access"
 
 
+def test_access_token_has_jti():
+    # Session revocation (logout) needs a stable identifier per access token to
+    # revoke and check against on every request - without this, logout would have
+    # nothing to write to `revoked_token` for the access token itself.
+    s = _settings()
+    tok = create_access_token(s, user_id="u1", username="alice", role="Viewer")
+    claims = decode_token(s, tok, expected_type="access")
+    assert "jti" in claims
+
+    other = create_access_token(s, user_id="u1", username="alice", role="Viewer")
+    assert decode_token(s, other, expected_type="access")["jti"] != claims["jti"]
+
+
 def test_refresh_token_has_jti_and_type():
     s = _settings()
     tok = create_refresh_token(s, user_id="u1")

@@ -157,13 +157,16 @@ def get_tile_service(
     return TileService(db, settings, storage)
 
 
-def get_current_user(
-    auth: Annotated[AuthService, Depends(get_auth_service)],
-    authorization: Annotated[str | None, Header()] = None,
-) -> CurrentUser:
+def get_bearer_token(authorization: Annotated[str | None, Header()] = None) -> str:
     if not authorization or not authorization.startswith("Bearer "):
         raise AuthError("Missing or malformed Authorization header.")
-    token = authorization.removeprefix("Bearer ").strip()
+    return authorization.removeprefix("Bearer ").strip()
+
+
+def get_current_user(
+    auth: Annotated[AuthService, Depends(get_auth_service)],
+    token: Annotated[str, Depends(get_bearer_token)],
+) -> CurrentUser:
     return auth.current_user_from_access(token)
 
 

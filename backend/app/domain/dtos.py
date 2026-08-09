@@ -39,6 +39,13 @@ class RefreshRequest(BaseModel):
     refresh_token: str = Field(min_length=1)
 
 
+class LogoutRequest(BaseModel):
+    # Optional: the access token being logged out is always revoked (it's read
+    # straight off the Authorization header), this additionally revokes the
+    # paired refresh token so it can't mint a fresh access token post-logout.
+    refresh_token: str | None = None
+
+
 class CurrentUser(BaseModel):
     user_id: UUID
     username: str

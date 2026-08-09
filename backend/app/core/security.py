@@ -14,8 +14,9 @@ Enterprise solution:
   * short-lived ACCESS tokens (minutes) + long-lived REFRESH tokens (days),
   * a `typ` claim so the two cannot be confused,
   * issuer + audience validation,
-  * a `jti` on refresh tokens so they can be added to a revocation list (table
-    scaffolded in the migration; wired in a later phase),
+  * a `jti` on every token so it can be checked against (and added to, on
+    logout) the revocation list (table scaffolded in the migration; wired in
+    app.services.auth_service.AuthService.logout/current_user_from_access),
   * secret comes only from validated Settings (no default in prod).
 The transport fix (httpOnly Secure SameSite cookies instead of localStorage) is in
 the frontend workstream; this module supports both by returning raw tokens.
@@ -71,9 +72,8 @@ def _encode(settings: Settings, claims: dict[str, Any], ttl: timedelta, typ: Tok
         "exp": now + ttl,
         "iss": settings.jwt_issuer,
         "aud": settings.jwt_audience,
+        "jti": str(uuid.uuid4()),
     }
-    if typ == "refresh":
-        payload["jti"] = str(uuid.uuid4())
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
