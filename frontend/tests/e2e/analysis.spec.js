@@ -19,10 +19,11 @@ import { gotoAnalysisView } from "./helpers.js";
 test.describe("Analysis view", () => {
   test("lists the whole registry, in-development entries included but de-emphasized", async ({ page }) => {
     await gotoAnalysisView(page);
-    // 16 catalog entries, grouped by category. 10 are "available" (Wave:
-    // vegetation indices flipped NDVI/EVI/SAVI/MNDWI/NBR on) - 6 remain
+    // 19 catalog entries, grouped by category. 13 are "available" (Wave:
+    // vegetation indices flipped NDVI/EVI/SAVI/MNDWI/NBR on; Wave: raw-imagery
+    // browsing added s2_browse/s1_browse/landsat_browse) - 6 remain
     // "in-development" and render muted.
-    await expect(page.locator(".analysis-row")).toHaveCount(16);
+    await expect(page.locator(".analysis-row")).toHaveCount(19);
     await expect(page.locator(".analysis-row-muted")).toHaveCount(6);
     await expect(page.getByRole("button", { name: /^Forest Change$/ })).toBeVisible();
 
