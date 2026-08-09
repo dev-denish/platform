@@ -483,6 +483,15 @@ class IngestMetadata(BaseModel):
     # here - both endpoints that set either flag never set the other.
     project_id: UUID | None = None
     is_adhoc: bool = False
+    # Wave: upload project-name footgun fix. Defaults to True here (preserving
+    # find-or-create-on-any-name for every caller that constructs this DTO
+    # directly, e.g. the ~dozen existing integration tests that don't care
+    # about this concern) - POST /datasets/upload's own Form field is what
+    # actually flips the real, browser-driven upload flow's default to False
+    # (see datasets.py), so a typo'd project_name errors instead of silently
+    # forking a duplicate project unless the caller explicitly confirms this
+    # is a new project.
+    create_new_project: bool = True
 
 
 class BandStatsOut(BaseModel):

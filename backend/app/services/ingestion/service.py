@@ -76,7 +76,8 @@ class IngestionService:
             require_project_upload(cur, meta.project_id, actor)
             return meta.project_id
         return resolve_project_for_upload(
-            cur, project_name=meta.project_name, region=meta.region, actor=actor
+            cur, project_name=meta.project_name, region=meta.region, actor=actor,
+            create_new_project=meta.create_new_project,
         )
 
     def ingest(

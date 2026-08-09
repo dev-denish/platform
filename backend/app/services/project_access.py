@@ -47,9 +47,31 @@ def resolve_reference_library_project(cur: psycopg.Cursor) -> UUID:
 
 
 def resolve_project_for_upload(
-    cur: psycopg.Cursor, *, project_name: str, region: str, actor: CurrentUser
+    cur: psycopg.Cursor, *, project_name: str, region: str, actor: CurrentUser,
+    create_new_project: bool = True,
 ) -> UUID:
-    project_id, created = ProjectRepository(cur).find_or_create_by_name(project_name, region)
+    """Wave: upload project-name footgun fix. `create_new_project` defaults to True
+    (the original, unconditional find-or-create behavior) so every caller that
+    doesn't know about this concept - WmsService's external-layer creation, and
+    every test that constructs an upload without it - is completely unaffected.
+    POST /datasets/upload is the only caller that passes `create_new_project=False`
+    by default (see IngestMetadata.create_new_project's own docstring for why the
+    DEFAULT lives at the HTTP form layer, not here): a mismatched/typo'd name used
+    to silently fork a brand-new, empty-looking duplicate project instead of
+    erroring - real incident, see wave_upload_project_name_footgun memory - so the
+    real upload UI now requires an exact (case-insensitive) match unless the
+    caller explicitly confirms "yes, this is a new project."
+    """
+    if create_new_project:
+        project_id, created = ProjectRepository(cur).find_or_create_by_name(project_name, region)
+    else:
+        existing = ProjectRepository(cur).get_by_name(project_name)
+        if existing is None:
+            raise NotFoundError(
+                f'No project named "{project_name}" exists. If you intend to create a '
+                'new project, check "This is a new project" and upload again.'
+            )
+        project_id, created = existing["project_id"], False
     if actor.role == Role.ADMINISTRATOR:
         return project_id
     if created:

@@ -85,6 +85,20 @@ class ProjectRepository:
         )
         return self.cur.fetchone()
 
+    def get_by_name(self, name: str) -> dict[str, Any] | None:
+        """Case-insensitive exact match on a live project - the SAME predicate
+        (`lower(name) WHERE deleted_at IS NULL`) as the unique index `find_or_create_by_name`
+        relies on, so "does a project by this name already exist" always agrees with what
+        that method would have matched. Used by resolve_project_for_upload's
+        `create_new_project=False` path (Wave: upload project-name footgun fix) to require
+        an exact match instead of silently forking a new project on any mismatch."""
+        self.cur.execute(
+            "SELECT project_id, name, region, status FROM project "
+            "WHERE lower(name) = lower(%s) AND deleted_at IS NULL",
+            (name,),
+        )
+        return self.cur.fetchone()
+
     def find_or_create_by_name(self, name: str, region: str) -> tuple[UUID, bool]:
         """Atomic: relies on the unique index on lower(name). Concurrent first-time
         uploads of the same project can no longer create duplicates.

@@ -112,6 +112,12 @@ async def upload_dataset(
     lat_column: str | None = Form(None),
     lon_column: str | None = Form(None),
     is_reference: bool = Form(False),
+    # Wave: upload project-name footgun fix. Defaults to False - a mismatched
+    # project_name (e.g. a typo) errors instead of silently forking a
+    # duplicate project. Set True only when the caller (the UI's "This is a
+    # new project" checkbox) explicitly confirms this project doesn't exist
+    # yet - see project_access.resolve_project_for_upload.
+    create_new_project: bool = Form(False),
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> JobAccepted:
     # validate extension against the allow-list (raster OR vector - Wave:
@@ -133,7 +139,7 @@ async def upload_dataset(
             source=source, classification_method=classification_method,
             accuracy_score=accuracy_score, date_processed=date_processed,  # type: ignore[arg-type]
             pixel_size_m=pixel_size_m, lat_column=lat_column, lon_column=lon_column,
-            is_reference=is_reference,
+            is_reference=is_reference, create_new_project=create_new_project,
         )
     except Exception as e:
         raise ValidationError(f"Invalid metadata: {e}") from e
