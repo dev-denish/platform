@@ -37,10 +37,17 @@ class AnalysisCatalogEntry(TypedDict):
     status: AnalysisStatus
     description: str
     execution: NotRequired[AnalysisExecution]
+    # Wave: AOI clip / raw-imagery browsing. True only for the 3 "Raw
+    # Imagery" entries below - they alone accept an optional `year` request
+    # param (a real single-scene/mosaic lookup for that year, or the most
+    # recent scene if omitted). The original 10 analyses stay exactly as
+    # parameter-free as they've always been; this field is absent (falsy) on
+    # all of them, not retrofitted.
+    year_selectable: NotRequired[bool]
 
 
 CATALOG: tuple[AnalysisCatalogEntry, ...] = (
-    # --- Real (10), status "available" ---
+    # --- Real (10 original + 3 Raw Imagery below = 13), status "available" ---
     {
         "id": "hansen_gfc",
         "name": "Global Forest Change (Hansen)",
@@ -143,9 +150,48 @@ CATALOG: tuple[AnalysisCatalogEntry, ...] = (
             "cloud-masked Sentinel-2 composites."
         ),
     },
+    # --- Raw Imagery (3), status "available" - Wave: AOI clip / raw-imagery
+    # browsing. Single-scene/same-family-mosaic browsing, no cloud-masked
+    # multi-image compositing, no band-math/index formula, no cross-sensor
+    # math - see gee_analysis_service.py's own module docstring for why
+    # these must never feed the vegetation-index compute path. `year`
+    # (optional request param) picks a calendar year; omitted -> most recent
+    # scene available. Distinct from the in-development `sar` entry below,
+    # which is a DIFFERENT, future, COMPUTED backscatter time series, not
+    # raw single-scene browsing. ---
+    {
+        "id": "s2_browse", "name": "Sentinel-2 True Color", "category": "Raw Imagery",
+        "status": "available", "execution": "sync", "year_selectable": True,
+        "description": (
+            "Raw Sentinel-2 true-color (B4/B3/B2) scene, least-cloud within the "
+            "selected year (2017-present). Browse only - no index math, decoupled "
+            "from the vegetation-index compute path."
+        ),
+    },
+    {
+        "id": "s1_browse", "name": "Sentinel-1 Radar Backscatter", "category": "Raw Imagery",
+        "status": "available", "execution": "sync", "year_selectable": True,
+        "description": (
+            "Raw Sentinel-1 GRD VV/VH backscatter composite (IW mode), most recent "
+            "scene within the selected year (2015-present). Cloud-independent."
+        ),
+    },
+    {
+        "id": "landsat_browse", "name": "Landsat True Color", "category": "Raw Imagery",
+        "status": "available", "execution": "sync", "year_selectable": True,
+        "description": (
+            "Raw Landsat Collection 2 Level 2 true-color scene, Landsat 8+9 combined "
+            "for the shortest achievable revisit, least-cloud within the selected "
+            "year (2013-present)."
+        ),
+    },
     # --- Deferred (5), status "in-development" ---
     {"id": "sar", "name": "SAR", "category": "Radar", "status": "in-development",
-     "description": "Sentinel-1 radar backscatter composite."},
+     "description": (
+         "Computed Sentinel-1 radar backscatter TIME SERIES for change detection - "
+         "different from the available `s1_browse` entry above, which is a raw "
+         "single-scene/year browse with no time-series compositing."
+     )},
     {"id": "landtrendr", "name": "LandTrendr", "category": "Forest Change",
      "status": "in-development",
      "description": "Landsat time-series disturbance/recovery trajectory analysis."},

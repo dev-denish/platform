@@ -653,6 +653,9 @@ class AnalysisCatalogEntryOut(BaseModel):
     category: str
     status: str
     description: str
+    # Wave: AOI clip / raw-imagery browsing. True only for the 3 "Raw
+    # Imagery" entries - see analysis_catalog.py's own field docstring.
+    year_selectable: bool = False
 
 
 class ProjectAnalysisSummary(BaseModel):
@@ -664,6 +667,7 @@ class ProjectAnalysisSummary(BaseModel):
     category: str
     status: str
     description: str
+    year_selectable: bool = False
     computed_at: datetime | None = None
 
 

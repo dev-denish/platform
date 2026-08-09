@@ -39,7 +39,7 @@ if not os.getenv("DMRV_TEST_GEE"):
 import httpx  # noqa: E402
 from PIL import Image  # noqa: E402
 
-from app.services.gee_analysis_service import _compute, init_ee  # noqa: E402
+from app.services.gee_analysis_service import _compute, _compute_point, init_ee  # noqa: E402
 
 # Same tiny (~1.1km x 1.1km) real-world square over Bengaluru, Karnataka used
 # by test_veg_index_live_gee.py - known real coverage for all 5 datasets
@@ -132,3 +132,66 @@ def test_previously_unclipped_layers_still_render_real_pixels_inside_the_aoi(ana
         f"{analysis_id}: 0/{inside_total} pixels were opaque in the tile covering the AOI's own "
         "centroid - clipping masked out the AOI itself, not just the outside area"
     )
+
+
+# ------------------------------------------------------- raw-imagery browsing (Wave)
+
+# 2023 - a real past year with known good Sentinel-1/Sentinel-2/Landsat
+# coverage over Bengaluru, used instead of "latest" (None) so these tests
+# are deterministic and don't depend on what's been acquired in the last 90
+# days relative to whenever the suite happens to run.
+_BROWSE_TEST_YEAR = 2023
+
+
+@pytest.mark.parametrize("analysis_id", ["s2_browse", "s1_browse", "landsat_browse"])
+def test_browse_layers_render_transparent_far_outside_the_aoi(analysis_id):
+    """Same clip regression as the previously-unclipped 5 above, applied to
+    the 3 new raw-imagery browse layers from day one - they must never ship
+    unclipped in the first place."""
+    canopy_cover_pct = 30.0  # unused by all 3, harmless default
+    request_params = {"year": _BROWSE_TEST_YEAR}
+    _, _, tile_url_template = _compute(
+        analysis_id, _TINY_BOUNDARY_GEOJSON, canopy_cover_pct, request_params
+    )
+    assert tile_url_template
+
+    outside_opaque, outside_total = _fetch_tile_alpha_stats(tile_url_template, *_FAR_OUTSIDE_POINT)
+    assert outside_opaque == 0, (
+        f"{analysis_id}: {outside_opaque}/{outside_total} pixels were opaque in a tile "
+        "6.5km outside the 1.1km AOI - the browse map tile is not clipped to the boundary"
+    )
+
+
+@pytest.mark.parametrize("analysis_id", ["s2_browse", "s1_browse", "landsat_browse"])
+def test_browse_layers_render_real_pixels_inside_the_aoi_for_the_requested_year(analysis_id):
+    canopy_cover_pct = 30.0
+    request_params = {"year": _BROWSE_TEST_YEAR}
+    stats, _, tile_url_template = _compute(
+        analysis_id, _TINY_BOUNDARY_GEOJSON, canopy_cover_pct, request_params
+    )
+
+    inside_opaque, inside_total = _fetch_tile_alpha_stats(tile_url_template, *_BOUNDARY_CENTROID)
+    assert inside_opaque > 0, (
+        f"{analysis_id}: 0/{inside_total} pixels were opaque in the tile covering the AOI's own "
+        f"centroid for {_BROWSE_TEST_YEAR} - no real scene was found/rendered"
+    )
+    # Proves request_params actually reached the real GEE query, not just
+    # that SOME scene came back - the returned scene must fall within the
+    # requested calendar year, not silently default to "latest".
+    assert stats["scene_date"].startswith(str(_BROWSE_TEST_YEAR)), stats["scene_date"]
+
+
+def test_compute_point_for_browse_layers_returns_a_detail_string_for_the_requested_year():
+    """Identify's per-pixel counterpart for the 3 browse ids: no single
+    scalar value (RGB/dual-pol), so the response is a formatted `detail`
+    string, not `value` - and it must sample the SAME year the caller's
+    tile was computed with (request_params), not silently "latest"."""
+    boundary_center_point = _BOUNDARY_CENTROID
+    request_params = {"year": _BROWSE_TEST_YEAR}
+    for analysis_id in ("s2_browse", "s1_browse", "landsat_browse"):
+        result = _compute_point(
+            analysis_id, _TINY_BOUNDARY_GEOJSON, 30.0,
+            boundary_center_point[0], boundary_center_point[1], request_params,
+        )
+        assert result.get("value") is None
+        assert result.get("detail"), f"{analysis_id}: expected a real detail string, got {result!r}"

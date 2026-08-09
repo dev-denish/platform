@@ -90,13 +90,25 @@ def get_analysis_point_value(
     svc: Annotated[GEEAnalysisService, Depends(get_gee_analysis_service)],
     lon: Annotated[float, Query(ge=-180, le=180)],
     lat: Annotated[float, Query(ge=-90, le=90)],
+    # Wave: raw-imagery browsing. Only meaningful for the 3 browse ids -
+    # every other analysis_id ignores it. MUST match whatever `year` the
+    # caller's currently-displayed tile was last refreshed with (see
+    # GEEAnalysisService.get_point_value's own comment) or a click could
+    # sample a different year than the one the map tile visually shows.
+    # No `le=` upper bound: unlike `_current_veg_index_years()` (which this
+    # module docstring elsewhere warns must be evaluated fresh per call, not
+    # frozen at import time), a `le=date.today().year` HERE would be baked
+    # into this route's signature once at import time and never refresh for
+    # the life of the process - a future year is harmless anyway (the
+    # underlying ImageCollection just has no scenes yet).
+    year: Annotated[int | None, Query(ge=2013)] = None,
 ) -> AnalysisPointValue:
     """Identify-tool support (GET /layers/{id}/pixel's GEE-layer analog): a
     normal `def` route (not `async def`) so FastAPI's automatic thread-pool
     offload applies to the blocking GEE call inside, same reasoning as
     GET /layers/{id}/pixel and unlike refresh_analysis below (see that
     route's own comment)."""
-    return svc.get_point_value(project_id, analysis_id, lon, lat, user)
+    return svc.get_point_value(project_id, analysis_id, lon, lat, user, year=year)
 
 
 @router.post(
@@ -113,6 +125,11 @@ async def refresh_analysis(
     runner: Annotated[TaskRunner, Depends(get_task_runner)],
     settings: Annotated[Settings, Depends(get_settings)],
     response: Response,
+    # Wave: raw-imagery browsing. Only meaningful for the 3 "sync"-execution
+    # browse ids - every other analysis_id's refresh ignores it, unchanged.
+    # No `le=` bound - see get_analysis_point_value's own comment on why a
+    # date.today()-derived bound would freeze at import time.
+    year: Annotated[int | None, Query(ge=2013)] = None,
 ) -> AnalysisResultOut | JobAccepted:
     entry = get_catalog_entry(analysis_id)
     if entry is not None and entry.get("execution") == "async":
@@ -122,4 +139,5 @@ async def refresh_analysis(
     # "sync"-execution (or unknown/not-yet-implemented, which svc.refresh()
     # itself 404s/422s) - off the event loop via to_thread, since this is an
     # async route now (see module docstring for why that matters here).
-    return await asyncio.to_thread(svc.refresh, project_id, analysis_id, user)
+    request_params = {"year": year} if year is not None else None
+    return await asyncio.to_thread(svc.refresh, project_id, analysis_id, user, request_params)

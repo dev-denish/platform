@@ -64,8 +64,10 @@ def analysis_service(db) -> GEEAnalysisService:
 @pytest.fixture(autouse=True)
 def fake_compute(monkeypatch):
     """Every test in this module gets a deterministic, network-free
-    `_compute`. `calls` records (analysis_id, canopy_cover_pct) per
-    invocation, so a test can assert GEE was - or was NOT - ever reached.
+    `_compute`. `calls` records (analysis_id, canopy_cover_pct, request_params)
+    per invocation, so a test can assert GEE was - or was NOT - ever reached,
+    and (Wave: raw-imagery browsing) what request_params a browse refresh
+    actually passed through.
 
     `init_ee()` and `ee.Geometry(...)` are ALSO stubbed out here: refresh()
     calls both unconditionally before ever reaching `_compute` (see
@@ -75,10 +77,10 @@ def fake_compute(monkeypatch):
     whatever machine runs this suite, the opposite of "CI-safe without
     credentials". Bug filed in the QA report; stubbed here so this suite
     doesn't depend on either one."""
-    calls: list[tuple[str, float]] = []
+    calls: list[tuple[str, float, dict | None]] = []
 
-    def fake(analysis_id, boundary, canopy_cover_pct):
-        calls.append((analysis_id, canopy_cover_pct))
+    def fake(analysis_id, boundary, canopy_cover_pct, request_params=None):
+        calls.append((analysis_id, canopy_cover_pct, request_params))
         return _CANNED
 
     monkeypatch.setattr(svc_module, "_compute", fake)
@@ -99,7 +101,7 @@ def fake_compute_point(monkeypatch):
     BEFORE ever reaching this stub."""
     calls: list[tuple[str, float, float]] = []
 
-    def fake(analysis_id, boundary, canopy_cover_pct, lon, lat):
+    def fake(analysis_id, boundary, canopy_cover_pct, lon, lat, request_params=None):
         calls.append((analysis_id, lon, lat))
         return _CANNED_POINT
 
@@ -152,15 +154,17 @@ def _add_boundary(db: Database, project_id) -> None:
 # --------------------------------------------------------------- catalog listing
 
 
-def test_get_project_analyses_lists_all_sixteen_with_no_computed_at_before_any_refresh(
+def test_get_project_analyses_lists_all_nineteen_with_no_computed_at_before_any_refresh(
     db, analysis_service
 ):
+    # 16 original + 3 Raw Imagery (Wave: raw-imagery browsing:
+    # s2_browse/s1_browse/landsat_browse).
     admin = _make_user(db, Role.ADMINISTRATOR)
     pid = _make_project(db, f"Proj-{uuid.uuid4()}")
 
     result = analysis_service.get_project_analyses(pid, admin)
 
-    assert len(result.analyses) == 16
+    assert len(result.analyses) == 19
     assert all(a.computed_at is None for a in result.analyses)
 
 

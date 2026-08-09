@@ -6,12 +6,18 @@ from __future__ import annotations
 from app.domain.analysis_catalog import CATALOG, REAL_ANALYSIS_IDS, get_catalog_entry
 
 
-def test_catalog_has_exactly_ten_available_and_six_in_development_entries():
+def test_catalog_has_exactly_thirteen_available_and_six_in_development_entries():
+    # 10 original + 3 Raw Imagery (Wave: raw-imagery browsing).
     available = [e for e in CATALOG if e["status"] == "available"]
     in_development = [e for e in CATALOG if e["status"] == "in-development"]
-    assert len(available) == 10
+    assert len(available) == 13
     assert len(in_development) == 6
-    assert len(CATALOG) == 16
+    assert len(CATALOG) == 19
+
+
+def test_only_the_three_raw_imagery_entries_are_year_selectable():
+    year_selectable_ids = {e["id"] for e in CATALOG if e.get("year_selectable")}
+    assert year_selectable_ids == {"s2_browse", "s1_browse", "landsat_browse"}
 
 
 def test_every_catalog_id_is_unique():

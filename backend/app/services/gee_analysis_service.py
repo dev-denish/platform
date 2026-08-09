@@ -69,6 +69,22 @@ stats geometry but rendered the full, unclipped global dataset as a map
 tile. The clip is applied to the final visualized image, never to the raw
 dataset image feeding `reduceRegion` - stats were already boundary-scoped
 and are unaffected by this change.
+
+Wave: raw-imagery browsing. `s2_browse`/`s1_browse`/`landsat_browse` (see
+their own "raw imagery browsing" section near the bottom of this file) are
+BROWSE-ONLY: a single scene or a same-sensor-family mosaic (Landsat 8+9,
+whichever has the least-cloud scene - never blended into one image), no
+cloud-masked multi-image compositing, no band-math/index formula, no
+cross-sensor math. They deliberately do NOT feed `_INDEX_FORMULAS`/
+`_annual_index_series` and must never be wired into the vegetation-index
+compute path above - the Landsat-vs-Sentinel-2 cross-sensor concerns this
+docstring documents (different band names, no Cloud Score+ equivalent, a
+fake "trend break" at the sensor handoff year) apply only to COMPUTE (index
+math across sensors over time), not to raw single-sensor tile display,
+which has none of those failure modes. "Supported for compute" (Sentinel-2
+only, the five indices above) and "available to browse" (all three
+sensors) are two deliberately different, non-overlapping boundaries - keep
+them that way if this file or the analysis catalog ever grows again.
 """
 from __future__ import annotations
 
@@ -147,7 +163,13 @@ class GEEAnalysisService:
         return AnalysisResultOut(**row)
 
     def get_point_value(
-        self, project_id: UUID, analysis_id: str, lon: float, lat: float, actor: CurrentUser
+        self,
+        project_id: UUID,
+        analysis_id: str,
+        lon: float,
+        lat: float,
+        actor: CurrentUser,
+        year: int | None = None,
     ) -> AnalysisPointValue:
         """Identify-tool support: the GEE-layer analog of
         TileService.read_pixel for uploaded COGs. `require_project_view`
@@ -200,7 +222,16 @@ class GEEAnalysisService:
                         "project yet."
                     )
 
-        point_result = _compute_point(analysis_id, boundary_geojson, canopy_cover_pct, lon, lat)
+        # Wave: raw-imagery browsing. `year`, only meaningful for the 3
+        # browse ids, MUST be the same year the caller's currently-displayed
+        # tile was computed with - the frontend passes through whatever year
+        # its last refresh() used, so a click samples the same scene the
+        # tile visually shows, not silently "most recent" regardless of what
+        # was actually rendered.
+        request_params = {"year": year} if year is not None else None
+        point_result = _compute_point(
+            analysis_id, boundary_geojson, canopy_cover_pct, lon, lat, request_params
+        )
         return AnalysisPointValue(analysis_id=analysis_id, lon=lon, lat=lat, **point_result)
 
     # ---- refresh - the only things that actually call GEE ----
@@ -233,11 +264,23 @@ class GEEAnalysisService:
             )
         return entry, boundary_geojson, canopy_cover_pct
 
-    def refresh(self, project_id: UUID, analysis_id: str, actor: CurrentUser) -> AnalysisResultOut:
+    def refresh(
+        self,
+        project_id: UUID,
+        analysis_id: str,
+        actor: CurrentUser,
+        request_params: dict[str, Any] | None = None,
+    ) -> AnalysisResultOut:
         """The "sync"-execution path - computes and returns the result inline.
         Never called for an "async"-execution entry (the route sends those to
         enqueue_refresh instead); the assertion below is a guard against that
-        ever drifting, not a real user-facing error path."""
+        ever drifting, not a real user-facing error path.
+
+        `request_params` (Wave: raw-imagery browsing) is forwarded to
+        `_compute` as-is - only the 3 browse ids read it (`year`); every
+        other "sync" entry ignores it, unchanged. Not threaded through
+        `enqueue_refresh`/the worker below: every browse id is "sync"-only
+        by catalog definition, so the async path never needs it."""
         entry, boundary_geojson, canopy_cover_pct = self._prepare_refresh(
             project_id, analysis_id, actor
         )
@@ -246,7 +289,9 @@ class GEEAnalysisService:
             "enqueue_refresh instead"
         )
 
-        stats, legend, tile_url_template = _compute(analysis_id, boundary_geojson, canopy_cover_pct)
+        stats, legend, tile_url_template = _compute(
+            analysis_id, boundary_geojson, canopy_cover_pct, request_params
+        )
 
         with self.db.transaction() as cur:
             row = AnalysisResultRepository(cur).upsert(
@@ -317,12 +362,21 @@ class GEEAnalysisService:
 
 
 def _compute(
-    analysis_id: str, boundary_geojson: dict[str, Any], canopy_cover_pct: float
+    analysis_id: str,
+    boundary_geojson: dict[str, Any],
+    canopy_cover_pct: float,
+    request_params: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]] | None, str | None]:
     """The ONLY function that touches the GEE client - init_ee() and
     ee.Geometry() construction both happen here, not in refresh(), so a
     caller can test refresh()'s DB/permission/cache logic by monkeypatching
-    this one function alone, with zero GEE credentials/network involved."""
+    this one function alone, with zero GEE credentials/network involved.
+
+    `request_params` (Wave: raw-imagery browsing) is read ONLY by the 3
+    browse branches below (`year`, optional) - every other branch ignores it
+    entirely, unchanged, preserving those 10 analyses' existing
+    parameter-free request shape exactly as it was before this param
+    existed."""
     init_ee()
     boundary = ee.Geometry(boundary_geojson)
     if analysis_id == "hansen_gfc":
@@ -345,6 +399,12 @@ def _compute(
         return _mndwi_query(boundary)
     if analysis_id == "nbr":
         return _nbr_query(boundary)
+    if analysis_id == "s2_browse":
+        return _s2_browse(boundary, (request_params or {}).get("year"))
+    if analysis_id == "s1_browse":
+        return _s1_browse(boundary, (request_params or {}).get("year"))
+    if analysis_id == "landsat_browse":
+        return _landsat_browse(boundary, (request_params or {}).get("year"))
     # refresh() already rejects any non-"available" analysis_id before calling this.
     raise AssertionError(f"no query function wired for {analysis_id!r}")
 
@@ -355,6 +415,7 @@ def _compute_point(
     canopy_cover_pct: float,
     lon: float,
     lat: float,
+    request_params: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Identify's per-pixel counterpart to _compute() above: same dispatch,
     same init_ee()/boundary construction, but samples ONE point instead of
@@ -362,7 +423,14 @@ def _compute_point(
     builder (the _*_image()/_*_latest_image() helpers _compute()'s own
     functions above call) rather than re-deriving the query. get_point_value()
     (GEEAnalysisService) has already confirmed, for async analyses, that a
-    cached result exists before this runs - it is never called otherwise."""
+    cached result exists before this runs - it is never called otherwise.
+
+    `request_params` (Wave: raw-imagery browsing), same `year` key `_compute`
+    reads - MUST be the same year the caller's currently-displayed tile was
+    computed with (get_point_value forwards its own `year` query param
+    through), or a click could return a value for a different year than the
+    one the map tile visually shows. Ignored by every branch except the 3
+    browse ones, same as `_compute` above."""
     init_ee()
     boundary = ee.Geometry(boundary_geojson)
     point = ee.Geometry.Point([lon, lat])
@@ -393,6 +461,19 @@ def _compute_point(
     if analysis_id in _INDEX_FORMULAS:
         value = _index_point_value(boundary, point, analysis_id)
         return {"value": value, "unit": analysis_id.upper()}
+    if analysis_id in _BROWSE_IMAGE_BUILDERS:
+        # RGB/dual-pol images have no single scalar "the" value - reported
+        # via `detail` (a formatted per-band sample), leaving value/unit/
+        # class_name all None. See this function's own docstring on why
+        # `request_params` (the SAME year the caller's tile used) matters here.
+        year = (request_params or {}).get("year")
+        image_builder, band_labels = _BROWSE_IMAGE_BUILDERS[analysis_id]
+        img = image_builder(boundary, year)
+        sample = img.reduceRegion(
+            reducer=ee.Reducer.first(), geometry=point, scale=10, crs=AOI_CRS, bestEffort=True,
+        ).getInfo()
+        parts = [f"{label}:{_round_or_none(sample.get(band), 1)}" for band, label in band_labels]
+        return {"detail": " ".join(parts) if any(sample.get(b) is not None for b, _ in band_labels) else None}
     # get_point_value() already rejects any non-"available" analysis_id before calling this.
     raise AssertionError(f"no point query function wired for {analysis_id!r}")
 
@@ -1074,3 +1155,158 @@ def _index_point_value(boundary: ee.Geometry, point: ee.Geometry, analysis_id: s
         reducer=ee.Reducer.first(), geometry=point, scale=10, crs=AOI_CRS, bestEffort=True,
     ).get("index").getInfo()
     return round(value, 4) if value is not None else None
+
+
+# ------------------------------------------------------------- raw imagery browsing
+#
+# Wave: AOI clip / raw-imagery browsing. s2_browse/s1_browse/landsat_browse
+# below are BROWSE-ONLY: a single scene (S2/Landsat) or the most recent
+# scene (S1, no cloud metric applies to radar) for the selected year, no
+# cloud-masked multi-image compositing, no band-math/index formula, no
+# cross-sensor math. They deliberately do NOT feed `_INDEX_FORMULAS`/
+# `_annual_index_series` and must never be wired into the vegetation-index
+# compute path - the Landsat-vs-Sentinel-2 cross-sensor concerns documented
+# above (different band names, no Cloud Score+ equivalent, a fake
+# "trend break" at the sensor handoff year) apply only to COMPUTE (index
+# math across sensors over time), not to raw single-sensor tile display,
+# which has none of those failure modes. Landsat 8+9 are MERGED here only to
+# shorten achievable revisit (pick whichever satellite has the least-cloud
+# scene in the window) - never blended/composited into one image.
+#
+# Current collection ids (verified, Collection 2 Level 2 for Landsat, never
+# a pre-C02 id): COPERNICUS/S2_SR_HARMONIZED, COPERNICUS/S1_GRD (IW mode,
+# VV+VH), LANDSAT/LC09/C02/T1_L2 + LANDSAT/LC08/C02/T1_L2.
+
+
+def _browse_year_bounds(year: int | None) -> tuple[str, str]:
+    """None -> a rolling 90-day lookback ending today (a genuinely "latest"
+    single scene, not a whole-year composite - mirrors _dynamic_world_image's
+    own rolling-window convention above, just shorter since this picks ONE
+    scene, not a mode() over a year). An explicit year -> that whole calendar
+    year, clipped to not run past today for the still-in-progress current
+    year (so the date range never reaches into the future)."""
+    if year is None:
+        end = datetime.utcnow()
+        start = end - timedelta(days=90)
+        return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
+    today = datetime.utcnow().date()
+    end_date = date(year + 1, 1, 1)
+    if year == today.year:
+        end_date = min(end_date, today + timedelta(days=1))
+    return f"{year}-01-01", end_date.strftime("%Y-%m-%d")
+
+
+def _s2_browse_image(boundary: ee.Geometry, year: int | None) -> ee.Image:
+    start, end = _browse_year_bounds(year)
+    return (
+        ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+        .filterBounds(boundary).filterDate(start, end)
+        .sort("CLOUDY_PIXEL_PERCENTAGE")
+        .first()
+    )
+
+
+def _s2_browse(boundary: ee.Geometry, year: int | None) -> tuple[dict[str, Any], None, str]:
+    img = _s2_browse_image(boundary, year)
+    vis = img.visualize(bands=["B4", "B3", "B2"], min=0, max=3000).clip(boundary)
+    result = ee.Dictionary({
+        "scene_date": ee.Date(img.get("system:time_start")).format("YYYY-MM-dd"),
+        "cloud_pct": img.get("CLOUDY_PIXEL_PERCENTAGE"),
+    }).getInfo()
+    stats = {
+        "scene_date": result.get("scene_date"),
+        "cloud_pct": _round_or_none(result.get("cloud_pct"), 1),
+        "note": (
+            "Browse only - the least-cloud raw Sentinel-2 scene found for the "
+            "selected year (or the last 90 days if no year was given), true-color "
+            "(B4/B3/B2). No cloud-masked compositing, no index math - a single real "
+            "scene, not the multi-year cloud-free composite the vegetation indices use."
+        ),
+    }
+    map_id = vis.getMapId()
+    return stats, None, map_id["tile_fetcher"].url_format
+
+
+def _s1_browse_image(boundary: ee.Geometry, year: int | None) -> ee.Image:
+    start, end = _browse_year_bounds(year)
+    return (
+        ee.ImageCollection("COPERNICUS/S1_GRD")
+        .filterBounds(boundary).filterDate(start, end)
+        .filter(ee.Filter.eq("instrumentMode", "IW"))
+        .filter(ee.Filter.listContains("transmitterReceiverPolarisation", "VV"))
+        .filter(ee.Filter.listContains("transmitterReceiverPolarisation", "VH"))
+        .sort("system:time_start", False)  # most recent first - no cloud metric applies to radar
+        .first()
+    )
+
+
+def _s1_browse(boundary: ee.Geometry, year: int | None) -> tuple[dict[str, Any], None, str]:
+    img = _s1_browse_image(boundary, year)
+    # Standard published false-color Sentinel-1 composite - VV(R)/VH(G)/
+    # VV-minus-VH(B), dB scale - a widely-recognized SAR browsing convention,
+    # not values invented for this module (no in-repo precedent to match).
+    vv, vh = img.select("VV"), img.select("VH")
+    composite = ee.Image.cat([vv, vh, vv.subtract(vh)]).rename(["r", "g", "b"])
+    vis = composite.visualize(bands=["r", "g", "b"], min=-25, max=0).clip(boundary)
+    result = ee.Dictionary({
+        "scene_date": ee.Date(img.get("system:time_start")).format("YYYY-MM-dd"),
+    }).getInfo()
+    stats = {
+        "scene_date": result.get("scene_date"),
+        "note": (
+            "Browse only - the most recent raw Sentinel-1 GRD IW VV/VH scene found "
+            "for the selected year (or the last 90 days if no year was given). No "
+            "cloud metric applies to radar, so this is the most recent scene in the "
+            "window, not a least-cloud pick like the optical browse layers."
+        ),
+    }
+    map_id = vis.getMapId()
+    return stats, None, map_id["tile_fetcher"].url_format
+
+
+def _landsat_browse_image(boundary: ee.Geometry, year: int | None) -> ee.Image:
+    start, end = _browse_year_bounds(year)
+    return (
+        ee.ImageCollection("LANDSAT/LC09/C02/T1_L2")
+        .merge(ee.ImageCollection("LANDSAT/LC08/C02/T1_L2"))
+        .filterBounds(boundary).filterDate(start, end)
+        .sort("CLOUD_COVER")
+        .first()
+    )
+
+
+def _landsat_browse(boundary: ee.Geometry, year: int | None) -> tuple[dict[str, Any], None, str]:
+    img = _landsat_browse_image(boundary, year)
+    # Collection 2 Level 2 scale factors (USGS-documented): SR = DN * 0.0000275 - 0.2
+    refl = img.select(["SR_B4", "SR_B3", "SR_B2"]).multiply(0.0000275).add(-0.2)
+    vis = refl.visualize(bands=["SR_B4", "SR_B3", "SR_B2"], min=0, max=0.3).clip(boundary)
+    result = ee.Dictionary({
+        "scene_date": ee.Date(img.get("system:time_start")).format("YYYY-MM-dd"),
+        "cloud_pct": img.get("CLOUD_COVER"),
+    }).getInfo()
+    stats = {
+        "scene_date": result.get("scene_date"),
+        "cloud_pct": _round_or_none(result.get("cloud_pct"), 1),
+        "note": (
+            "Browse only - the least-cloud raw Landsat 8/9 Collection 2 Level 2 "
+            "scene found for the selected year (or the last 90 days if no year was "
+            "given), true-color (SR_B4/SR_B3/SR_B2). Landsat 8 and 9 are merged only "
+            "to shorten achievable revisit (whichever satellite has the least-cloud "
+            "scene wins) - never blended/composited into one image. No index math, "
+            "no cross-sensor compositing with Sentinel-2."
+        ),
+    }
+    map_id = vis.getMapId()
+    return stats, None, map_id["tile_fetcher"].url_format
+
+
+# analysis_id -> (raw-image builder, [(band_name, display_label), ...]) for
+# _compute_point's browse branch - samples raw digital numbers (not the
+# scaled/visualized values) for a quick per-band Identify readout, since none
+# of these images have a single scalar "the" value the way a classified
+# land-cover pixel or a vegetation-index pixel does.
+_BROWSE_IMAGE_BUILDERS: dict[str, tuple[Any, list[tuple[str, str]]]] = {
+    "s2_browse": (_s2_browse_image, [("B4", "R"), ("B3", "G"), ("B2", "B")]),
+    "s1_browse": (_s1_browse_image, [("VV", "VV"), ("VH", "VH")]),
+    "landsat_browse": (_landsat_browse_image, [("SR_B4", "R"), ("SR_B3", "G"), ("SR_B2", "B")]),
+}
