@@ -85,17 +85,33 @@ which has none of those failure modes. "Supported for compute" (Sentinel-2
 only, the five indices above) and "available to browse" (all three
 sensors) are two deliberately different, non-overlapping boundaries - keep
 them that way if this file or the analysis catalog ever grows again.
-"""
+
+Wave: GEE tile caching. `_compute_cached` wraps `_compute` (kept entirely
+unchanged - the sole GEE-touching, `fake_compute`-monkeypatchable seam
+existing tests already rely on) with a Redis get/compute/set, keyed and
+TTL'd by `app/services/gee_tile_cache.py` (see that module's own docstring
+for the full TTL design/reasoning). It sits strictly BETWEEN `refresh()`/
+the async worker and `_compute()`, purely to avoid redundant GEE calls -
+the `analysis_result` DB table remains the separate, durable, no-TTL,
+manual-refresh-only per-project result store `get_result()` reads from and
+always has; this cache is never read by `get_result()`. `_cache_get`/
+`_cache_set` are their own small monkeypatchable seam (same convention as
+`init_ee`/`_compute`) and fail OPEN (log + treat as a miss/no-op) on any
+Redis error - caching must never be the reason a request fails."""
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
 import ee
+import redis as redis_lib
 
+from app.core.config import get_settings
 from app.core.db import Database
 from app.core.errors import DomainError, NotFoundError, ValidationError
+from app.core.logging import get_logger
 from app.domain.analysis_catalog import CATALOG, get_catalog_entry
 from app.domain.authz import require_project_upload, require_project_view
 from app.domain.dtos import (
@@ -116,10 +132,13 @@ from app.domain.gee_class_legends import (
 from app.repositories.analysis_results import AnalysisResultRepository
 from app.repositories.audit import AuditRepository
 from app.repositories.forest_definition import ForestDefinitionRepository
+from app.services import gee_tile_cache
 from app.services.gee_client import init_ee
 from app.services.index_summary import summarize_index_result
 from app.services.jobs_service import JobService
 from app.workers.queue import TaskRunner
+
+log = get_logger("dmrv.gee_analysis")
 
 AOI_CRS = "EPSG:32643"  # UTM 43N, Karnataka -- same convention as scripts/gee_phase1_agb_proxy.py
 
@@ -289,8 +308,10 @@ class GEEAnalysisService:
             "enqueue_refresh instead"
         )
 
-        stats, legend, tile_url_template = _compute(
-            analysis_id, boundary_geojson, canopy_cover_pct, request_params
+        # Wave: GEE tile caching. `_compute_cached`, not `_compute` directly -
+        # a re-run within the TTL window skips the real GEE call.
+        stats, legend, tile_url_template = _compute_cached(
+            str(project_id), analysis_id, boundary_geojson, canopy_cover_pct, request_params
         )
 
         with self.db.transaction() as cur:
@@ -356,6 +377,77 @@ class GEEAnalysisService:
                     "Failed to enqueue this analysis. Please retry."
                 ) from e
         return job_id
+
+
+# ----------------------------------------------------------------- GEE cache
+#
+# Wave: GEE tile caching. See this module's own docstring (top of file) and
+# app/services/gee_tile_cache.py for the full key/TTL design. `_cache_get`/
+# `_cache_set` are the ONLY functions that touch Redis - a small,
+# monkeypatchable seam (same convention as `init_ee`/`_compute` below), so
+# tests exercise cache-hit/-miss/-invalidation logic with an in-memory dict,
+# no real Redis needed.
+
+
+def _redis_client() -> redis_lib.Redis:
+    # A fresh client per call rather than a cached singleton: redis-py's own
+    # connection pooling already amortizes the real cost (a new TCP
+    # connection per call), and a cached client would need explicit
+    # invalidation if DMRV_REDIS_URL ever changed within a process's
+    # lifetime (e.g. tests). get_settings() itself IS process-cached
+    # (app/core/config.py), so this is one attribute lookup, not a fresh
+    # env-var parse, on every call.
+    return redis_lib.Redis.from_url(get_settings().redis_url, socket_timeout=2.0)
+
+
+def _cache_get(key: str) -> tuple[dict[str, Any], list[dict[str, Any]] | None, str | None] | None:
+    """None on a cache miss OR any Redis failure - caching must never be why
+    a request fails, so a broken/unreachable Redis degrades to "always
+    recompute", not a 500."""
+    try:
+        raw = _redis_client().get(key)
+    except redis_lib.RedisError as e:
+        log.warning("gee_cache.get_failed", key=key, error=str(e))
+        return None
+    if raw is None:
+        return None
+    stats, legend, tile_url_template = json.loads(raw)
+    return stats, legend, tile_url_template
+
+
+def _cache_set(
+    key: str,
+    value: tuple[dict[str, Any], list[dict[str, Any]] | None, str | None],
+    ttl: int,
+) -> None:
+    """Swallows any Redis failure (logged, not raised) - same "caching must
+    never break a request" rule as `_cache_get`."""
+    try:
+        _redis_client().set(key, json.dumps(list(value)), ex=ttl)
+    except redis_lib.RedisError as e:
+        log.warning("gee_cache.set_failed", key=key, error=str(e))
+
+
+def _compute_cached(
+    project_id: str,
+    analysis_id: str,
+    boundary_geojson: dict[str, Any],
+    canopy_cover_pct: float,
+    request_params: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]] | None, str | None]:
+    """The cached front door to `_compute()` - both `refresh()` (sync path)
+    and `run_gee_analysis_job` (async path, app/workers/gee_analysis_jobs.py)
+    call THIS, never `_compute` directly, so a re-run within the TTL window
+    skips the real GEE call entirely (including the 5-59s vegetation-index
+    compositing path). `_compute` itself is untouched - it remains the one
+    function existing tests monkeypatch to fake GEE out entirely."""
+    key = gee_tile_cache.cache_key(project_id, analysis_id, request_params)
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached
+    result = _compute(analysis_id, boundary_geojson, canopy_cover_pct, request_params)
+    _cache_set(key, result, gee_tile_cache.ttl_seconds(analysis_id, request_params))
+    return result
 
 
 # --------------------------------------------------------------- GEE queries

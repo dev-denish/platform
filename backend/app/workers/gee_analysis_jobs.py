@@ -26,7 +26,7 @@ from app.domain.enums import AuditAction
 from app.repositories.analysis_results import AnalysisResultRepository
 from app.repositories.audit import AuditRepository
 from app.repositories.jobs import JobRepository
-from app.services.gee_analysis_service import _compute
+from app.services.gee_analysis_service import _compute_cached
 
 _KIND = "compute_gee_analysis"
 
@@ -63,7 +63,15 @@ async def run_gee_analysis_job(
 
     start = time.perf_counter()
     try:
-        stats, legend, tile_url_template = _compute(analysis_id, boundary_geojson, canopy_cover_pct)
+        # Wave: GEE tile caching. `_compute_cached`, not `_compute` directly -
+        # a re-run within the TTL window skips the real (5-59s for the
+        # vegetation indices) GEE compute entirely. No `request_params` here:
+        # every "async"-execution analysis is one of the original 10, none
+        # of which are year-selectable (see gee_analysis_service.py's own
+        # `refresh()` docstring on why that's true by catalog construction).
+        stats, legend, tile_url_template = _compute_cached(
+            project_id, analysis_id, boundary_geojson, canopy_cover_pct
+        )
     except Exception as e:  # noqa: BLE001 - presumed transient (quota/network); classified below
         error = {"code": "job_error", "message": str(e)}
         max_tries = settings.job_max_retries

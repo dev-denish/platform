@@ -109,6 +109,32 @@ def fake_compute_point(monkeypatch):
     return calls
 
 
+@pytest.fixture(autouse=True)
+def fake_cache(monkeypatch):
+    """Wave: GEE tile caching. Monkeypatches `_cache_get`/`_cache_set` (the
+    ONLY functions that touch Redis - see gee_analysis_service.py's own
+    module docstring) with an in-memory dict, same "mock the external
+    system's seam" convention `fake_compute`/`init_ee` already use above -
+    no real Redis needed for this suite to prove cache hit/miss/
+    invalidation logic. Autouse (like `fake_compute`): every test's
+    `refresh()` call reaches `_compute_cached` now, so without this every
+    test in the file would attempt a real (and here, unreachable) Redis
+    connection - fails open (see gee_analysis_service.py's `_cache_get`/
+    `_cache_set`), so tests would still PASS, just slower and with a real
+    network dependency this suite explicitly avoids everywhere else."""
+    store: dict[str, tuple] = {}
+
+    def fake_get(key):
+        return store.get(key)
+
+    def fake_set(key, value, ttl):
+        store[key] = value
+
+    monkeypatch.setattr(svc_module, "_cache_get", fake_get)
+    monkeypatch.setattr(svc_module, "_cache_set", fake_set)
+    return store
+
+
 def _make_user(db: Database, role: Role) -> CurrentUser:
     username = f"geetest-{role.name.lower()}-{uuid.uuid4()}"
     with db.transaction() as cur:
@@ -197,6 +223,73 @@ def test_refresh_upserts_and_returns_the_row_and_audit_logs(db, analysis_service
     assert row is not None
     assert str(row["actor_id"]) == str(admin.user_id)
     assert str(row["project_id"]) == str(pid)
+
+
+# --------------------------------------------------------------- GEE tile caching
+
+
+def test_refresh_within_ttl_is_a_cache_hit_and_never_recomputes(
+    db, analysis_service, fake_compute, fake_cache
+):
+    admin = _make_user(db, Role.ADMINISTRATOR)
+    pid = _make_project(db, f"Proj-{uuid.uuid4()}")
+    _add_boundary(db, pid)
+
+    first = analysis_service.refresh(pid, "hansen_gfc", admin)
+    second = analysis_service.refresh(pid, "hansen_gfc", admin)
+
+    assert len(fake_compute) == 1  # the second refresh() never reached _compute at all
+    assert first.stats == second.stats
+    assert first.tile_url_template == second.tile_url_template
+    # The cache entry itself is real, keyed as gee_tile_cache.cache_key documents.
+    assert f"gee_analysis:{pid}:hansen_gfc" in fake_cache
+
+
+def test_refresh_for_a_browse_layer_with_a_different_year_is_a_cache_miss(
+    db, analysis_service, fake_compute, fake_cache
+):
+    admin = _make_user(db, Role.ADMINISTRATOR)
+    pid = _make_project(db, f"Proj-{uuid.uuid4()}")
+    _add_boundary(db, pid)
+
+    analysis_service.refresh(pid, "s2_browse", admin, request_params={"year": 2022})
+    analysis_service.refresh(pid, "s2_browse", admin, request_params={"year": 2023})
+
+    # A real cache miss, not a stale hit for the wrong year - correctness,
+    # not just performance (a wrong-year cache hit would be a real bug).
+    assert len(fake_compute) == 2
+    assert fake_compute[0][2] == {"year": 2022}
+    assert fake_compute[1][2] == {"year": 2023}
+    assert f"gee_analysis:{pid}:s2_browse:2022" in fake_cache
+    assert f"gee_analysis:{pid}:s2_browse:2023" in fake_cache
+
+
+def test_refresh_for_a_browse_layer_with_the_same_year_is_a_cache_hit(
+    db, analysis_service, fake_compute, fake_cache
+):
+    admin = _make_user(db, Role.ADMINISTRATOR)
+    pid = _make_project(db, f"Proj-{uuid.uuid4()}")
+    _add_boundary(db, pid)
+
+    analysis_service.refresh(pid, "s2_browse", admin, request_params={"year": 2022})
+    analysis_service.refresh(pid, "s2_browse", admin, request_params={"year": 2022})
+
+    assert len(fake_compute) == 1  # the same year IS treated as interchangeable
+
+
+def test_refresh_for_two_different_analysis_ids_never_shares_a_cache_entry(
+    db, analysis_service, fake_compute, fake_cache
+):
+    admin = _make_user(db, Role.ADMINISTRATOR)
+    pid = _make_project(db, f"Proj-{uuid.uuid4()}")
+    _add_boundary(db, pid)
+
+    analysis_service.refresh(pid, "hansen_gfc", admin)
+    analysis_service.refresh(pid, "dynamic_world", admin)
+
+    assert len(fake_compute) == 2
+    assert fake_compute[0][0] == "hansen_gfc"
+    assert fake_compute[1][0] == "dynamic_world"
 
 
 def test_get_project_analyses_shows_computed_at_only_for_the_refreshed_id(db, analysis_service):
