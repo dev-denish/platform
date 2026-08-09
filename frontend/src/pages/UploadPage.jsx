@@ -63,6 +63,11 @@ const INITIAL = {
   // are never sent - the backend always resolves the one shared library
   // project instead (see IngestMetadata.is_reference).
   is_reference: false,
+  // Wave: upload project-name footgun fix. Defaults to false - project_name
+  // must exactly match an existing project, or the upload errors instead of
+  // silently forking a duplicate. Check this only when this really is a
+  // brand-new project.
+  create_new_project: false,
 };
 
 const REFERENCE_LIBRARY_PLACEHOLDER = "Reference Layer Library";
@@ -202,6 +207,7 @@ export default function UploadPage() {
       body.append("region", form.region || "Unspecified");
       body.append("dataset_type", form.dataset_type);
       body.append("is_reference", form.is_reference ? "true" : "false");
+      body.append("create_new_project", form.create_new_project ? "true" : "false");
       body.append("source", form.source);
       body.append("classification_method", form.classification_method);
       if (form.accuracy_score.trim()) body.append("accuracy_score", form.accuracy_score);
@@ -455,7 +461,10 @@ export default function UploadPage() {
                     onChange={(e) => update("project_name", e.target.value)}
                     placeholder="e.g. Rimba Raya Corridor"
                   />
-                  <span className="field-hint">Matched or created by exact name.</span>
+                  <span className="field-hint">
+                    Must exactly match an existing project (case-insensitive) - check
+                    "This is a new project" below if it doesn't exist yet.
+                  </span>
                 </label>
                 <label className="field">
                   <span className="field-label">Region</span>
@@ -464,6 +473,17 @@ export default function UploadPage() {
                     value={form.region}
                     onChange={(e) => update("region", e.target.value)}
                   />
+                </label>
+                <label className="field field-wide checkbox-field">
+                  <input
+                    type="checkbox"
+                    checked={form.create_new_project}
+                    onChange={(e) => update("create_new_project", e.target.checked)}
+                  />
+                  <span>
+                    This is a new project (create it - a mismatched name is rejected
+                    otherwise, to avoid accidentally forking a duplicate project)
+                  </span>
                 </label>
               </>
             ) : null}
@@ -624,6 +644,10 @@ export default function UploadPage() {
                 <>
                   <ReviewRow label="Project" value={form.project_name} />
                   <ReviewRow label="Region" value={form.region} />
+                  <ReviewRow
+                    label="Project mode"
+                    value={form.create_new_project ? "Create new project" : "Existing project (exact match required)"}
+                  />
                 </>
               )}
               <ReviewRow label="Type" value={form.dataset_type} />
