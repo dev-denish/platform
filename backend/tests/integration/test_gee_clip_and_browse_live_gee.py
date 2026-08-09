@@ -106,8 +106,12 @@ def test_previously_unclipped_layers_render_transparent_far_outside_the_aoi(anal
     the fix, a tile far outside the AOI must be fully (or almost fully)
     transparent."""
     canopy_cover_pct = 30.0  # only consumed by hansen_gfc; harmless default for the other 4
-    _, _, tile_url_template = _compute(analysis_id, _TINY_BOUNDARY_GEOJSON, canopy_cover_pct)
+    stats, _, tile_url_template = _compute(analysis_id, _TINY_BOUNDARY_GEOJSON, canopy_cover_pct)
     assert tile_url_template
+    # Wave: partial coverage. A real land-cover dataset is global, so a
+    # small real AOI should be ~fully covered - a real, computed number
+    # (not an estimate), not just "the field exists".
+    assert 90.0 <= stats["coverage_pct"] <= 100.0, stats["coverage_pct"]
 
     outside_opaque, outside_total = _fetch_tile_alpha_stats(tile_url_template, *_FAR_OUTSIDE_POINT)
     assert outside_opaque == 0, (
@@ -179,6 +183,11 @@ def test_browse_layers_render_real_pixels_inside_the_aoi_for_the_requested_year(
     # that SOME scene came back - the returned scene must fall within the
     # requested calendar year, not silently default to "latest".
     assert stats["scene_date"].startswith(str(_BROWSE_TEST_YEAR)), stats["scene_date"]
+    # Wave: partial coverage - a real, computed number, and a single real
+    # scene over a real AOI should have SOME non-trivial coverage (not
+    # necessarily 100%, unlike the always-global land-cover datasets above -
+    # a raw scene can have real edge/swath gaps).
+    assert 0.0 < stats["coverage_pct"] <= 100.0, stats["coverage_pct"]
 
 
 def test_compute_point_for_browse_layers_returns_a_detail_string_for_the_requested_year():

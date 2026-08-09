@@ -164,3 +164,8 @@ def test_annual_index_series_end_to_end_returns_real_non_null_series_and_distrib
     assert real_years, f"every year came back None - series was {stats['series']}"
     assert all(-1.0 <= v <= 1.0 for v in real_years.values())
     assert "no cloud-free coverage inside the boundary" not in stats["summary"]
+    # Wave: partial coverage. A real, computed number (the latest year's
+    # cloud-masked-only pixel count / real boundary area) - a small clear
+    # rectangle should show strong (not necessarily 100%, real cloud cover
+    # varies) coverage, not a suspiciously-round placeholder.
+    assert 0.0 < stats["coverage_pct"] <= 100.0, stats["coverage_pct"]

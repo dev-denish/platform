@@ -591,6 +591,10 @@ def _hansen_forest_change(
     totals = (
         area_ha.rename("baseline_ha").updateMask(forest_mask)
         .addBands(area_ha.rename("gain_ha").updateMask(gfc.select("gain")))
+        # Wave: partial coverage. Unmasked - every classified Hansen pixel
+        # within the boundary, forest or not, the numerator for coverage_pct
+        # below. Same single reduceRegion call, not an extra round trip.
+        .addBands(area_ha.rename("classified_ha"))
         .reduceRegion(
             reducer=ee.Reducer.sum(), geometry=boundary, scale=30, crs=AOI_CRS,
             maxPixels=1e10, bestEffort=True,
@@ -605,18 +609,25 @@ def _hansen_forest_change(
         reducer=ee.Reducer.sum().group(groupField=1, groupName="year"),
         geometry=boundary, scale=30, crs=AOI_CRS, maxPixels=1e10, bestEffort=True,
     )
-    # ONE round trip for both reduceRegions.
-    result = ee.Dictionary({"totals": totals, "loss_groups": grouped.get("groups")}).getInfo()
+    # ONE round trip for both reduceRegions plus the boundary's own real
+    # area (Wave: partial coverage - boundary.area() folds into the SAME
+    # getInfo() call rather than a separate round trip).
+    result = ee.Dictionary({
+        "totals": totals, "loss_groups": grouped.get("groups"),
+        "boundary_area_m2": boundary.area(maxError=1),
+    }).getInfo()
 
     loss_by_year = {
         str(2000 + int(g["year"])): round(float(g["sum"]), 2)
         for g in (result["loss_groups"] or [])
     }
+    covered_area_m2 = float(result["totals"].get("classified_ha") or 0) * 10000
     stats = {
         "canopy_cover_threshold_pct": canopy_cover_pct,
         "baseline_forest_area_ha": round(float(result["totals"].get("baseline_ha") or 0), 2),
         "gain_area_ha_2000_2012": round(float(result["totals"].get("gain_ha") or 0), 2),
         "loss_area_ha_by_year": loss_by_year,
+        "coverage_pct": _coverage_pct(covered_area_m2, float(result["boundary_area_m2"])),
         "note": (
             "Gain is a whole-period 2000-2012 figure only - this dataset does not "
             "track gain after 2012. Baseline forest area applies the canopy-cover "
@@ -656,10 +667,20 @@ def _dynamic_world_image(boundary: ee.Geometry) -> ee.Image:
 
 def _dynamic_world(boundary: ee.Geometry) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
     dw = _dynamic_world_image(boundary)
-    counts = _histogram_counts(dw, "label", boundary, scale=10).getInfo() or {}
+    # Wave: partial coverage. boundary.area() folds into the SAME getInfo()
+    # call as the histogram - still one round trip.
+    result = ee.Dictionary({
+        "counts": _histogram_counts(dw, "label", boundary, scale=10),
+        "boundary_area_m2": boundary.area(maxError=1),
+    }).getInfo()
+    counts = result.get("counts") or {}
     px_area_ha = 100 / 10000.0  # 10m pixel
     class_ha = {int(k): v * px_area_ha for k, v in counts.items()}
-    stats = {"class_area_ha": _class_breakdown(class_ha, DYNAMIC_WORLD_LEGEND)}
+    covered_area_m2 = sum(class_ha.values()) * 10000
+    stats = {
+        "class_area_ha": _class_breakdown(class_ha, DYNAMIC_WORLD_LEGEND),
+        "coverage_pct": _coverage_pct(covered_area_m2, float(result["boundary_area_m2"])),
+    }
     # Wave: AOI clip - see _hansen_forest_change's own comment on this pattern.
     map_id = _visualize_discrete(dw, DYNAMIC_WORLD_LEGEND).clip(boundary).getMapId()
     return stats, legend_entries(DYNAMIC_WORLD_LEGEND), map_id["tile_fetcher"].url_format
@@ -671,11 +692,18 @@ def _esa_worldcover_image() -> ee.Image:
 
 def _esa_worldcover(boundary: ee.Geometry) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
     wc = _esa_worldcover_image()
-    counts = _histogram_counts(wc, "Map", boundary, scale=10).getInfo() or {}
+    # Wave: partial coverage - see _dynamic_world's own comment on this pattern.
+    result = ee.Dictionary({
+        "counts": _histogram_counts(wc, "Map", boundary, scale=10),
+        "boundary_area_m2": boundary.area(maxError=1),
+    }).getInfo()
+    counts = result.get("counts") or {}
     px_area_ha = 100 / 10000.0
     class_ha = {int(k): v * px_area_ha for k, v in counts.items()}
+    covered_area_m2 = sum(class_ha.values()) * 10000
     stats = {
         "class_area_ha": _class_breakdown(class_ha, ESA_WORLDCOVER_LEGEND),
+        "coverage_pct": _coverage_pct(covered_area_m2, float(result["boundary_area_m2"])),
         "note": "Single 2021 snapshot, not a time series.",
     }
     # Wave: AOI clip - see _hansen_forest_change's own comment on this pattern.
@@ -703,14 +731,32 @@ def _esri_lulc(boundary: ee.Geometry) -> tuple[dict[str, Any], list[dict[str, An
         str(year): _histogram_counts(_esri_lulc_year_mosaic(coll, year), "b1", boundary, scale=10)
         for year in _ESRI_LULC_YEARS
     }
-    combined = ee.Dictionary(counts_by_year).getInfo()  # ONE round trip for every year
+    # Wave: partial coverage. Nested (not flattened alongside the year keys -
+    # combined.items() below iterates every top-level key as a "year", so a
+    # bare boundary_area_m2 key would break that loop) - still ONE round
+    # trip for every year plus the boundary's own area.
+    result = ee.Dictionary({
+        "counts_by_year": ee.Dictionary(counts_by_year),
+        "boundary_area_m2": boundary.area(maxError=1),
+    }).getInfo()
+    combined = result["counts_by_year"]
 
     px_area_ha = 100 / 10000.0
     class_area_ha_by_year = {}
+    covered_area_m2_by_year = {}
     for year, hist in combined.items():
         class_ha = {int(k): v * px_area_ha for k, v in (hist or {}).items()}
         class_area_ha_by_year[year] = _class_breakdown(class_ha, ESRI_LULC_LEGEND)
-    stats = {"class_area_ha_by_year": class_area_ha_by_year}
+        covered_area_m2_by_year[year] = sum(class_ha.values()) * 10000
+    latest_year_str = str(max(_ESRI_LULC_YEARS))
+    stats = {
+        "class_area_ha_by_year": class_area_ha_by_year,
+        # Latest year only - matches "latest year gets a map tile" below;
+        # a per-year coverage_pct would need one per year, not one number.
+        "coverage_pct": _coverage_pct(
+            covered_area_m2_by_year.get(latest_year_str, 0.0), float(result["boundary_area_m2"])
+        ),
+    }
 
     latest = _esri_lulc_latest_image()
     # Wave: AOI clip - see _hansen_forest_change's own comment on this pattern.
@@ -738,15 +784,27 @@ def _modis_lulc(boundary: ee.Geometry) -> tuple[dict[str, Any], list[dict[str, A
         )
         for year in _MODIS_YEARS
     }
-    combined = ee.Dictionary(counts_by_year).getInfo()  # ONE round trip for every year
+    # Wave: partial coverage - see _esri_lulc's own comment on why this is
+    # nested rather than flattened alongside the year keys.
+    result = ee.Dictionary({
+        "counts_by_year": ee.Dictionary(counts_by_year),
+        "boundary_area_m2": boundary.area(maxError=1),
+    }).getInfo()
+    combined = result["counts_by_year"]
 
     px_area_ha = (500 * 500) / 10000.0
     class_area_ha_by_year = {}
+    covered_area_m2_by_year = {}
     for year, hist in combined.items():
         class_ha = {int(k): v * px_area_ha for k, v in (hist or {}).items()}
         class_area_ha_by_year[year] = _class_breakdown(class_ha, MODIS_IGBP_LEGEND)
+        covered_area_m2_by_year[year] = sum(class_ha.values()) * 10000
+    latest_year_str = str(max(_MODIS_YEARS))
     stats = {
         "class_area_ha_by_year": class_area_ha_by_year,
+        "coverage_pct": _coverage_pct(
+            covered_area_m2_by_year.get(latest_year_str, 0.0), float(result["boundary_area_m2"])
+        ),
         "note": (
             "500m resolution - much coarser than the 10m land-cover products above. "
             "Use for multi-year trend context, not microlandscape-scale area."
@@ -951,6 +1009,20 @@ def _round_or_none(value: float | None, ndigits: int = 4) -> float | None:
     return round(value, ndigits) if value is not None else None
 
 
+def _coverage_pct(covered_area_m2: float, boundary_area_m2: float) -> float:
+    """Wave: partial coverage. Real, computed fraction of the AOI a result
+    actually covers - never an estimate. Clamped to [0, 100]: a boundary
+    polygon rasterized at 10-500m resolution can produce a covered-pixel sum
+    fractionally ABOVE the true polygon area at the edge (partial-pixel
+    overcounting), which should read as ~100% coverage, not >100%. Returns
+    0.0 (not a ZeroDivisionError) for a degenerate zero-area boundary -
+    defensive only; refresh()'s own "no boundary -> reject before computing"
+    gate upstream means this should never actually happen in production."""
+    if boundary_area_m2 <= 0:
+        return 0.0
+    return round(min(100.0, max(0.0, 100.0 * covered_area_m2 / boundary_area_m2)), 1)
+
+
 def _annual_index_series(
     boundary: ee.Geometry, index_id: str
 ) -> tuple[dict[str, Any], None, str]:
@@ -1031,10 +1103,18 @@ def _annual_index_series(
             reducer=_index_stats_reducer_with_raw_count(), geometry=boundary, scale=10,
             crs=AOI_CRS, maxPixels=1e10, bestEffort=True,
         )
-    raw = ee.Dictionary(per_year_stats).getInfo()  # ONE round trip for every year
+    # Wave: partial coverage. Nested (not flattened alongside the year keys -
+    # the loop below iterates every top-level key as a year) - still ONE
+    # round trip for every year plus the boundary's own real area.
+    result = ee.Dictionary({
+        "years": ee.Dictionary(per_year_stats), "boundary_area_m2": boundary.area(maxError=1),
+    }).getInfo()
+    raw = result["years"]
+    boundary_area_m2 = float(result["boundary_area_m2"])
 
     series: dict[str, float | None] = {}
     distribution: dict[str, dict[str, Any]] = {}
+    latest_year_coverage_pct = 0.0
     for year, values in raw.items():
         values = values or {}
         # Bare keys, not "index_"-prefixed - see _index_stats_reducer's
@@ -1045,6 +1125,14 @@ def _annual_index_series(
         histogram = _shape_index_histogram(values.get("histogram"))
         in_range_count = sum(histogram["counts"]) if histogram["counts"] else 0
         raw_count = values.get("count")
+        if year == str(latest_year):
+            # Wave: partial coverage. `count` is the cloud-masked-only pixel
+            # count (BEFORE the natural-range mask below) - exactly the real
+            # covered-area numerator: how much of the AOI actually had a
+            # cloud-free Sentinel-2 pixel this year, at the fixed 10m scale
+            # this reduceRegion already runs at.
+            covered_area_m2 = (raw_count or 0) * 100
+            latest_year_coverage_pct = _coverage_pct(covered_area_m2, boundary_area_m2)
         distribution[year] = {
             "mean": mean,
             "std_dev": _round_or_none(values.get("stdDev")),
@@ -1067,6 +1155,9 @@ def _annual_index_series(
         "series": series,
         "distribution": distribution,
         "summary": summarize_index_result(index_id, series, distribution),
+        # Latest year only - matches "latest year gets a map tile" below;
+        # a per-year coverage_pct would need one per year, not one number.
+        "coverage_pct": latest_year_coverage_pct,
         "note": (
             "Boundary-mean of a cloud-masked, pre-monsoon (Feb-May) Sentinel-2 "
             f"composite per year, {min(years)}-{max(years)}. The current calendar "
@@ -1209,13 +1300,24 @@ def _s2_browse_image(boundary: ee.Geometry, year: int | None) -> ee.Image:
 def _s2_browse(boundary: ee.Geometry, year: int | None) -> tuple[dict[str, Any], None, str]:
     img = _s2_browse_image(boundary, year)
     vis = img.visualize(bands=["B4", "B3", "B2"], min=0, max=3000).clip(boundary)
+    # Wave: partial coverage. count() over the SAME clipped band this scene
+    # actually renders (B4, native 10m) - a real scene rarely covers 100% of
+    # an AOI near a tile/swath edge, unlike the always-global land-cover
+    # datasets above.
     result = ee.Dictionary({
         "scene_date": ee.Date(img.get("system:time_start")).format("YYYY-MM-dd"),
         "cloud_pct": img.get("CLOUDY_PIXEL_PERCENTAGE"),
+        "covered_count": img.select("B4").clip(boundary).reduceRegion(
+            reducer=ee.Reducer.count(), geometry=boundary, scale=10, crs=AOI_CRS,
+            maxPixels=1e10, bestEffort=True,
+        ).get("B4"),
+        "boundary_area_m2": boundary.area(maxError=1),
     }).getInfo()
+    covered_area_m2 = (result.get("covered_count") or 0) * 100  # 10m pixels
     stats = {
         "scene_date": result.get("scene_date"),
         "cloud_pct": _round_or_none(result.get("cloud_pct"), 1),
+        "coverage_pct": _coverage_pct(covered_area_m2, float(result["boundary_area_m2"])),
         "note": (
             "Browse only - the least-cloud raw Sentinel-2 scene found for the "
             "selected year (or the last 90 days if no year was given), true-color "
@@ -1248,11 +1350,19 @@ def _s1_browse(boundary: ee.Geometry, year: int | None) -> tuple[dict[str, Any],
     vv, vh = img.select("VV"), img.select("VH")
     composite = ee.Image.cat([vv, vh, vv.subtract(vh)]).rename(["r", "g", "b"])
     vis = composite.visualize(bands=["r", "g", "b"], min=-25, max=0).clip(boundary)
+    # Wave: partial coverage - see _s2_browse's own comment on this pattern.
     result = ee.Dictionary({
         "scene_date": ee.Date(img.get("system:time_start")).format("YYYY-MM-dd"),
+        "covered_count": vv.clip(boundary).reduceRegion(
+            reducer=ee.Reducer.count(), geometry=boundary, scale=10, crs=AOI_CRS,
+            maxPixels=1e10, bestEffort=True,
+        ).get("VV"),
+        "boundary_area_m2": boundary.area(maxError=1),
     }).getInfo()
+    covered_area_m2 = (result.get("covered_count") or 0) * 100  # 10m pixels
     stats = {
         "scene_date": result.get("scene_date"),
+        "coverage_pct": _coverage_pct(covered_area_m2, float(result["boundary_area_m2"])),
         "note": (
             "Browse only - the most recent raw Sentinel-1 GRD IW VV/VH scene found "
             "for the selected year (or the last 90 days if no year was given). No "
@@ -1280,13 +1390,22 @@ def _landsat_browse(boundary: ee.Geometry, year: int | None) -> tuple[dict[str, 
     # Collection 2 Level 2 scale factors (USGS-documented): SR = DN * 0.0000275 - 0.2
     refl = img.select(["SR_B4", "SR_B3", "SR_B2"]).multiply(0.0000275).add(-0.2)
     vis = refl.visualize(bands=["SR_B4", "SR_B3", "SR_B2"], min=0, max=0.3).clip(boundary)
+    # Wave: partial coverage - see _s2_browse's own comment on this pattern.
+    # scale=30 - Landsat Collection 2's native resolution, not 10m.
     result = ee.Dictionary({
         "scene_date": ee.Date(img.get("system:time_start")).format("YYYY-MM-dd"),
         "cloud_pct": img.get("CLOUD_COVER"),
+        "covered_count": refl.select("SR_B4").clip(boundary).reduceRegion(
+            reducer=ee.Reducer.count(), geometry=boundary, scale=30, crs=AOI_CRS,
+            maxPixels=1e10, bestEffort=True,
+        ).get("SR_B4"),
+        "boundary_area_m2": boundary.area(maxError=1),
     }).getInfo()
+    covered_area_m2 = (result.get("covered_count") or 0) * 900  # 30m pixels
     stats = {
         "scene_date": result.get("scene_date"),
         "cloud_pct": _round_or_none(result.get("cloud_pct"), 1),
+        "coverage_pct": _coverage_pct(covered_area_m2, float(result["boundary_area_m2"])),
         "note": (
             "Browse only - the least-cloud raw Landsat 8/9 Collection 2 Level 2 "
             "scene found for the selected year (or the last 90 days if no year was "
