@@ -414,10 +414,30 @@ function IndexDistribution({ distribution }) {
   );
 }
 
+/** Wave: partial coverage. Always rendered when `coverage_pct` is present
+ * (even at 100%) - matches this file's own "stats.note is always shown,
+ * never hidden behind a tooltip" rule below. `partial` (< 90%) switches to
+ * the amber warning treatment `.sample-data-banner` already established for
+ * "don't skim past this" callouts - 90% is a deliberate buffer above 100,
+ * not a hard boundary: edge-pixel rasterization alone can cost a
+ * near-fully-covered AOI a couple of points, so the threshold has to sit
+ * below that noise floor or every dataset would show a spurious warning. */
+function CoverageBanner({ pct }) {
+  if (pct == null) return null;
+  const partial = pct < 90;
+  return (
+    <div className={`coverage-banner${partial ? " coverage-banner-warning" : ""}`}>
+      {partial ? "Partial coverage" : "Coverage"}: {pct.toFixed(1)}% of the project boundary
+      {partial ? " — some area has no valid pixels (cloud/scene-edge gaps or missing tiles)." : "."}
+    </div>
+  );
+}
+
 function AnalysisStats({ result }) {
   const { stats, legend } = result;
   return (
     <>
+      <CoverageBanner pct={stats.coverage_pct} />
       {stats.summary ? <IndexSummaryCallout summary={stats.summary} /> : null}
       {stats.canopy_cover_threshold_pct != null ? <HansenStats stats={stats} /> : null}
       {stats.class_area_ha ? <ClassBreakdown classAreaHa={stats.class_area_ha} legend={legend} /> : null}

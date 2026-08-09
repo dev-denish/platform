@@ -2613,6 +2613,30 @@ button:not(:disabled):active,
   color: #8a5a12;
 }
 
+/* Wave: partial coverage. Same banner shape as .sample-data-banner above,
+   neutral by default (always shown, even at 100% coverage) - switches to
+   the identical amber warning treatment only when coverage is genuinely
+   partial (< 90%, see CoverageBanner's own comment). */
+.coverage-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  font-size: 12.5px;
+  margin-bottom: 8px;
+  color: var(--text-muted);
+}
+
+.coverage-banner-warning {
+  background: var(--amber-wash);
+  border: 1px solid rgba(245, 166, 35, 0.4);
+  font-weight: 600;
+  color: #8a5a12;
+}
+
 .sample-data-banner svg {
   flex: none;
 }
