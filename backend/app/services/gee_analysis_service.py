@@ -755,10 +755,16 @@ def _index_stats_reducer() -> ee.Reducer:
     mean (unchanged - stats["series"] reads this), stdDev, min/max, and a
     fixed-range histogram, all computed in a single pass over the pixels
     (sharedInputs=True) rather than four/five separate reduceRegion calls.
-    Combined-reducer output keys follow GEE's own
-    "<band>_<reducer output name>" convention - for our single "index" band
-    that's index_mean/index_stdDev/index_min/index_max/index_histogram, which
-    _annual_index_series unpacks below."""
+    GEE only prefixes a combined reducer's output keys with the band name
+    when it needs to - i.e. when the SAME output name would otherwise
+    collide across more than one input band. Every sub-reducer here already
+    has a distinct output name (mean/stdDev/min/max/histogram), so there is
+    nothing to disambiguate and GEE returns them bare: mean/stdDev/min/max/
+    histogram, NOT index_mean/index_stdDev/... - verified live against GEE
+    (no "index_" prefix appears even though the reduceRegion input image has
+    2 bands - see _index_stats_reducer_with_raw_count's own docstring for
+    the count() sub-reducer, which is bare "count" for the same reason).
+    _annual_index_series unpacks these bare keys below."""
     return (
         ee.Reducer.mean()
         .combine(ee.Reducer.stdDev(), sharedInputs=True)
@@ -787,15 +793,16 @@ def _index_stats_reducer_with_raw_count() -> ee.Reducer:
     `sharedInputs=False` on the outer `.combine()` is the whole trick: with
     the DEFAULT `sharedInputs=True`, `count()` would consume the SAME first
     band as the stats reducer (the already range-masked "index" band) and
-    just reproduce `index_histogram`'s own bucket sum - useless for this.
+    just reproduce `histogram`'s own bucket sum - useless for this.
     With `sharedInputs=False`, GEE's combine-reducer convention feeds each
     sub-reducer its OWN slice of the input image's bands, in band order: the
     stats reducer (1 input) gets band 0, `count()` (1 input) gets band 1. The
     caller (`_annual_index_series`) must therefore pass a 2-band image,
     band 0 = the range-masked index ("index"), band 1 = the SAME index
     cloud-masked only, range NOT yet applied ("index_raw") - so this
-    reducer's extra output key is `index_raw_count`, the "before" total;
-    `index_histogram`'s bucket sum is the "after" total; the difference is
+    reducer's extra output key is bare `count` (no band prefix - see
+    `_index_stats_reducer`'s own docstring for why), the "before" total;
+    `histogram`'s bucket sum is the "after" total; the difference is
     `out_of_range_pixel_count`.
 
     Kept as a separate function from `_index_stats_reducer()` (rather than
@@ -920,16 +927,19 @@ def _annual_index_series(
     distribution: dict[str, dict[str, Any]] = {}
     for year, values in raw.items():
         values = values or {}
-        mean = _round_or_none(values.get("index_mean"))
+        # Bare keys, not "index_"-prefixed - see _index_stats_reducer's
+        # docstring: GEE only prefixes by band name to disambiguate a
+        # colliding output name, and none of these collide.
+        mean = _round_or_none(values.get("mean"))
         series[year] = mean
-        histogram = _shape_index_histogram(values.get("index_histogram"))
+        histogram = _shape_index_histogram(values.get("histogram"))
         in_range_count = sum(histogram["counts"]) if histogram["counts"] else 0
-        raw_count = values.get("index_raw_count")
+        raw_count = values.get("count")
         distribution[year] = {
             "mean": mean,
-            "std_dev": _round_or_none(values.get("index_stdDev")),
-            "min": _round_or_none(values.get("index_min")),
-            "max": _round_or_none(values.get("index_max")),
+            "std_dev": _round_or_none(values.get("stdDev")),
+            "min": _round_or_none(values.get("min")),
+            "max": _round_or_none(values.get("max")),
             "histogram": histogram,
             # Pixels this year's cloud-masked composite had that fell outside
             # the natural [-1, 1] range and were therefore excluded from

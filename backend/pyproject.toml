@@ -53,6 +53,7 @@ testpaths = ["tests"]
 addopts = "-ra -q"
 markers = [
     "integration: tests that require a live PostGIS database (run in CI)",
+    "gee_live: tests that require a live, credentialed Google Earth Engine session (run manually - real quota/network cost)",
 ]
 
 [tool.ruff]
