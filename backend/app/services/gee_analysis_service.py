@@ -60,6 +60,15 @@ five without re-measuring each one from a blank slate.
 `enqueue_refresh()` is the "async" path, mirroring POST /datasets/upload's
 own job-queue dispatch exactly (validate synchronously so a bad request
 fails immediately, then hand the actual compute to the worker).
+
+Wave: AOI clip. Every one of these query functions' VISUALIZED map tile is
+now `.clip(boundary)`'d immediately before `.getMapId()` - previously only
+the vegetation-index five did this (`_s2_reflectance_composite` clips the
+underlying composite itself); the other five clipped their `reduceRegion`
+stats geometry but rendered the full, unclipped global dataset as a map
+tile. The clip is applied to the final visualized image, never to the raw
+dataset image feeding `reduceRegion` - stats were already boundary-scoped
+and are unaffected by this change.
 """
 from __future__ import annotations
 
@@ -532,7 +541,11 @@ def _hansen_forest_change(
         )
         .blend(gfc.select("gain").selfMask().visualize(palette=["00ffff"]))
     )
-    map_id = vis.getMapId()
+    # Wave: AOI clip. Clip the VISUALIZED image, not gfc itself - the
+    # reduceRegion stats above are already boundary-scoped via `geometry=
+    # boundary`; this only stops the map TILE from rendering the whole
+    # global Hansen dataset outside the AOI.
+    map_id = vis.clip(boundary).getMapId()
     return stats, None, map_id["tile_fetcher"].url_format
 
 
@@ -554,7 +567,8 @@ def _dynamic_world(boundary: ee.Geometry) -> tuple[dict[str, Any], list[dict[str
     px_area_ha = 100 / 10000.0  # 10m pixel
     class_ha = {int(k): v * px_area_ha for k, v in counts.items()}
     stats = {"class_area_ha": _class_breakdown(class_ha, DYNAMIC_WORLD_LEGEND)}
-    map_id = _visualize_discrete(dw, DYNAMIC_WORLD_LEGEND).getMapId()
+    # Wave: AOI clip - see _hansen_forest_change's own comment on this pattern.
+    map_id = _visualize_discrete(dw, DYNAMIC_WORLD_LEGEND).clip(boundary).getMapId()
     return stats, legend_entries(DYNAMIC_WORLD_LEGEND), map_id["tile_fetcher"].url_format
 
 
@@ -571,7 +585,8 @@ def _esa_worldcover(boundary: ee.Geometry) -> tuple[dict[str, Any], list[dict[st
         "class_area_ha": _class_breakdown(class_ha, ESA_WORLDCOVER_LEGEND),
         "note": "Single 2021 snapshot, not a time series.",
     }
-    map_id = _visualize_discrete(wc.select("Map"), ESA_WORLDCOVER_LEGEND).getMapId()
+    # Wave: AOI clip - see _hansen_forest_change's own comment on this pattern.
+    map_id = _visualize_discrete(wc.select("Map"), ESA_WORLDCOVER_LEGEND).clip(boundary).getMapId()
     return stats, legend_entries(ESA_WORLDCOVER_LEGEND), map_id["tile_fetcher"].url_format
 
 
@@ -605,7 +620,8 @@ def _esri_lulc(boundary: ee.Geometry) -> tuple[dict[str, Any], list[dict[str, An
     stats = {"class_area_ha_by_year": class_area_ha_by_year}
 
     latest = _esri_lulc_latest_image()
-    map_id = _visualize_discrete(latest, ESRI_LULC_LEGEND).getMapId()
+    # Wave: AOI clip - see _hansen_forest_change's own comment on this pattern.
+    map_id = _visualize_discrete(latest, ESRI_LULC_LEGEND).clip(boundary).getMapId()
     return stats, legend_entries(ESRI_LULC_LEGEND), map_id["tile_fetcher"].url_format
 
 
@@ -645,7 +661,8 @@ def _modis_lulc(boundary: ee.Geometry) -> tuple[dict[str, Any], list[dict[str, A
     }
 
     latest = _modis_lulc_latest_image()
-    map_id = _visualize_discrete(latest, MODIS_IGBP_LEGEND).getMapId()
+    # Wave: AOI clip - see _hansen_forest_change's own comment on this pattern.
+    map_id = _visualize_discrete(latest, MODIS_IGBP_LEGEND).clip(boundary).getMapId()
     return stats, legend_entries(MODIS_IGBP_LEGEND), map_id["tile_fetcher"].url_format
 
 
