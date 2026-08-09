@@ -787,6 +787,25 @@ export default function ProjectMap({
   const zoomOut = useCallback(() => mapRef?.zoomOut(), [mapRef]);
   const fitExtent = useCallback(() => mapRef?.fitBounds(bounds, { padding: [24, 24] }), [mapRef, bounds]);
 
+  // Wave: AOI clip. Loading a GEE analysis (overlayTileUrl going from null to
+  // a real url, or switching to a different one) fits the map to the
+  // project's AOI specifically - not the generic `bounds` above, which spans
+  // EVERY layer and would zoom out past a small AOI on a project with other,
+  // larger-footprint layers. Reuses the Boundary layer's own `bounds` field
+  // (the SAME one the boundLayers Rectangle outlines below already render
+  // from) via a ref rather than a direct effect dependency, so this only
+  // re-fits when overlayTileUrl itself changes, not on every unrelated
+  // `layers` refetch (e.g. a background poll) that happens to run while an
+  // analysis is already showing.
+  const boundaryBoundsRef = useRef(null);
+  useEffect(() => {
+    boundaryBoundsRef.current = layers.find((l) => l.type === "Boundary")?.bounds ?? null;
+  }, [layers]);
+  useEffect(() => {
+    if (!mapRef || !overlayTileUrl || !boundaryBoundsRef.current) return;
+    mapRef.fitBounds(boundaryBoundsRef.current, { padding: [24, 24] });
+  }, [overlayTileUrl, mapRef]);
+
   // Toolbar's coordinate jump + saved-view bookmarks both land here. No zoom
   // given (raw coordinate entry) = keep the current zoom unless it's zoomed
   // way out, where landing at z7 on a point is useless.
@@ -1074,6 +1093,12 @@ export default function ProjectMap({
   // failure or a silent no-op.
   function renderGeePixelRow({ error, data }) {
     if (error) return <div className="pixel-popup-error">{error}</div>;
+    // Wave: AOI clip. A third, distinct "no value" state from the error
+    // branch above and the "No data at this point" fallback below - the
+    // click itself was valid, it just landed outside the clipped AOI the
+    // map tile already visually shows as empty. De-emphasized, not styled
+    // as a failure.
+    if (data.outside_boundary) return <div className="pixel-popup-muted">Outside the project boundary.</div>;
     if (data.class_name) {
       return (
         <div className="pixel-popup-value">

@@ -2283,6 +2283,14 @@ button:not(:disabled):active,
   margin-top: 2px;
 }
 
+/* Wave: AOI clip. A click outside the clipped AOI - distinct from
+   .pixel-popup-error semantically (nothing failed), same de-emphasized
+   treatment visually since neither is meant to read as alarming. */
+.pixel-popup-muted {
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
 .pixel-popup-value-column {
   margin-top: 2px;
 }
