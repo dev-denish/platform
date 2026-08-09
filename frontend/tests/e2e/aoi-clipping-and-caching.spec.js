@@ -41,7 +41,7 @@ test.describe("AOI clip and raw-imagery browsing", () => {
     test.setTimeout(120_000);
     await gotoAnalysisView(page);
 
-    await page.getByRole("button", { name: /^Sentinel-2 True Color$/ }).click();
+    await page.getByRole("button", { name: /^Sentinel-2 True Color/ }).click();
     const yearSelect = page.locator(".analysis-year-select select");
     await expect(yearSelect).toBeVisible();
     await yearSelect.selectOption("2023");
@@ -121,7 +121,7 @@ test.describe("AOI clip and raw-imagery browsing", () => {
     await page.getByRole("group", { name: "Maps view" }).getByRole("button", { name: "Analysis" }).click();
     await expect(page.locator(".analysis-layout")).toBeVisible();
 
-    await page.getByRole("button", { name: /^Sentinel-2 True Color$/ }).click();
+    await page.getByRole("button", { name: /^Sentinel-2 True Color/ }).click();
     await page.locator(".analysis-year-select select").selectOption("2023");
     await page.getByRole("button", { name: "Run analysis" }).click();
     await expect(page.locator('.leaflet-container img[src*="earthengine"]').first()).toBeVisible({
