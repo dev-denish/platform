@@ -14,8 +14,8 @@ export default function AppShell() {
   const navigate = useNavigate();
   const [expanded, toggleSidebar] = useCollapse("collapse:shell:sidebar", true);
 
-  function handleLogout() {
-    logout();
+  async function handleLogout() {
+    await logout();
     navigate("/login", { replace: true });
   }
 
