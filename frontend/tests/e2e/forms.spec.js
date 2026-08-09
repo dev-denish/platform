@@ -201,7 +201,13 @@ test.describe("Upload: project-name matching (Wave: upload project-name footgun 
     await page.getByLabel("Project name").fill(QA_PROJECT_NAME);
     await page.getByRole("button", { name: /continue/i }).click();
     await page.getByLabel("Source").fill("Legit re-upload");
-    await page.getByLabel("Date processed").fill("2026-01-01");
+    // Reuses one of global-setup's own seeded dates (2024-06-01, the
+    // 9-class LULC layer) rather than a fresh one - datedLayerGroups
+    // (lib/timeline.js) groups the Dashboard's "Monitoring periods" by exact
+    // date_processed, so a fresh date here would add a THIRD distinct
+    // period and break redesign.spec.js's "lists the dated layers" test,
+    // which depends on this shared project having exactly the 2 seeded ones.
+    await page.getByLabel("Date processed").fill("2024-06-01");
     await page.getByRole("button", { name: /continue/i }).last().click();
     await page.getByRole("button", { name: /submit for ingestion/i }).click();
 
