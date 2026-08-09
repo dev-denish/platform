@@ -384,7 +384,7 @@ function IndexDistribution({ distribution }) {
           <span className="stat-value">{formatNumber(yearStats.mean, 3)}</span>
         </div>
         <div className="stat-card">
-          <span className="stat-label">Std dev ({year})</span>
+          <span className="stat-label">Variability ({year})</span>
           <span className="stat-value">{formatNumber(yearStats.std_dev, 3)}</span>
         </div>
         <div className="stat-card">

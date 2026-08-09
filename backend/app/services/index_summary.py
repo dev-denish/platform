@@ -240,27 +240,31 @@ _VAR_MODERATE = 2.0 * INDEX_HISTOGRAM_BIN_WIDTH  # 0.20
 
 
 def describe_variability(std_dev: float | None) -> str | None:
+    """Wording is deliberately plain-language (a field-team reviewer, not
+    just a VVB auditor, reads this callout) - "a spread of about X" instead
+    of "std dev X", no "histogram bin" - while still carrying the real
+    number, not just an adjective, so nothing quantitative is lost."""
     if std_dev is None:
         return None
     if std_dev < _VAR_UNIFORM:
         return (
-            f"Pixel values are uniform across the boundary (std dev {std_dev:.2f}, under half a "
-            "histogram bin), so the mean is a fair description of the whole area."
+            f"Pixel values are uniform across the boundary (a spread of about {std_dev:.2f}), "
+            "so the mean is a fair description of the whole area."
         )
     if std_dev < _VAR_FAIRLY_UNIFORM:
         return (
-            f"Pixel values are fairly uniform across the boundary (std dev {std_dev:.2f}, "
-            "under one histogram bin wide)."
+            f"Pixel values are fairly uniform across the boundary (a spread of about "
+            f"{std_dev:.2f})."
         )
     if std_dev < _VAR_MODERATE:
         return (
-            f"Pixel values are moderately variable across the boundary (std dev {std_dev:.2f}, "
-            "one to two histogram bins), so the boundary covers noticeably different surfaces."
+            f"Pixel values are moderately variable across the boundary (a spread of about "
+            f"{std_dev:.2f}), so the boundary covers noticeably different surfaces."
         )
     return (
-        f"Pixel values vary widely across the boundary (std dev {std_dev:.2f}, more than two "
-        "histogram bins), so the boundary mean averages over quite different surfaces and "
-        "should not be read as one uniform condition."
+        f"Pixel values vary widely across the boundary (a spread of about {std_dev:.2f}), so "
+        "the boundary mean averages over quite different surfaces and should not be read as "
+        "one uniform condition."
     )
 
 
@@ -343,9 +347,9 @@ def describe_spatial_outliers(
     if len(peaks) >= 2:
         centres = _and_list([f"{_bin_centre(bin_edges, i):.2f}" for i in peaks])
         parts.append(
-            f"The pixel histogram is multi-modal (peaks near {centres}), so the boundary "
-            f"contains two or more distinct surface types and the single {profile.label} mean "
-            "is averaging across them."
+            f"Values cluster in two or more separate groups (around {centres}), so the "
+            f"boundary contains two or more distinct surface types and the single "
+            f"{profile.label} mean is averaging across them."
         )
 
     lo_bin, hi_bin = _bulk_span(counts, total)
@@ -431,7 +435,7 @@ def describe_trend(index_id: str, series: dict[str, float | None] | None) -> str
     if abs(change) < _TREND_MIN_CHANGE:
         return (
             f"Across {first}-{last} the boundary mean is essentially flat ({start:.2f} to "
-            f"{end:.2f}, change {change:+.2f} - under half a histogram bin)."
+            f"{end:.2f}, change {change:+.2f})."
         )
     direction = "risen" if change > 0 else "fallen"
     note = profile.trend_up_note if change > 0 else profile.trend_down_note

@@ -93,7 +93,7 @@ test.describe("Enriched vegetation-index results", () => {
       const card = statCards.nth(i);
       const label = (await card.locator(".stat-label").textContent()).trim();
       const valueText = (await card.locator(".stat-value").textContent()).trim();
-      const m = label.match(/^(Mean|Std dev|Min|Max) \((\d{4})\)$/);
+      const m = label.match(/^(Mean|Variability|Min|Max) \((\d{4})\)$/);
       expect(m, `unexpected stat card label: "${label}"`).not.toBeNull();
       const [, kind, year] = m;
       statYear = year;
@@ -114,7 +114,7 @@ test.describe("Enriched vegetation-index results", () => {
     // field would still pass the two checks above).
     expect(new Set(values.map((v) => v.toFixed(6))).size, `all four stat cards read the same value: ${values}`).toBeGreaterThan(1);
     // Real sanity invariants on genuine pixel statistics.
-    expect(statsByKind["Std dev"]).toBeGreaterThanOrEqual(0);
+    expect(statsByKind["Variability"]).toBeGreaterThanOrEqual(0);
     expect(statsByKind["Min"]).toBeLessThanOrEqual(statsByKind["Mean"]);
     expect(statsByKind["Mean"]).toBeLessThanOrEqual(statsByKind["Max"]);
 

@@ -118,30 +118,29 @@ def test_describe_variability_none_returns_none():
 def test_describe_variability_uniform_high_mean_case():
     # std_dev 0.02 < half a 0.1 bin (0.05) -> "uniform" band.
     assert describe_variability(0.02) == (
-        "Pixel values are uniform across the boundary (std dev 0.02, under half a histogram "
-        "bin), so the mean is a fair description of the whole area."
+        "Pixel values are uniform across the boundary (a spread of about 0.02), so the mean "
+        "is a fair description of the whole area."
     )
 
 
 def test_describe_variability_fairly_uniform_band():
     assert describe_variability(0.07) == (
-        "Pixel values are fairly uniform across the boundary (std dev 0.07, under one "
-        "histogram bin wide)."
+        "Pixel values are fairly uniform across the boundary (a spread of about 0.07)."
     )
 
 
 def test_describe_variability_moderate_band():
     assert describe_variability(0.15) == (
-        "Pixel values are moderately variable across the boundary (std dev 0.15, one to two "
-        "histogram bins), so the boundary covers noticeably different surfaces."
+        "Pixel values are moderately variable across the boundary (a spread of about 0.15), "
+        "so the boundary covers noticeably different surfaces."
     )
 
 
 def test_describe_variability_wide_band():
     assert describe_variability(0.30) == (
-        "Pixel values vary widely across the boundary (std dev 0.30, more than two histogram "
-        "bins), so the boundary mean averages over quite different surfaces and should not be "
-        "read as one uniform condition."
+        "Pixel values vary widely across the boundary (a spread of about 0.30), so the "
+        "boundary mean averages over quite different surfaces and should not be read as one "
+        "uniform condition."
     )
 
 
@@ -184,9 +183,9 @@ def test_describe_spatial_outliers_bimodal_case_exact_text():
     counts = [2, 2, 2, 100, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 80, 2, 2, 2, 2]
     result = describe_spatial_outliers("ndvi", -0.65, 0.65, _EDGES, counts)
     assert result == (
-        "The pixel histogram is multi-modal (peaks near -0.65 and 0.55), so the boundary "
-        "contains two or more distinct surface types and the single NDVI mean is averaging "
-        "across them."
+        "Values cluster in two or more separate groups (around -0.65 and 0.55), so the "
+        "boundary contains two or more distinct surface types and the single NDVI mean is "
+        "averaging across them."
     )
 
 
@@ -256,8 +255,7 @@ def test_describe_trend_all_none_returns_none():
 def test_describe_trend_flat_case_exact_text():
     # change = 0.02, under _TREND_MIN_CHANGE (half a 0.1 bin = 0.05) -> flat.
     assert describe_trend("ndvi", {"2020": 0.40, "2021": 0.42}) == (
-        "Across 2020-2021 the boundary mean is essentially flat (0.40 to 0.42, change +0.02 - "
-        "under half a histogram bin)."
+        "Across 2020-2021 the boundary mean is essentially flat (0.40 to 0.42, change +0.02)."
     )
 
 
@@ -326,16 +324,16 @@ def test_compose_summary_every_clause_fires_stays_in_fixed_order():
     )
     assert summary == (
         "2022: NDVI averages 0.55 across the boundary - high, consistent with dense green "
-        "canopy. Pixel values vary widely across the boundary (std dev 0.30, more than two "
-        "histogram bins), so the boundary mean averages over quite different surfaces and "
-        "should not be read as one uniform condition. The pixel histogram is multi-modal "
-        "(peaks near -0.65 and 0.55), so the boundary contains two or more distinct surface "
-        "types and the single NDVI mean is averaging across them. The sample is small (216 "
-        "valid pixels, about 2.2 ha at 10 m after cloud masking) - fine for a visual read, "
-        "thin for a trend claim. Across 2021-2022 the boundary mean has risen from 0.30 to "
-        "0.55 (+0.25). A rising index is consistent with vegetation gain but is not a "
-        "measurement of it - VM0047 removals come from plot-based biomass sampling (s9.2); "
-        f"this series is supporting evidence, not the number. {DESCRIPTIVE_ONLY_TRAILER}"
+        "canopy. Pixel values vary widely across the boundary (a spread of about 0.30), so "
+        "the boundary mean averages over quite different surfaces and should not be read as "
+        "one uniform condition. Values cluster in two or more separate groups (around -0.65 "
+        "and 0.55), so the boundary contains two or more distinct surface types and the "
+        "single NDVI mean is averaging across them. The sample is small (216 valid pixels, "
+        "about 2.2 ha at 10 m after cloud masking) - fine for a visual read, thin for a trend "
+        "claim. Across 2021-2022 the boundary mean has risen from 0.30 to 0.55 (+0.25). A "
+        "rising index is consistent with vegetation gain but is not a measurement of it - "
+        "VM0047 removals come from plot-based biomass sampling (s9.2); this series is "
+        f"supporting evidence, not the number. {DESCRIPTIVE_ONLY_TRAILER}"
     )
 
 
@@ -378,10 +376,10 @@ def test_summarize_index_result_picks_most_recent_year_with_a_real_mean_not_simp
     result = summarize_index_result("ndvi", series, distribution)
     assert result == (
         "2021: NDVI averages 0.50 across the boundary - high, consistent with dense green "
-        "canopy. Pixel values are uniform across the boundary (std dev 0.03, under half a "
-        "histogram bin), so the mean is a fair description of the whole area. Across "
-        "2020-2021 the boundary mean has risen from 0.30 to 0.50 (+0.20). A rising index is "
-        "consistent with vegetation gain but is not a measurement of it - VM0047 removals come "
-        "from plot-based biomass sampling (s9.2); this series is supporting evidence, not the "
+        "canopy. Pixel values are uniform across the boundary (a spread of about 0.03), so "
+        "the mean is a fair description of the whole area. Across 2020-2021 the boundary "
+        "mean has risen from 0.30 to 0.50 (+0.20). A rising index is consistent with "
+        "vegetation gain but is not a measurement of it - VM0047 removals come from "
+        "plot-based biomass sampling (s9.2); this series is supporting evidence, not the "
         f"number. {DESCRIPTIVE_ONLY_TRAILER}"
     )
