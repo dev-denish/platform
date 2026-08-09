@@ -195,6 +195,14 @@ async function seedProject(adminAccessToken) {
       source: "QA seed A (3-class)",
       accuracy_score: "92.5",
       date_processed: "2023-06-01",
+      // Wave: upload project-name footgun fix. QA_PROJECT_NAME doesn't exist
+      // yet on a fresh stack - POST /datasets/upload now REJECTS a
+      // non-matching project_name unless the caller explicitly confirms this
+      // is a new project. The 3 uploads below deliberately do NOT set this -
+      // they attach to the SAME already-created project by exact name match,
+      // proving the common "re-upload to an existing project" case still
+      // works with no confirmation needed.
+      create_new_project: "true",
       class_legend: JSON.stringify({
         1: { label: "Forest", color: "#228b22" },
         2: { label: "Water", color: "#4682b4" },
