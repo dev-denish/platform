@@ -739,8 +739,13 @@ export default function ProjectMap({
     const geeRows = [];
     if (activeAnalysis) {
       try {
+        // Wave: raw-imagery browsing. `year`, only set for the 3 browse
+        // analyses, keeps the click sampling the SAME scene the rendered
+        // tile shows - see AnalysisPanel's own comment on where this value
+        // comes from.
+        const yearParam = activeAnalysis.year != null ? `&year=${activeAnalysis.year}` : "";
         const data = await apiFetch(
-          `/projects/${projectId}/analyses/${activeAnalysis.id}/point?lon=${latlng.lng}&lat=${latlng.lat}`
+          `/projects/${projectId}/analyses/${activeAnalysis.id}/point?lon=${latlng.lng}&lat=${latlng.lat}${yearParam}`
         );
         geeRows.push({ gee: true, analysisName: activeAnalysis.name, data });
       } catch (err) {
@@ -1107,6 +1112,11 @@ export default function ProjectMap({
         </div>
       );
     }
+    // Wave: raw-imagery browsing. The 3 browse analyses have no single
+    // scalar value (RGB/dual-pol) - only a formatted `detail` string. Must
+    // be checked BEFORE the "No data at this point" fallback, or a real
+    // detail string would never render.
+    if (data.value == null && data.detail) return <div className="pixel-popup-detail">{data.detail}</div>;
     if (data.value == null) return <div>No data at this point.</div>;
     const digits = data.unit === "% tree cover (2000)" ? 1 : 3;
     return (

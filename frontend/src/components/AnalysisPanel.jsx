@@ -23,7 +23,7 @@ import ProjectMap from "./ProjectMap.jsx";
 
 /**
  * The Maps tab's "Analysis" view (Wave: GEE analysis registry) - three
- * regions: the registry list on the left (GET /projects/{id}/analyses, all 16
+ * regions: the registry list on the left (GET /projects/{id}/analyses, all 19
  * catalog entries, grouped by category), the existing project map in the
  * middle with the selected analysis's GEE tiles laid over it, and that
  * analysis's cached stats/legend on the right.
@@ -440,6 +440,10 @@ export default function AnalysisPanel({ projectId, layers, onRefreshLayers, onLe
   const [resultError, setResultError] = useState(null);
   const [running, setRunning] = useState(false);
   const [runStatus, setRunStatus] = useState(null); // async-job status while polling, else null
+  // Wave: raw-imagery browsing. Only meaningful for the 3 year_selectable
+  // catalog entries - "latest" (no `year` query param at all) matches every
+  // other analysis's existing parameter-free refresh request exactly.
+  const [browseYear, setBrowseYear] = useState("latest");
 
   // Race guard for the async (job-polling) path below: if the user switches
   // to a different analysis while one is still polling (can take a minute+
@@ -473,6 +477,7 @@ export default function AnalysisPanel({ projectId, layers, onRefreshLayers, onLe
   useEffect(() => {
     setResult(null);
     setResultError(null);
+    setBrowseYear("latest");
     if (!selected || selected.status !== "available" || !selected.computed_at) return undefined;
     let cancelled = false;
     (async () => {
@@ -487,6 +492,18 @@ export default function AnalysisPanel({ projectId, layers, onRefreshLayers, onLe
       cancelled = true;
     };
   }, [projectId, selected]);
+
+  // Wave: raw-imagery browsing. Last 8 calendar years, newest first - a
+  // single shared range across all 3 browse sensors (S2 since 2017, S1
+  // since 2015, Landsat since 2013) rather than a per-sensor floor: picking
+  // a year before a given sensor's own coverage start just yields "no scene
+  // found" from that sensor's own filterDate, the same graceful empty
+  // result any other real-but-uncovered request already gets, not a hard
+  // error worth complicating this list over.
+  const browseYearOptions = useMemo(() => {
+    const currentYear = new Date().getFullYear();
+    return Array.from({ length: 8 }, (_, i) => currentYear - i);
+  }, []);
 
   const groups = useMemo(() => {
     const out = [];
@@ -513,7 +530,14 @@ export default function AnalysisPanel({ projectId, layers, onRefreshLayers, onLe
     setResultError(null);
     setRunStatus(null);
     try {
-      const data = await apiFetch(`/projects/${projectId}/analyses/${analysisId}/refresh`, { method: "POST" });
+      // Wave: raw-imagery browsing. "latest" (the default) omits `year`
+      // entirely - every non-year_selectable analysis's request is
+      // unaffected, exactly as parameter-free as before.
+      const yearParam = selected.year_selectable && browseYear !== "latest" ? `?year=${browseYear}` : "";
+      const data = await apiFetch(
+        `/projects/${projectId}/analyses/${analysisId}/refresh${yearParam}`,
+        { method: "POST" }
+      );
       let final = data;
       if (data.job_id) {
         const deadline = Date.now() + POLL_TIMEOUT_MS;
@@ -580,6 +604,24 @@ export default function AnalysisPanel({ projectId, layers, onRefreshLayers, onLe
             }
           />
         )}
+        {canRun && selected.year_selectable ? (
+          <label className="analysis-year-select">
+            <span>Year</span>
+            <select
+              className="map-toolbar-select"
+              value={browseYear}
+              onChange={(e) => setBrowseYear(e.target.value)}
+              disabled={running}
+            >
+              <option value="latest">Latest</option>
+              {browseYearOptions.map((y) => (
+                <option key={y} value={y}>
+                  {y}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
         {canRun ? (
           <button type="button" className="primary-button" disabled={running} onClick={runAnalysis}>
             {running ? runningLabel(runStatus) : result ? "Refresh" : "Run analysis"}
@@ -620,7 +662,22 @@ export default function AnalysisPanel({ projectId, layers, onRefreshLayers, onLe
           // layers" ambiguity to resolve yet. Passed regardless of whether it
           // has been run - an async index that hasn't gets a clear "run this
           // first" popup row (renderGeePixelRow) instead of no row at all.
-          activeAnalysis={selected && selected.status === "available" ? { id: selected.id, name: selected.name } : null}
+          //
+          // Wave: raw-imagery browsing. `year` comes from the CURRENTLY
+          // RENDERED result's own `stats.scene_date` (not the `browseYear`
+          // UI picker, which can be ahead of what's actually been refreshed)
+          // - so a click always samples the same year the tile visually
+          // shows, never silently "latest". `undefined` for every other
+          // analysis, which the backend already treats as "no year param".
+          activeAnalysis={
+            selected && selected.status === "available"
+              ? {
+                  id: selected.id,
+                  name: selected.name,
+                  year: result?.stats?.scene_date ? Number(result.stats.scene_date.slice(0, 4)) : undefined,
+                }
+              : null
+          }
         />
 
         <aside className="analysis-column">
