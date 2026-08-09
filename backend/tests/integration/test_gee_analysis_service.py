@@ -292,6 +292,58 @@ def test_refresh_for_two_different_analysis_ids_never_shares_a_cache_entry(
     assert fake_compute[1][0] == "dynamic_world"
 
 
+def test_switching_imagery_source_is_a_cache_miss_and_never_returns_the_wrong_sources_tile(
+    db, analysis_service, fake_cache, monkeypatch
+):
+    """The literal "imagery source" scenario (Wave: raw-imagery browsing) -
+    s2_browse/s1_browse/landsat_browse are three separate catalog ids (source
+    is encoded IN analysis_id, not a request param), so this is mechanically
+    the same "keyed by analysis_id" path
+    test_refresh_for_two_different_analysis_ids_never_shares_a_cache_entry
+    above already covers with hansen_gfc/dynamic_world - but that test (like
+    every other cache test in this file) uses the fixture-level `fake_compute`,
+    which always returns the SAME canned tuple regardless of input, so it can
+    prove _compute was called with the right analysis_id each time but
+    CANNOT prove a subsequent cache HIT actually returns that source's own
+    result rather than silently replaying whatever the previous source
+    cached. This test shadows the fixture with a per-analysis_id-distinct
+    fake specifically to close that gap: real cross-source content
+    verification, not just a call-count/argument check."""
+    calls: list[str] = []
+    _BY_SOURCE = {
+        "s2_browse": ({"scene_date": "2023-03-01", "source": "s2"}, None, "https://tiles.example/s2/{z}/{x}/{y}"),
+        "landsat_browse": (
+            {"scene_date": "2023-03-01", "source": "landsat"}, None, "https://tiles.example/landsat/{z}/{x}/{y}",
+        ),
+    }
+
+    def fake(analysis_id, boundary, canopy_cover_pct, request_params=None):
+        calls.append(analysis_id)
+        return _BY_SOURCE[analysis_id]
+
+    monkeypatch.setattr(svc_module, "_compute", fake)
+    monkeypatch.setattr(svc_module, "init_ee", lambda: None)
+    monkeypatch.setattr(svc_module.ee, "Geometry", lambda geojson: geojson)
+
+    admin = _make_user(db, Role.ADMINISTRATOR)
+    pid = _make_project(db, f"Proj-{uuid.uuid4()}")
+    _add_boundary(db, pid)
+
+    s2_result = analysis_service.refresh(pid, "s2_browse", admin)
+    landsat_result = analysis_service.refresh(pid, "landsat_browse", admin)
+    # Repeat s2_browse - must be a cache HIT (no third _compute call) that
+    # returns S2's own tile, not Landsat's (the real bug this closes: a
+    # source-agnostic cache key would either miss unnecessarily or, worse,
+    # silently serve the other source's tile_url_template).
+    s2_result_again = analysis_service.refresh(pid, "s2_browse", admin)
+
+    assert calls == ["s2_browse", "landsat_browse"]  # the repeat never reached _compute
+    assert s2_result.tile_url_template == "https://tiles.example/s2/{z}/{x}/{y}"
+    assert landsat_result.tile_url_template == "https://tiles.example/landsat/{z}/{x}/{y}"
+    assert s2_result_again.tile_url_template == s2_result.tile_url_template
+    assert s2_result_again.tile_url_template != landsat_result.tile_url_template
+
+
 def test_get_project_analyses_shows_computed_at_only_for_the_refreshed_id(db, analysis_service):
     admin = _make_user(db, Role.ADMINISTRATOR)
     pid = _make_project(db, f"Proj-{uuid.uuid4()}")
