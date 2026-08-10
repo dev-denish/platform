@@ -567,10 +567,11 @@ def _compute(
     this one function alone, with zero GEE credentials/network involved.
 
     `request_params` is read by the 3 browse branches (`year`, Wave:
-    raw-imagery browsing) and by io_lulc/modis_lulc (already-resolved
-    year/range, Wave: analysis config and methodology, via
-    `_years_from_resolved`) below - every other branch
-    (hansen_gfc/dynamic_world/esa_worldcover) ignores it entirely,
+    raw-imagery browsing), by io_lulc/modis_lulc (already-resolved
+    year/range via `_years_from_resolved`), and by the 5 vegetation indices
+    (already-resolved year/range/season/source/masking, forwarded straight
+    through to `_annual_index_series`) - all Wave: analysis config and
+    methodology. hansen_gfc/dynamic_world/esa_worldcover ignore it entirely,
     unchanged."""
     init_ee()
     boundary = ee.Geometry(boundary_geojson)
@@ -587,15 +588,15 @@ def _compute(
         years = _years_from_resolved(request_params, max(_MODIS_YEARS))
         return _modis_lulc(boundary, years)
     if analysis_id == "ndvi":
-        return _ndvi_query(boundary)
+        return _ndvi_query(boundary, request_params)
     if analysis_id == "evi":
-        return _evi_query(boundary)
+        return _evi_query(boundary, request_params)
     if analysis_id == "savi":
-        return _savi_query(boundary)
+        return _savi_query(boundary, request_params)
     if analysis_id == "mndwi":
-        return _mndwi_query(boundary)
+        return _mndwi_query(boundary, request_params)
     if analysis_id == "nbr":
-        return _nbr_query(boundary)
+        return _nbr_query(boundary, request_params)
     if analysis_id == "s2_browse":
         return _s2_browse(boundary, (request_params or {}).get("year"))
     if analysis_id == "s1_browse":
@@ -1106,18 +1107,29 @@ _VEG_INDEX_FIRST_YEAR = analysis_config._VEG_INDEX_FIRST_YEAR
 _current_veg_index_years = analysis_config.current_veg_index_years
 
 
-def _s2_reflectance_composite(boundary: ee.Geometry, year: int) -> ee.Image:
+def _s2_reflectance_composite(
+    boundary: ee.Geometry,
+    year: int,
+    season_start_md: str = _VEG_SEASON_START_MD,
+    season_end_md: str = _VEG_SEASON_END_MD,
+) -> ee.Image:
     """Cloud-masked (Cloud Score+, same mask/threshold as
     scripts/gee_phase1_agb_proxy.py's _s2_composite - reused, not
-    reinvented) pre-monsoon Sentinel-2 median composite for one calendar
-    year, scaled from raw DN to [0,1] reflectance. The /10000 is not
-    optional: verified live that S2_SR_HARMONIZED bands are raw DN in the
-    thousands, not already [0,1] - EVI's "+1" and SAVI's "+0.5" are
-    constants calibrated for reflectance and would be silently swamped by
-    unscaled DN values (NDVI/MNDWI/NBR are pure ratios and technically
-    unaffected by scale, but this is scaled for all 5 for consistency, so
-    no future index added here has to remember which ones need it)."""
-    start, end = f"{year}-{_VEG_SEASON_START_MD}", f"{year}-{_VEG_SEASON_END_MD}"
+    reinvented) Sentinel-2 median composite for one calendar year's season
+    window, scaled from raw DN to [0,1] reflectance. `season_start_md`/
+    `season_end_md` (Wave: analysis config and methodology) default to the
+    module constants (the original hardcoded Feb-May window) but are real
+    per-request parameters now, resolved+validated by
+    analysis_config.resolve_and_validate before this ever runs - this
+    function itself does no validation, it just uses whatever window it's
+    given. The /10000 is not optional: verified live that S2_SR_HARMONIZED
+    bands are raw DN in the thousands, not already [0,1] - EVI's "+1" and
+    SAVI's "+0.5" are constants calibrated for reflectance and would be
+    silently swamped by unscaled DN values (NDVI/MNDWI/NBR are pure ratios
+    and technically unaffected by scale, but this is scaled for all 5 for
+    consistency, so no future index added here has to remember which ones
+    need it)."""
+    start, end = f"{year}-{season_start_md}", f"{year}-{season_end_md}"
     s2 = (
         ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
         .filterDate(start, end)
@@ -1239,15 +1251,26 @@ def _coverage_pct(covered_area_m2: float, boundary_area_m2: float) -> float:
 
 
 def _annual_index_series(
-    boundary: ee.Geometry, index_id: str
+    boundary: ee.Geometry, index_id: str, resolved: dict[str, Any] | None = None
 ) -> tuple[dict[str, Any], None, str]:
     """Shared by every vegetation/water/burn index - one composite + one
-    index value PER YEAR (2017-present), not a single snapshot, matching the
+    index value per requested year, not a single snapshot, matching the
     trend-chart framing these were designed for. `index_id` looks up the
-    `ee.Image -> ee.Image` formula (e.g. NDVI's normalizedDifference) in
-    `_INDEX_FORMULAS` below, applied to each year's reflectance composite,
-    and is also passed to `summarize_index_result()` to pick the right
-    index-specific wording. Builds the whole N-year
+    `(ee.Image -> ee.Image, formula description)` pair (e.g. NDVI's
+    normalizedDifference) in `_INDEX_FORMULAS` below, applied to each year's
+    reflectance composite, and is also passed to `summarize_index_result()`
+    to pick the right index-specific wording.
+
+    `resolved` (Wave: analysis config and methodology) is
+    analysis_config.resolve_and_validate's output, already validated by the
+    time this runs - `None` (the pre-existing-callers/tests default) means
+    the single current-eligible year at the module's original Feb-May
+    window, same as calling this with nothing ever did before this wave.
+    `years` reuses the same `_years_from_resolved` helper io_lulc/modis_lulc
+    use (single value or an inclusive start..end range) - a range's upper
+    bound is already guaranteed `<= max(current_veg_index_years())` by
+    `resolve_and_validate`, never re-checked or silently clamped here.
+    Builds the whole N-year
     computation graph in a Python loop but calls .getInfo() exactly once for
     the whole series - one round trip regardless of year count, same
     convention as the two annual (per-year) analyses above, but still slow
@@ -1300,14 +1323,18 @@ def _annual_index_series(
     trips to an already-async path. The scrubber still has a real job: it
     drives which year's point is highlighted on the trend chart, using the
     already-fetched series - no extra backend call for that part."""
-    index_band = _INDEX_FORMULAS[index_id]
-    years = _current_veg_index_years()
+    index_band, formula_desc = _INDEX_FORMULAS[index_id]
+    years = _years_from_resolved(resolved, max(_current_veg_index_years()))
+    season_start_md = (resolved or {}).get("season_start", _VEG_SEASON_START_MD)
+    season_end_md = (resolved or {}).get("season_end", _VEG_SEASON_END_MD)
+    imagery_source = (resolved or {}).get("imagery_source", "sentinel2")
+    cloud_masking = (resolved or {}).get("cloud_masking", "cloud_score_plus")
     per_year_stats = {}
     latest_year = max(years)
     latest_image = None
     range_lo, range_hi = _VEG_INDEX_HISTOGRAM_RANGE
     for year in years:
-        refl = _s2_reflectance_composite(boundary, year)
+        refl = _s2_reflectance_composite(boundary, year, season_start_md, season_end_md)
         # cloud-masked only, natural range not yet enforced (see docstring above)
         idx_raw = index_band(refl).rename("index")
         idx = idx_raw.updateMask(idx_raw.gte(range_lo).And(idx_raw.lte(range_hi)))
@@ -1374,12 +1401,12 @@ def _annual_index_series(
         # a per-year coverage_pct would need one per year, not one number.
         "coverage_pct": latest_year_coverage_pct,
         "note": (
-            "Boundary-mean of a cloud-masked, pre-monsoon (Feb-May) Sentinel-2 "
-            f"composite per year, {min(years)}-{max(years)}. The current calendar "
-            "year is only included once its own Feb-May window has closed (no "
-            "partial-season composite is ever computed). Sentinel-2 only - a Landsat "
-            "extension back to 2013 would need different cloud-masking (no Cloud "
-            "Score+ equivalent) and risks a false 'trend break' at the sensor "
+            f"Boundary-mean of a cloud-masked, {season_start_md} to {season_end_md} "
+            f"Sentinel-2 composite per year, {_years_label(years)}. The current "
+            f"calendar year is only included once its own {season_end_md} window has "
+            "closed (no partial-season composite is ever computed). Sentinel-2 only - "
+            "a Landsat extension back to 2013 would need different cloud-masking (no "
+            "Cloud Score+ equivalent) and risks a false 'trend break' at the sensor "
             "handoff year, so isn't included in this batch. Each year's pixels are "
             "masked to the natural "
             f"[{_VEG_INDEX_HISTOGRAM_RANGE[0]:g}, {_VEG_INDEX_HISTOGRAM_RANGE[1]:g}] "
@@ -1398,55 +1425,100 @@ def _annual_index_series(
             "is reproducible from the stored stats. Descriptive only: it is not a "
             "forest-definition, eligibility or carbon determination."
         ),
+        # Wave: analysis config and methodology. Purely additive - never
+        # touched by report_content.py's identity-checked note/summary
+        # above. Every value here is the same real input already driving
+        # `note`'s own prose, just structured for the UI panel to render
+        # field-by-field instead of parsing free text.
+        "methodology": {
+            "imagery_source": (
+                "Sentinel-2 (COPERNICUS/S2_SR_HARMONIZED)"
+                if imagery_source == "sentinel2"
+                else imagery_source
+            ),
+            "cloud_masking": (
+                f"Cloud Score+ (cs_cdf ≥ {_VEG_CLOUD_THRESHOLD:g})"
+                if cloud_masking == "cloud_score_plus"
+                else cloud_masking
+            ),
+            "season_window": f"{season_start_md} to {season_end_md}",
+            "years_computed": years,
+            "formula": formula_desc,
+            "valid_range": list(_VEG_INDEX_HISTOGRAM_RANGE),
+        },
     }
     map_id = latest_image.visualize(min=-1, max=1, palette=_VEG_INDEX_PALETTE).getMapId()
     return stats, None, map_id["tile_fetcher"].url_format
 
 
-# One formula per index, `ee.Image` (scaled reflectance) -> `ee.Image`
-# (the index band) - the single definition each of _annual_index_series
-# (full multi-year series, for refresh()) and _index_point_value (latest
-# year only, for Identify) both build off of, so the band math exists in
-# exactly one place per index.
-_INDEX_FORMULAS: dict[str, Any] = {
-    # NDVI = (NIR - Red) / (NIR + Red). S2: NIR=B8, Red=B4.
-    "ndvi": lambda refl: refl.normalizedDifference(["B8", "B4"]),
-    # EVI = 2.5 * (NIR - Red) / (NIR + 6*Red - 7.5*Blue + 1). S2: NIR=B8, Red=B4, Blue=B2.
-    "evi": lambda refl: refl.expression(
-        "2.5 * (NIR - RED) / (NIR + 6 * RED - 7.5 * BLUE + 1)",
-        {"NIR": refl.select("B8"), "RED": refl.select("B4"), "BLUE": refl.select("B2")},
+# One (formula, description) pair per index, `ee.Image` (scaled reflectance)
+# -> `ee.Image` (the index band) plus its human-readable formula text - the
+# single definition each of _annual_index_series (full multi-year series,
+# for refresh()) and _index_point_value (latest year only, for Identify)
+# both build off of, so the band math exists in exactly one place per index.
+# The description moved here (Wave: analysis config and methodology) so
+# stats["methodology"]["formula"] can read the SAME text a comment used to
+# only be readable at the source-code level - a relocation, not a rewrite.
+_INDEX_FORMULAS: dict[str, tuple[Any, str]] = {
+    "ndvi": (
+        lambda refl: refl.normalizedDifference(["B8", "B4"]),
+        "NDVI = (NIR - Red) / (NIR + Red). Sentinel-2: NIR=B8, Red=B4.",
     ),
-    # SAVI = ((NIR - Red) / (NIR + Red + L)) * (1 + L), L=0.5 (soil brightness
-    # correction). S2: NIR=B8, Red=B4.
-    "savi": lambda refl: refl.expression(
-        "((NIR - RED) / (NIR + RED + L)) * (1 + L)",
-        {"NIR": refl.select("B8"), "RED": refl.select("B4"), "L": 0.5},
+    "evi": (
+        lambda refl: refl.expression(
+            "2.5 * (NIR - RED) / (NIR + 6 * RED - 7.5 * BLUE + 1)",
+            {"NIR": refl.select("B8"), "RED": refl.select("B4"), "BLUE": refl.select("B2")},
+        ),
+        "EVI = 2.5 * (NIR - Red) / (NIR + 6*Red - 7.5*Blue + 1). "
+        "Sentinel-2: NIR=B8, Red=B4, Blue=B2.",
     ),
-    # MNDWI = (Green - SWIR1) / (Green + SWIR1). S2: Green=B3, SWIR1=B11.
-    "mndwi": lambda refl: refl.normalizedDifference(["B3", "B11"]),
-    # NBR = (NIR - SWIR2) / (NIR + SWIR2). S2: NIR=B8, SWIR2=B12.
-    "nbr": lambda refl: refl.normalizedDifference(["B8", "B12"]),
+    "savi": (
+        lambda refl: refl.expression(
+            "((NIR - RED) / (NIR + RED + L)) * (1 + L)",
+            {"NIR": refl.select("B8"), "RED": refl.select("B4"), "L": 0.5},
+        ),
+        "SAVI = ((NIR - Red) / (NIR + Red + L)) * (1 + L), L=0.5 (soil brightness "
+        "correction). Sentinel-2: NIR=B8, Red=B4.",
+    ),
+    "mndwi": (
+        lambda refl: refl.normalizedDifference(["B3", "B11"]),
+        "MNDWI = (Green - SWIR1) / (Green + SWIR1). Sentinel-2: Green=B3, SWIR1=B11.",
+    ),
+    "nbr": (
+        lambda refl: refl.normalizedDifference(["B8", "B12"]),
+        "NBR = (NIR - SWIR2) / (NIR + SWIR2). Sentinel-2: NIR=B8, SWIR2=B12.",
+    ),
 }
 
 
-def _ndvi_query(boundary: ee.Geometry) -> tuple[dict[str, Any], None, str]:
-    return _annual_index_series(boundary, "ndvi")
+def _ndvi_query(
+    boundary: ee.Geometry, resolved: dict[str, Any] | None = None
+) -> tuple[dict[str, Any], None, str]:
+    return _annual_index_series(boundary, "ndvi", resolved)
 
 
-def _evi_query(boundary: ee.Geometry) -> tuple[dict[str, Any], None, str]:
-    return _annual_index_series(boundary, "evi")
+def _evi_query(
+    boundary: ee.Geometry, resolved: dict[str, Any] | None = None
+) -> tuple[dict[str, Any], None, str]:
+    return _annual_index_series(boundary, "evi", resolved)
 
 
-def _savi_query(boundary: ee.Geometry) -> tuple[dict[str, Any], None, str]:
-    return _annual_index_series(boundary, "savi")
+def _savi_query(
+    boundary: ee.Geometry, resolved: dict[str, Any] | None = None
+) -> tuple[dict[str, Any], None, str]:
+    return _annual_index_series(boundary, "savi", resolved)
 
 
-def _mndwi_query(boundary: ee.Geometry) -> tuple[dict[str, Any], None, str]:
-    return _annual_index_series(boundary, "mndwi")
+def _mndwi_query(
+    boundary: ee.Geometry, resolved: dict[str, Any] | None = None
+) -> tuple[dict[str, Any], None, str]:
+    return _annual_index_series(boundary, "mndwi", resolved)
 
 
-def _nbr_query(boundary: ee.Geometry) -> tuple[dict[str, Any], None, str]:
-    return _annual_index_series(boundary, "nbr")
+def _nbr_query(
+    boundary: ee.Geometry, resolved: dict[str, Any] | None = None
+) -> tuple[dict[str, Any], None, str]:
+    return _annual_index_series(boundary, "nbr", resolved)
 
 
 def _index_point_value(boundary: ee.Geometry, point: ee.Geometry, analysis_id: str) -> float | None:
@@ -1456,7 +1528,8 @@ def _index_point_value(boundary: ee.Geometry, point: ee.Geometry, analysis_id: s
     latest-year image the map tile already shows, so this samples just that
     one year's composite at the clicked point."""
     refl = _s2_reflectance_composite(boundary, max(_current_veg_index_years()))
-    idx = _INDEX_FORMULAS[analysis_id](refl).rename("index")
+    formula_fn, _formula_desc = _INDEX_FORMULAS[analysis_id]
+    idx = formula_fn(refl).rename("index")
     value = idx.reduceRegion(
         reducer=ee.Reducer.first(), geometry=point, scale=10, crs=AOI_CRS, bestEffort=True,
     ).get("index").getInfo()
