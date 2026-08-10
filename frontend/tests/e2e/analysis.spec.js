@@ -72,19 +72,46 @@ test.describe("Analysis view", () => {
     if (process.env.ANALYSIS_SHOT) await page.screenshot({ path: process.env.ANALYSIS_SHOT });
   });
 
-  test("a per-year breakdown defaults to the latest year and switches years", async ({ page }) => {
+  test("io_lulc defaults to a single year, and picking a different one triggers a real recompute", async ({
+    page,
+  }) => {
+    // Wave: analysis config and methodology. io_lulc used to compute all 7
+    // years (_ESRI_LULC_YEARS) unconditionally on every refresh, and
+    // switching the YearlyClassBreakdown year select was an instant
+    // client-side re-render over that already-fetched blob - neither is
+    // true anymore: the default is a single year, and a different year is a
+    // real new GEE call. This replaces that old assumption end to end.
     test.setTimeout(180_000);
     await gotoAnalysisView(page);
+    const results = page.locator(".analysis-results-body");
+    const configPanel = page.locator(".analysis-config-panel");
+
     await page.getByRole("button", { name: /Annual Land Cover/ }).click();
-    await page.getByRole("button", { name: "Run analysis" }).click();
-    const year = page.locator(".analysis-year-select select");
-    await expect(year).toBeVisible({ timeout: 120_000 });
-    // Latest year the backend computed (_ESRI_LULC_YEARS ends at 2023).
-    await expect(year).toHaveValue("2023");
-    const barCount = await page.locator(".analysis-bar-row").count();
-    expect(barCount).toBeGreaterThan(0);
-    await year.selectOption("2018");
-    await expect(page.locator(".analysis-bar-row")).toHaveCount(barCount);
+    await expect(configPanel).toBeVisible();
+    await expect(configPanel.getByRole("combobox", { name: "Years" })).toHaveValue("single");
+    const defaultYear = await configPanel.getByRole("combobox", { name: "Year", exact: true }).inputValue();
+
+    await results.locator(".primary-button").click();
+    await expect(page.locator(".analysis-bar-row").first()).toBeVisible({ timeout: 120_000 });
+    // YearlyClassBreakdown's OWN year select (distinct from the config
+    // panel's - both use .analysis-year-select, but AnalysisStats renders
+    // before .analysis-config-panel in the DOM, so this is the FIRST one)
+    // now has exactly one option: only the single requested year was ever
+    // computed, not the full 2017-2023 domain.
+    const breakdownYearSelect = results.locator(".analysis-year-select select").first();
+    await expect(breakdownYearSelect).toHaveValue(defaultYear);
+    await expect(breakdownYearSelect.locator("option")).toHaveCount(1);
+    const firstRunBars = await page.locator(".analysis-bar-row").allTextContents();
+
+    // A different, earlier year via the config panel + Refresh - real GEE
+    // data for a different year, not a substitute or a cached copy of the
+    // first run's.
+    const earlierYear = String(Number(defaultYear) - 5);
+    await configPanel.getByRole("combobox", { name: "Year", exact: true }).selectOption(earlierYear);
+    await results.locator(".primary-button").click();
+    await expect(breakdownYearSelect).toHaveValue(earlierYear, { timeout: 120_000 });
+    const secondRunBars = await page.locator(".analysis-bar-row").allTextContents();
+    expect(secondRunBars).not.toEqual(firstRunBars);
   });
 
   test("computing NDVI polls the async job to completion and renders a real per-year trend", async ({ page }) => {
@@ -99,6 +126,17 @@ test.describe("Analysis view", () => {
     await page.getByRole("button", { name: /^NDVI/ }).click();
     await expect(results.getByText("Not computed yet")).toBeVisible();
     await expect(page.locator('.leaflet-container img[src*="earthengine"]')).toHaveCount(0);
+
+    // Wave: analysis config and methodology. The default is now a SINGLE
+    // year (previously always the full 2017-present series) - this test's
+    // own point is exercising the trend-chart scrubber across more than one
+    // year, so it explicitly asks for a small 2-year range via the config
+    // panel rather than relying on a default that no longer produces one.
+    const configPanel = page.locator(".analysis-config-panel");
+    await expect(configPanel).toBeVisible();
+    const liveMaxYear = await configPanel.getByRole("combobox", { name: "Year", exact: true }).inputValue();
+    await configPanel.getByRole("combobox", { name: "Years" }).selectOption("range");
+    await configPanel.getByRole("combobox", { name: "From" }).selectOption(String(Number(liveMaxYear) - 1));
 
     // Scoped by container + class, not by name text: this button's own
     // label changes under us (Run analysis -> Queued…/Computing… -> Refresh

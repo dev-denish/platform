@@ -2954,6 +2954,15 @@ label.checkbox-field {
   gap: 8px;
 }
 
+/* Wave: analysis config and methodology. Stacks the year/season/source/
+ * masking pickers - each one already an .analysis-year-select row - one per
+ * line, same gap that primitive uses internally. */
+.analysis-config-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .analysis-bars {
   list-style: none;
   margin: 0;

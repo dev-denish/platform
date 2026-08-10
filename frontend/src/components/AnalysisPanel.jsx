@@ -786,7 +786,7 @@ export default function AnalysisPanel({ projectId, layers, onRefreshLayers, onLe
           </label>
         ) : null}
         {canRun && selected.config ? (
-          <>
+          <div className="analysis-config-panel">
             <label className="analysis-year-select">
               <span>Years</span>
               <select
@@ -910,7 +910,7 @@ export default function AnalysisPanel({ projectId, layers, onRefreshLayers, onLe
                 {" is implemented."}
               </p>
             ) : null}
-          </>
+          </div>
         ) : null}
         {canRun ? (
           <button
