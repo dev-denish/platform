@@ -541,6 +541,20 @@ def _compute_cached(
 # --------------------------------------------------------------- GEE queries
 
 
+def _years_from_resolved(resolved_params: dict[str, Any] | None, fallback_year: int) -> list[int]:
+    """Turns a resolved single/range params dict
+    (analysis_config.resolve_and_validate's output) into the concrete list
+    of years _esri_lulc/_modis_lulc should compute. `fallback_year` covers
+    the "no params at all" path (existing tests/fixtures calling `_compute`
+    directly, or `resolve_and_validate` never having run) - the single
+    latest year, same default `resolve_and_validate` itself would produce."""
+    if not resolved_params:
+        return [fallback_year]
+    if resolved_params.get("year_mode") == "range":
+        return list(range(resolved_params["year_start"], resolved_params["year_end"] + 1))
+    return [resolved_params.get("year", fallback_year)]
+
+
 def _compute(
     analysis_id: str,
     boundary_geojson: dict[str, Any],
@@ -552,11 +566,12 @@ def _compute(
     caller can test refresh()'s DB/permission/cache logic by monkeypatching
     this one function alone, with zero GEE credentials/network involved.
 
-    `request_params` (Wave: raw-imagery browsing) is read ONLY by the 3
-    browse branches below (`year`, optional) - every other branch ignores it
-    entirely, unchanged, preserving those 10 analyses' existing
-    parameter-free request shape exactly as it was before this param
-    existed."""
+    `request_params` is read by the 3 browse branches (`year`, Wave:
+    raw-imagery browsing) and by io_lulc/modis_lulc (already-resolved
+    year/range, Wave: analysis config and methodology, via
+    `_years_from_resolved`) below - every other branch
+    (hansen_gfc/dynamic_world/esa_worldcover) ignores it entirely,
+    unchanged."""
     init_ee()
     boundary = ee.Geometry(boundary_geojson)
     if analysis_id == "hansen_gfc":
@@ -566,9 +581,11 @@ def _compute(
     if analysis_id == "esa_worldcover":
         return _esa_worldcover(boundary)
     if analysis_id == "io_lulc":
-        return _esri_lulc(boundary)
+        years = _years_from_resolved(request_params, max(_ESRI_LULC_YEARS))
+        return _esri_lulc(boundary, years)
     if analysis_id == "modis_lulc":
-        return _modis_lulc(boundary)
+        years = _years_from_resolved(request_params, max(_MODIS_YEARS))
+        return _modis_lulc(boundary, years)
     if analysis_id == "ndvi":
         return _ndvi_query(boundary)
     if analysis_id == "evi":
@@ -902,14 +919,33 @@ def _esri_lulc_year_mosaic(coll: ee.ImageCollection, year: int) -> ee.Image:
 
 
 def _esri_lulc_latest_image() -> ee.Image:
+    # Identify's own image - always the true dataset ceiling, independent of
+    # whatever `years` a refresh() call resolved to (Identify is out of
+    # scope for Wave: analysis config and methodology, see analysis_config.py).
     return _esri_lulc_year_mosaic(_esri_lulc_collection(), max(_ESRI_LULC_YEARS)).select("b1")
 
 
-def _esri_lulc(boundary: ee.Geometry) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
+def _years_label(years: list[int]) -> str:
+    """"2023" for a single year, "2018-2020" for a range - shared by every
+    note/methodology field below that needs to say which years a call
+    actually covered."""
+    return str(years[0]) if len(years) == 1 else f"{min(years)}-{max(years)}"
+
+
+def _esri_lulc(
+    boundary: ee.Geometry, years: list[int]
+) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
+    """`years` (Wave: analysis config and methodology) is caller-resolved -
+    `_compute()`'s dispatch turns a request's year/range params into this
+    concrete list before calling here. Previously always computed every
+    year in `_ESRI_LULC_YEARS` (all 7, unconditionally, on every refresh) -
+    a caller now opts into that by explicitly requesting the full range;
+    the new default is a single year, the real GEE-cost win this wave is
+    partly about."""
     coll = _esri_lulc_collection()
     counts_by_year = {
         str(year): _histogram_counts(_esri_lulc_year_mosaic(coll, year), "b1", boundary, scale=10)
-        for year in _ESRI_LULC_YEARS
+        for year in years
     }
     # Wave: partial coverage. Nested (not flattened alongside the year keys -
     # combined.items() below iterates every top-level key as a "year", so a
@@ -928,17 +964,28 @@ def _esri_lulc(boundary: ee.Geometry) -> tuple[dict[str, Any], list[dict[str, An
         class_ha = {int(k): v * px_area_ha for k, v in (hist or {}).items()}
         class_area_ha_by_year[year] = _class_breakdown(class_ha, ESRI_LULC_LEGEND)
         covered_area_m2_by_year[year] = sum(class_ha.values()) * 10000
-    latest_year_str = str(max(_ESRI_LULC_YEARS))
+    latest_year_str = str(max(years))
     stats = {
         "class_area_ha_by_year": class_area_ha_by_year,
-        # Latest year only - matches "latest year gets a map tile" below;
-        # a per-year coverage_pct would need one per year, not one number.
+        # Latest (of the requested `years`) only - matches "latest requested
+        # year gets a map tile" below; a per-year coverage_pct would need
+        # one per year, not one number.
         "coverage_pct": _coverage_pct(
             covered_area_m2_by_year.get(latest_year_str, 0.0), float(result["boundary_area_m2"])
         ),
+        "note": (
+            f"Computed for {_years_label(years)} (of {min(_ESRI_LULC_YEARS)}-"
+            f"{max(_ESRI_LULC_YEARS)} available)."
+        ),
+        "methodology": {
+            "dataset": "10m Annual Land Cover (Esri / Impact Observatory)",
+            "years_computed": years,
+            "years_available": [min(_ESRI_LULC_YEARS), max(_ESRI_LULC_YEARS)],
+            "resolution_m": 10,
+        },
     }
 
-    latest = _esri_lulc_latest_image()
+    latest = _esri_lulc_year_mosaic(coll, max(years)).select("b1")
     # Wave: AOI clip - see _hansen_forest_change's own comment on this pattern.
     map_id = _visualize_discrete(latest, ESRI_LULC_LEGEND).clip(boundary).getMapId()
     return stats, legend_entries(ESRI_LULC_LEGEND), map_id["tile_fetcher"].url_format
@@ -953,16 +1000,23 @@ def _modis_lulc_year_image(coll: ee.ImageCollection, year: int) -> ee.Image:
 
 
 def _modis_lulc_latest_image() -> ee.Image:
+    # Identify's own image - see _esri_lulc_latest_image's own comment on
+    # why this stays pinned to the dataset ceiling, not a resolved `years`.
     return _modis_lulc_year_image(_modis_lulc_collection(), max(_MODIS_YEARS))
 
 
-def _modis_lulc(boundary: ee.Geometry) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
+def _modis_lulc(
+    boundary: ee.Geometry, years: list[int]
+) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
+    """`years` (Wave: analysis config and methodology) - see _esri_lulc's own
+    docstring, identical reasoning: caller-resolved, previously always all
+    23 years unconditionally."""
     coll = _modis_lulc_collection()
     counts_by_year = {
         str(year): _histogram_counts(
             _modis_lulc_year_image(coll, year), "LC_Type1", boundary, scale=500
         )
-        for year in _MODIS_YEARS
+        for year in years
     }
     # Wave: partial coverage - see _esri_lulc's own comment on why this is
     # nested rather than flattened alongside the year keys.
@@ -979,19 +1033,26 @@ def _modis_lulc(boundary: ee.Geometry) -> tuple[dict[str, Any], list[dict[str, A
         class_ha = {int(k): v * px_area_ha for k, v in (hist or {}).items()}
         class_area_ha_by_year[year] = _class_breakdown(class_ha, MODIS_IGBP_LEGEND)
         covered_area_m2_by_year[year] = sum(class_ha.values()) * 10000
-    latest_year_str = str(max(_MODIS_YEARS))
+    latest_year_str = str(max(years))
     stats = {
         "class_area_ha_by_year": class_area_ha_by_year,
         "coverage_pct": _coverage_pct(
             covered_area_m2_by_year.get(latest_year_str, 0.0), float(result["boundary_area_m2"])
         ),
         "note": (
-            "500m resolution - much coarser than the 10m land-cover products above. "
-            "Use for multi-year trend context, not microlandscape-scale area."
+            f"Computed for {_years_label(years)} (of {min(_MODIS_YEARS)}-{max(_MODIS_YEARS)} "
+            "available). 500m resolution - much coarser than the 10m land-cover products "
+            "above. Use for multi-year trend context, not microlandscape-scale area."
         ),
+        "methodology": {
+            "dataset": "MODIS Land Cover Type (MCD12Q1, IGBP classification)",
+            "years_computed": years,
+            "years_available": [min(_MODIS_YEARS), max(_MODIS_YEARS)],
+            "resolution_m": 500,
+        },
     }
 
-    latest = _modis_lulc_latest_image()
+    latest = _modis_lulc_year_image(coll, max(years))
     # Wave: AOI clip - see _hansen_forest_change's own comment on this pattern.
     map_id = _visualize_discrete(latest, MODIS_IGBP_LEGEND).clip(boundary).getMapId()
     return stats, legend_entries(MODIS_IGBP_LEGEND), map_id["tile_fetcher"].url_format
