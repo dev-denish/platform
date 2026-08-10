@@ -73,23 +73,61 @@ class AnalysisResultRepository:
         row = self.cur.fetchone()
         return bool(row and row["contains"])
 
-    def get(self, project_id: UUID | str, analysis_id: str) -> dict[str, Any] | None:
-        self.cur.execute(
-            """
-            SELECT project_id, analysis_id, computed_at, stats, legend, tile_url_template
-            FROM analysis_result
-            WHERE project_id = %s AND analysis_id = %s
-            """,
-            (str(project_id), analysis_id),
-        )
+    def get(
+        self, project_id: UUID | str, analysis_id: str, params_key: str | None = None
+    ) -> dict[str, Any] | None:
+        """`params_key=None` (the default) means "most recently computed, in
+        whatever configuration" - this is what every pre-existing caller
+        (report generation, a plain GET with no config query params) wants:
+        they never knew about variants before this wave and shouldn't have
+        to. Pass an explicit `params_key` (from
+        `analysis_config.params_key(...)`) only when the caller has a
+        specific configuration in hand and wants to know if THAT exact
+        variant is already computed - e.g. the Analysis panel checking
+        whether the currently-selected picker state has a cached result."""
+        if params_key is None:
+            self.cur.execute(
+                """
+                SELECT project_id, analysis_id, params_key, computed_at, stats, legend,
+                       tile_url_template
+                FROM analysis_result
+                WHERE project_id = %s AND analysis_id = %s
+                ORDER BY computed_at DESC
+                LIMIT 1
+                """,
+                (str(project_id), analysis_id),
+            )
+        else:
+            self.cur.execute(
+                """
+                SELECT project_id, analysis_id, params_key, computed_at, stats, legend,
+                       tile_url_template
+                FROM analysis_result
+                WHERE project_id = %s AND analysis_id = %s AND params_key = %s
+                """,
+                (str(project_id), analysis_id, params_key),
+            )
         return self.cur.fetchone()
 
     def list_for_project(self, project_id: UUID | str) -> dict[str, Any]:
         """{analysis_id: computed_at} for every analysis this project has a
         cached result for - just enough for the catalog list to show "last
-        computed" per row without fetching each full stats/legend blob."""
+        computed" per row without fetching each full stats/legend blob.
+
+        An analysis_id can now have MULTIPLE rows (one per configured
+        variant, see this wave's own migration) - `DISTINCT ON` picks the
+        most-recently-computed one per id. This means "computed, most
+        recently, in SOME configuration" - not "the currently-selected
+        configuration is ready." That's the correct, minimal answer for
+        this badge: it was always just a staleness indicator, never a
+        promise that one particular variant is cached."""
         self.cur.execute(
-            "SELECT analysis_id, computed_at FROM analysis_result WHERE project_id = %s",
+            """
+            SELECT DISTINCT ON (analysis_id) analysis_id, computed_at
+            FROM analysis_result
+            WHERE project_id = %s
+            ORDER BY analysis_id, computed_at DESC
+            """,
             (str(project_id),),
         )
         return {r["analysis_id"]: r["computed_at"] for r in self.cur.fetchall()}
@@ -103,22 +141,25 @@ class AnalysisResultRepository:
         stats: dict[str, Any],
         legend: list[dict[str, Any]] | None,
         tile_url_template: str | None,
+        params_key: str = "default",
     ) -> dict[str, Any]:
         self.cur.execute(
             """
             INSERT INTO analysis_result
-              (project_id, analysis_id, computed_at, computed_by, stats, legend, tile_url_template)
-            VALUES (%s, %s, now(), %s, %s, %s, %s)
-            ON CONFLICT (project_id, analysis_id) DO UPDATE SET
+              (project_id, analysis_id, params_key, computed_at, computed_by, stats, legend,
+               tile_url_template)
+            VALUES (%s, %s, %s, now(), %s, %s, %s, %s)
+            ON CONFLICT (project_id, analysis_id, params_key) DO UPDATE SET
               computed_at = now(),
               computed_by = EXCLUDED.computed_by,
               stats = EXCLUDED.stats,
               legend = EXCLUDED.legend,
               tile_url_template = EXCLUDED.tile_url_template
-            RETURNING project_id, analysis_id, computed_at, stats, legend, tile_url_template
+            RETURNING project_id, analysis_id, params_key, computed_at, stats, legend,
+                      tile_url_template
             """,
             (
-                str(project_id), analysis_id, str(computed_by),
+                str(project_id), analysis_id, params_key, str(computed_by),
                 Jsonb(stats), Jsonb(legend) if legend is not None else None, tile_url_template,
             ),
         )

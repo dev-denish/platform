@@ -150,6 +150,21 @@ _ESRI_LULC_YEARS = analysis_config._ESRI_LULC_YEARS
 _MODIS_YEARS = analysis_config._MODIS_YEARS
 
 
+def _result_out_from_row(row: dict[str, Any]) -> AnalysisResultOut:
+    """Constructs explicitly rather than `AnalysisResultOut(**row)` - the DB
+    row carries a `params_key` column (Wave: analysis config and
+    methodology) that isn't a DTO field; `resolved_params` is that column
+    decoded back into the params dict that produced it (`None` for an
+    unconfigured analysis_id or a pre-this-wave legacy row - see
+    analysis_config.decode_params_key's own docstring)."""
+    return AnalysisResultOut(
+        project_id=row["project_id"], analysis_id=row["analysis_id"],
+        computed_at=row["computed_at"], stats=row["stats"], legend=row["legend"],
+        tile_url_template=row["tile_url_template"],
+        resolved_params=analysis_config.decode_params_key(row["params_key"]),
+    )
+
+
 class GEEAnalysisService:
     def __init__(self, db: Database) -> None:
         self.db = db
@@ -179,7 +194,7 @@ class GEEAnalysisService:
             row = AnalysisResultRepository(cur).get(project_id, analysis_id)
         if row is None:
             raise NotFoundError("This analysis has not been computed for this project yet.")
-        return AnalysisResultOut(**row)
+        return _result_out_from_row(row)
 
     def get_point_value(
         self,
@@ -325,7 +340,7 @@ class GEEAnalysisService:
                 detail=f"Recomputed '{entry['name']}' for project {project_id}.",
                 project_id=project_id,
             )
-        return AnalysisResultOut(**row)
+        return _result_out_from_row(row)
 
     async def enqueue_refresh(
         self,

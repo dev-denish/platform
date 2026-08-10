@@ -216,3 +216,86 @@ def test_upsert_is_a_true_upsert_no_duplicate_row_and_updates_computed_at_and_st
             (str(pid), "hansen_gfc"),
         )
         assert cur.fetchone()["c"] == 1
+
+
+# --------------------------------------------------- params_key scoping (Wave: analysis config)
+
+
+def test_upserting_two_different_params_keys_keeps_both_rows_independently_gettable(db):
+    """The whole point of this wave's storage design: a narrower request
+    (a different params_key) must NOT overwrite a wider one already stored -
+    see app/domain/analysis_config.py's own module docstring."""
+    pid = _make_project(db, f"Proj-{uuid.uuid4()}")
+    computed_by = _make_user_id(db)
+
+    with db.transaction() as cur:
+        AnalysisResultRepository(cur).upsert(
+            project_id=pid, analysis_id="ndvi", computed_by=computed_by,
+            stats={"years": "2017-2025"}, legend=None, tile_url_template="https://wide",
+            params_key="legacy_full_range",
+        )
+    with db.transaction() as cur:
+        AnalysisResultRepository(cur).upsert(
+            project_id=pid, analysis_id="ndvi", computed_by=computed_by,
+            stats={"years": "2025 only"}, legend=None, tile_url_template="https://narrow",
+            params_key='{"year":2025}',
+        )
+
+    with db.connection() as conn, conn.cursor() as cur:
+        wide = AnalysisResultRepository(cur).get(pid, "ndvi", params_key="legacy_full_range")
+        narrow = AnalysisResultRepository(cur).get(pid, "ndvi", params_key='{"year":2025}')
+
+    assert wide is not None and wide["stats"]["years"] == "2017-2025"
+    assert narrow is not None and narrow["stats"]["years"] == "2025 only"
+
+    with db.connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT count(*) AS c FROM analysis_result WHERE project_id = %s AND analysis_id = %s",
+            (str(pid), "ndvi"),
+        )
+        assert cur.fetchone()["c"] == 2
+
+
+def test_get_with_no_params_key_returns_the_most_recently_computed_variant(db):
+    pid = _make_project(db, f"Proj-{uuid.uuid4()}")
+    computed_by = _make_user_id(db)
+
+    with db.transaction() as cur:
+        AnalysisResultRepository(cur).upsert(
+            project_id=pid, analysis_id="ndvi", computed_by=computed_by,
+            stats={"which": "first"}, legend=None, tile_url_template=None,
+            params_key='{"year":2020}',
+        )
+    with db.transaction() as cur:
+        AnalysisResultRepository(cur).upsert(
+            project_id=pid, analysis_id="ndvi", computed_by=computed_by,
+            stats={"which": "second"}, legend=None, tile_url_template=None,
+            params_key='{"year":2021}',
+        )
+
+    with db.connection() as conn, conn.cursor() as cur:
+        most_recent = AnalysisResultRepository(cur).get(pid, "ndvi")
+
+    assert most_recent["stats"]["which"] == "second"
+
+
+def test_list_for_project_reports_the_latest_computed_at_across_variants(db):
+    pid = _make_project(db, f"Proj-{uuid.uuid4()}")
+    computed_by = _make_user_id(db)
+
+    with db.transaction() as cur:
+        first = AnalysisResultRepository(cur).upsert(
+            project_id=pid, analysis_id="ndvi", computed_by=computed_by,
+            stats={}, legend=None, tile_url_template=None, params_key='{"year":2020}',
+        )
+    with db.transaction() as cur:
+        second = AnalysisResultRepository(cur).upsert(
+            project_id=pid, analysis_id="ndvi", computed_by=computed_by,
+            stats={}, legend=None, tile_url_template=None, params_key='{"year":2021}',
+        )
+
+    with db.connection() as conn, conn.cursor() as cur:
+        computed = AnalysisResultRepository(cur).list_for_project(pid)
+
+    assert computed["ndvi"] == second["computed_at"]
+    assert computed["ndvi"] >= first["computed_at"]

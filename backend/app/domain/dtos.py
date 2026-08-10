@@ -683,6 +683,13 @@ class AnalysisResultOut(BaseModel):
     stats: dict[str, Any]
     legend: list[dict[str, Any]] | None = None
     tile_url_template: str | None = None
+    # Wave: analysis config and methodology. Decoded from the DB row's
+    # params_key (analysis_config.decode_params_key) - None for an
+    # analysis_id with nothing configurable, or for a pre-this-wave
+    # "legacy_full_range" row whose exact original request shape was never
+    # recorded. Never constructed from `**row` (params_key isn't a field
+    # here) - see gee_analysis_service.py's call sites.
+    resolved_params: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------- PDF report

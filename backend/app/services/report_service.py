@@ -27,6 +27,7 @@ from uuid import UUID
 from app.core.db import Database
 from app.core.errors import ValidationError
 from app.core.logging import get_logger
+from app.domain import analysis_config
 from app.domain.analysis_catalog import CATALOG, get_catalog_entry
 from app.domain.authz import require_project_view
 from app.domain.dtos import CurrentUser, GenerateReportRequest, ReportAnalysisOption, ReportOptions
@@ -141,7 +142,17 @@ def generate_report_pdf_bytes(
     MAP IMAGE is freshly fetched per section (`_compute_cached`) - a stored
     tile_url_template is a GEE token that has likely already expired by
     report time (see report_map_image.py); a single section's map-tile
-    fetch failing is logged and skipped, never sinks the whole report."""
+    fetch failing is logged and skipped, never sinks the whole report.
+
+    `_compute_cached` is called with the SAME resolved params that produced
+    `row["stats"]` (decoded from `row["params_key"]`, Wave: analysis config
+    and methodology) - not a bare no-params call - so the freshly-fetched
+    map tile matches the year/season/source the text/chart above it
+    describe, not whatever the CURRENT default happens to be. A
+    `legacy_full_range` row (pre-this-wave, migrated in place) decodes to
+    `None`; its map tile falls back to the new default variant rather than
+    the old full range - an accepted, honest degradation for old data, not
+    a crash (legacy rows are transient and get superseded by fresh runs)."""
     with db.connection() as conn, conn.cursor() as cur:
         canopy_cover_pct = float(ForestDefinitionRepository(cur).get()["canopy_cover_pct"])
         rows = {
@@ -166,8 +177,9 @@ def generate_report_pdf_bytes(
             chart_images[analysis_id] = render_trend_chart_png(section.name, section.series)
 
         try:
+            resolved_params = analysis_config.decode_params_key(row["params_key"])
             _, _, tile_url_template = _compute_cached(
-                project_id, analysis_id, boundary_geojson, canopy_cover_pct
+                project_id, analysis_id, boundary_geojson, canopy_cover_pct, resolved_params
             )
             if tile_url_template:
                 map_images[analysis_id] = render_boundary_map_png(
