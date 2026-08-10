@@ -22,6 +22,7 @@ from arq.worker import Retry
 from app.core.db import Database
 from app.core.logging import get_logger
 from app.core.metrics import job_duration_seconds, jobs_completed_total
+from app.domain import analysis_config
 from app.domain.enums import AuditAction
 from app.repositories.analysis_results import AnalysisResultRepository
 from app.repositories.audit import AuditRepository
@@ -46,11 +47,15 @@ async def run_gee_analysis_job(
     boundary_geojson: dict[str, Any],
     canopy_cover_pct: float,
     actor: dict[str, Any],
+    request_params: dict[str, Any] | None = None,
 ) -> None:
     """Job body for the `compute_gee_analysis` kind. All the permission/
-    catalog/boundary validation already happened synchronously, at request
-    time, in GEEAnalysisService.enqueue_refresh - by the time this runs, the
-    only thing left to do is the actual (slow) GEE computation and the same
+    catalog/boundary validation - including, since Wave: analysis config and
+    methodology, resolving+validating `request_params` for the 5 vegetation
+    indices - already happened synchronously, at request time, in
+    GEEAnalysisService.enqueue_refresh; `request_params` arrives here
+    ALREADY RESOLVED, never re-validated. By the time this runs, the only
+    thing left to do is the actual (slow) GEE computation and the same
     upsert+audit `refresh()` does for the synchronous analyses."""
     db: Database = ctx["db"]
     job_try: int = ctx.get("job_try", 1)
@@ -65,12 +70,9 @@ async def run_gee_analysis_job(
     try:
         # Wave: GEE tile caching. `_compute_cached`, not `_compute` directly -
         # a re-run within the TTL window skips the real (5-59s for the
-        # vegetation indices) GEE compute entirely. No `request_params` here:
-        # every "async"-execution analysis is one of the original 10, none
-        # of which are year-selectable (see gee_analysis_service.py's own
-        # `refresh()` docstring on why that's true by catalog construction).
+        # vegetation indices) GEE compute entirely.
         stats, legend, tile_url_template = _compute_cached(
-            project_id, analysis_id, boundary_geojson, canopy_cover_pct
+            project_id, analysis_id, boundary_geojson, canopy_cover_pct, request_params
         )
     except Exception as e:  # noqa: BLE001 - presumed transient (quota/network); classified below
         error = {"code": "job_error", "message": str(e)}
@@ -91,6 +93,7 @@ async def run_gee_analysis_job(
         row = AnalysisResultRepository(cur).upsert(
             project_id=project_id, analysis_id=analysis_id, computed_by=actor["user_id"],
             stats=stats, legend=legend, tile_url_template=tile_url_template,
+            params_key=analysis_config.params_key(analysis_id, request_params),
         )
         AuditRepository(cur).record(
             actor_id=actor["user_id"], actor_name=actor["username"],

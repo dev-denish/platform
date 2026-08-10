@@ -208,11 +208,33 @@ class GEEAnalysisService:
         return ProjectAnalysisCatalog(project_id=project_id, analyses=analyses)
 
     def get_result(
-        self, project_id: UUID, analysis_id: str, user: CurrentUser
+        self,
+        project_id: UUID,
+        analysis_id: str,
+        user: CurrentUser,
+        request_params: dict[str, Any] | None = None,
     ) -> AnalysisResultOut:
+        """`request_params` (Wave: analysis config and methodology) is only
+        meaningful for the 7 configurable ids, and only when the caller
+        actually sent something - an empty/absent `request_params` means
+        "whatever's already there" (params_key=None, most recent across
+        variants), same as every pre-existing caller (report generation, a
+        plain GET) already expects. A caller with a SPECIFIC configuration in
+        hand (the Analysis panel checking whether the currently-selected
+        picker state is cached) gets exact-match-or-404, never a different
+        variant silently substituted - `resolve_and_validate` still raises
+        the same specific rejection a refresh would for an unsupported
+        combination."""
+        entry = get_catalog_entry(analysis_id)
+        params_key = None
+        if entry is not None and "config" in entry and request_params:
+            resolved = analysis_config.resolve_and_validate(
+                analysis_id, entry["config"], request_params
+            )
+            params_key = analysis_config.params_key(analysis_id, resolved)
         with self.db.connection() as conn, conn.cursor() as cur:
             require_project_view(cur, project_id, user)
-            row = AnalysisResultRepository(cur).get(project_id, analysis_id)
+            row = AnalysisResultRepository(cur).get(project_id, analysis_id, params_key)
         if row is None:
             raise NotFoundError("This analysis has not been computed for this project yet.")
         return _result_out_from_row(row)
@@ -292,19 +314,37 @@ class GEEAnalysisService:
     # ---- refresh - the only things that actually call GEE ----
 
     def _prepare_refresh(
-        self, project_id: UUID, analysis_id: str, actor: CurrentUser
-    ) -> tuple[dict[str, Any], dict[str, Any], float]:
+        self,
+        project_id: UUID,
+        analysis_id: str,
+        actor: CurrentUser,
+        request_params: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any], float, dict[str, Any] | None]:
         """Shared by refresh() and enqueue_refresh(): catalog/permission/
         boundary validation, all synchronous DB work - done at request time
         for BOTH paths, so a bad request (unknown analysis, not implemented
-        yet, no permission, no boundary) fails immediately with a normal
-        HTTP error rather than surfacing later inside an async job with no
-        one watching."""
+        yet, no permission, no boundary, an unsupported config combination)
+        fails immediately with a normal HTTP error rather than surfacing
+        later inside an async job with no one watching.
+
+        `request_params` is resolved+validated (Wave: analysis config and
+        methodology) BEFORE the permission/boundary DB round trip, same
+        "validate what's knowable from static data first" order the
+        catalog/status checks above it already use - an unsupported
+        source/masking combination is rejected with its specific reason
+        whether or not the caller could even upload to this project.
+        Unconfigured ids (`"config" not in entry`) pass `request_params`
+        through unchanged - the pre-existing browse-id behavior."""
         entry = get_catalog_entry(analysis_id)
         if entry is None:
             raise NotFoundError("Unknown analysis.")
         if entry["status"] != "available":
             raise ValidationError(f"'{entry['name']}' is not implemented yet.")
+        resolved_params = (
+            analysis_config.resolve_and_validate(analysis_id, entry["config"], request_params)
+            if "config" in entry
+            else request_params
+        )
 
         with self.db.connection() as conn, conn.cursor() as cur:
             require_project_upload(cur, project_id, actor)
@@ -317,7 +357,7 @@ class GEEAnalysisService:
             raise ValidationError(
                 "This project has no Boundary layer yet - upload one before running an analysis."
             )
-        return entry, boundary_geojson, canopy_cover_pct
+        return entry, boundary_geojson, canopy_cover_pct, resolved_params
 
     def refresh(
         self,
@@ -331,13 +371,16 @@ class GEEAnalysisService:
         enqueue_refresh instead); the assertion below is a guard against that
         ever drifting, not a real user-facing error path.
 
-        `request_params` (Wave: raw-imagery browsing) is forwarded to
-        `_compute` as-is - only the 3 browse ids read it (`year`); every
-        other "sync" entry ignores it, unchanged. Not threaded through
-        `enqueue_refresh`/the worker below: every browse id is "sync"-only
-        by catalog definition, so the async path never needs it."""
-        entry, boundary_geojson, canopy_cover_pct = self._prepare_refresh(
-            project_id, analysis_id, actor
+        `request_params` is resolved by `_prepare_refresh` before this ever
+        runs: forwarded as-is for the 3 browse ids (Wave: raw-imagery
+        browsing, only `year`), fully resolved+validated for io_lulc/
+        modis_lulc (Wave: analysis config and methodology - these are
+        "sync"-execution AND configurable, unlike the browse-only framing
+        this docstring used to have), and `None` for every other sync entry
+        (hansen_gfc/dynamic_world/esa_worldcover), which ignore it
+        unchanged."""
+        entry, boundary_geojson, canopy_cover_pct, resolved_params = self._prepare_refresh(
+            project_id, analysis_id, actor, request_params
         )
         assert entry.get("execution") == "sync", (  # noqa: S101 - internal routing invariant
             f"{analysis_id!r} is execution={entry.get('execution')!r}; route should have used "
@@ -347,13 +390,14 @@ class GEEAnalysisService:
         # Wave: GEE tile caching. `_compute_cached`, not `_compute` directly -
         # a re-run within the TTL window skips the real GEE call.
         stats, legend, tile_url_template = _compute_cached(
-            str(project_id), analysis_id, boundary_geojson, canopy_cover_pct, request_params
+            str(project_id), analysis_id, boundary_geojson, canopy_cover_pct, resolved_params
         )
 
         with self.db.transaction() as cur:
             row = AnalysisResultRepository(cur).upsert(
                 project_id=project_id, analysis_id=analysis_id, computed_by=actor.user_id,
                 stats=stats, legend=legend, tile_url_template=tile_url_template,
+                params_key=analysis_config.params_key(analysis_id, resolved_params),
             )
             AuditRepository(cur).record(
                 actor_id=actor.user_id, actor_name=actor.username,
@@ -370,6 +414,7 @@ class GEEAnalysisService:
         actor: CurrentUser,
         jobs: JobService,
         runner: TaskRunner,
+        request_params: dict[str, Any] | None = None,
     ) -> UUID:
         """The "async"-execution path - mirrors POST /datasets/upload's own
         job-queue dispatch (app/api/v1/datasets.py) exactly: validate
@@ -379,9 +424,16 @@ class GEEAnalysisService:
         polls GET /jobs/{id}, then re-fetches get_result() once it succeeds -
         the job's own row only needs enough to prove it ran, not a duplicate
         copy of the stats (those land in analysis_result via the worker's
-        own upsert, the one source of truth get_result() already reads)."""
-        entry, boundary_geojson, canopy_cover_pct = self._prepare_refresh(
-            project_id, analysis_id, actor
+        own upsert, the one source of truth get_result() already reads).
+
+        `request_params` (Wave: analysis config and methodology) is resolved+
+        validated by `_prepare_refresh` the same way the sync path's
+        `refresh()` does, BEFORE the job is even submitted - the 5
+        vegetation indices are the only async-execution ids this ever
+        matters for; an unsupported combination is rejected here, not
+        discovered later inside a job with no one watching."""
+        entry, boundary_geojson, canopy_cover_pct, resolved_params = self._prepare_refresh(
+            project_id, analysis_id, actor, request_params
         )
         assert entry.get("execution") == "async", (  # noqa: S101 - internal routing invariant
             f"{analysis_id!r} is execution={entry.get('execution')!r}; route should have used "
@@ -401,7 +453,7 @@ class GEEAnalysisService:
                     run_gee_analysis_job,
                     job_id=str(job_id), project_id=str(project_id), analysis_id=analysis_id,
                     boundary_geojson=boundary_geojson, canopy_cover_pct=canopy_cover_pct,
-                    actor=actor.model_dump(mode="json"),
+                    actor=actor.model_dump(mode="json"), request_params=resolved_params,
                 )
             except Exception as e:
                 # The jobs-row insert already committed (jobs.submit above) - if

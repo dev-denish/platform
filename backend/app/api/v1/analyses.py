@@ -20,7 +20,7 @@ analysis takes."""
 from __future__ import annotations
 
 import asyncio
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Response
@@ -51,6 +51,34 @@ from app.workers.queue import TaskRunner
 router = APIRouter(tags=["analyses"])
 
 
+def _analysis_config_query_params(
+    # Wave: analysis config and methodology. Meaningful only for the 7
+    # configurable ids (see analysis_catalog.py's own `config` field) -
+    # every other analysis_id's `GEEAnalysisService.get_result`/
+    # `_prepare_refresh` ignores whatever's here, unchanged, same as the
+    # pre-existing `year` param below already does for anything but the 3
+    # browse ids. A shared FastAPI sub-dependency (not 8 repeated Query()
+    # declarations) since both GET and POST /refresh accept the identical
+    # set - resolution/validation itself happens once, in
+    # `GEEAnalysisService`/`analysis_config.resolve_and_validate`, not here.
+    year_mode: Annotated[str | None, Query()] = None,
+    year: Annotated[int | None, Query()] = None,
+    year_start: Annotated[int | None, Query()] = None,
+    year_end: Annotated[int | None, Query()] = None,
+    season_start: Annotated[str | None, Query()] = None,
+    season_end: Annotated[str | None, Query()] = None,
+    imagery_source: Annotated[str | None, Query()] = None,
+    cloud_masking: Annotated[str | None, Query()] = None,
+) -> dict[str, Any] | None:
+    raw = {
+        "year_mode": year_mode, "year": year, "year_start": year_start, "year_end": year_end,
+        "season_start": season_start, "season_end": season_end,
+        "imagery_source": imagery_source, "cloud_masking": cloud_masking,
+    }
+    filtered = {k: v for k, v in raw.items() if v is not None}
+    return filtered or None
+
+
 @router.get("/analysis-catalog", response_model=list[AnalysisCatalogEntryOut])
 def get_analysis_catalog(
     user: CurrentUserDep,
@@ -76,8 +104,9 @@ def get_analysis_result(
     analysis_id: str,
     user: CurrentUserDep,
     svc: Annotated[GEEAnalysisService, Depends(get_gee_analysis_service)],
+    config_params: Annotated[dict[str, Any] | None, Depends(_analysis_config_query_params)],
 ) -> AnalysisResultOut:
-    return svc.get_result(project_id, analysis_id, user)
+    return svc.get_result(project_id, analysis_id, user, config_params)
 
 
 @router.get(
@@ -125,19 +154,24 @@ async def refresh_analysis(
     runner: Annotated[TaskRunner, Depends(get_task_runner)],
     settings: Annotated[Settings, Depends(get_settings)],
     response: Response,
-    # Wave: raw-imagery browsing. Only meaningful for the 3 "sync"-execution
-    # browse ids - every other analysis_id's refresh ignores it, unchanged.
-    # No `le=` bound - see get_analysis_point_value's own comment on why a
-    # date.today()-derived bound would freeze at import time.
-    year: Annotated[int | None, Query(ge=2013)] = None,
+    # One shared `request_params` source for both the 3 browse ids' `year`
+    # (Wave: raw-imagery browsing) and the 7 configurable ids' full param set
+    # (Wave: analysis config and methodology) - both read the SAME `?year=`
+    # wire key for "which year", so this is one query param, not two
+    # differently-validated ones bound to the same name. Each analysis_id's
+    # own dispatch/resolver reads only the keys it recognizes and ignores
+    # the rest, same "ignore what doesn't apply" convention `_compute`
+    # already used for `year` before this dependency existed.
+    config_params: Annotated[dict[str, Any] | None, Depends(_analysis_config_query_params)],
 ) -> AnalysisResultOut | JobAccepted:
     entry = get_catalog_entry(analysis_id)
     if entry is not None and entry.get("execution") == "async":
-        job_id = await svc.enqueue_refresh(project_id, analysis_id, user, jobs, runner)
+        job_id = await svc.enqueue_refresh(
+            project_id, analysis_id, user, jobs, runner, config_params
+        )
         response.status_code = 202
         return JobAccepted(job_id=job_id, status_url=f"{settings.api_v1_prefix}/jobs/{job_id}")
     # "sync"-execution (or unknown/not-yet-implemented, which svc.refresh()
     # itself 404s/422s) - off the event loop via to_thread, since this is an
     # async route now (see module docstring for why that matters here).
-    request_params = {"year": year} if year is not None else None
-    return await asyncio.to_thread(svc.refresh, project_id, analysis_id, user, request_params)
+    return await asyncio.to_thread(svc.refresh, project_id, analysis_id, user, config_params)
