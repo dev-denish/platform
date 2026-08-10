@@ -56,6 +56,8 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
+from app.domain import analysis_config
+
 _TILE_URL_SAFETY_CEILING_SECONDS = 2 * 60 * 60  # 2h - see module docstring
 
 _CURRENT_PERIOD_CADENCE_SECONDS: dict[str, int] = {
@@ -66,31 +68,34 @@ _CURRENT_PERIOD_CADENCE_SECONDS: dict[str, int] = {
 _DEFAULT_CURRENT_CADENCE_SECONDS = 1 * 86_400  # the original 10 analyses - S2-class cadence
 _HISTORICAL_TTL_SECONDS = 30 * 86_400
 
-# The 3 ids whose request accepts a `year` param at all (Wave: raw-imagery
-# browsing) - the ONLY ones whose cache key varies by anything beyond
-# (project_id, analysis_id). A comment, not a speculative implementation:
-# if a future task adds selectable params (year/season/source/masking) to
-# the other 10 analyses, THEIR cache keys will need to expand the same way
-# this set is used below - not pre-built here since that work has not
-# started anywhere in this repo (verified: no such branch, commit, or code
-# comment exists as of this wave).
+# The 3 browse ids whose request accepts a `year` param (Wave: raw-imagery
+# browsing) - their own key suffix logic below, untouched by Wave: analysis
+# config and methodology (their pre-existing "DB row doesn't vary by year"
+# gap predates that wave and stays out of its scope - see analysis_config.py's
+# own `_STORAGE_SCOPED_IDS` comment).
 _YEAR_SELECTABLE_IDS = frozenset(_CURRENT_PERIOD_CADENCE_SECONDS)
 
 
 def cache_key(
     project_id: str, analysis_id: str, request_params: dict[str, Any] | None = None
 ) -> str:
-    """`gee_analysis:{project}:{analysis}` for the 10 original, parameter-
-    free analyses - one cached entry per project+analysis, matching their
-    fixed-default request shape exactly. `gee_analysis:{project}:{analysis}:
-    {year|"latest"}` for the 3 year-selectable browse ids - a different
-    year is deliberately a cache MISS, never treated as interchangeable
-    with any other year."""
+    """`gee_analysis:{project}:{analysis}` for every analysis with nothing
+    configurable at all (hansen_gfc/dynamic_world/esa_worldcover) - one
+    cached entry per project+analysis. `gee_analysis:{project}:{analysis}:
+    {year|"latest"}` for the 3 year-selectable browse ids - a different year
+    is deliberately a cache MISS, never treated as interchangeable with any
+    other year. `gee_analysis:{project}:{analysis}:{resolved params, as
+    canonical JSON}` for the 7 ids Wave: analysis config and methodology made
+    configurable (io_lulc/modis_lulc/the 5 vegetation indices) - delegates to
+    `analysis_config.params_key()`, the SAME canonicalization the
+    analysis_result DB row's params_key column uses, so there is exactly one
+    idea of "what makes two requests the same variant", not two."""
     base = f"gee_analysis:{project_id}:{analysis_id}"
-    if analysis_id not in _YEAR_SELECTABLE_IDS:
-        return base
-    year = (request_params or {}).get("year")
-    return f"{base}:{year if year is not None else 'latest'}"
+    if analysis_id in _YEAR_SELECTABLE_IDS:
+        year = (request_params or {}).get("year")
+        return f"{base}:{year if year is not None else 'latest'}"
+    suffix = analysis_config.params_key(analysis_id, request_params)
+    return base if suffix == "default" else f"{base}:{suffix}"
 
 
 def ttl_seconds(

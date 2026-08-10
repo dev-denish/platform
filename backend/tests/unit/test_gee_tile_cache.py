@@ -13,17 +13,42 @@ _PROJECT = "11111111-1111-1111-1111-111111111111"
 _TWO_HOURS = 2 * 60 * 60
 
 
-def test_cache_key_for_an_original_analysis_has_no_param_suffix():
-    # No request_params at all - the existing 10 analyses' exact request shape.
-    assert cache_key(_PROJECT, "ndvi") == f"gee_analysis:{_PROJECT}:ndvi"
+def test_cache_key_for_an_unconfigurable_analysis_has_no_param_suffix():
+    # No request_params at all - hansen_gfc/dynamic_world/esa_worldcover have
+    # nothing configurable (Wave: analysis config and methodology left them
+    # untouched - see analysis_config.py's own scope comment).
+    assert cache_key(_PROJECT, "dynamic_world") == f"gee_analysis:{_PROJECT}:dynamic_world"
     assert cache_key(_PROJECT, "hansen_gfc", None) == f"gee_analysis:{_PROJECT}:hansen_gfc"
 
 
-def test_cache_key_for_an_original_analysis_ignores_a_stray_request_params():
-    # Defensive: even if a caller somehow passed request_params for one of
-    # the 10 original ids, the key must not vary by it - they are not
-    # year-selectable, full stop.
-    assert cache_key(_PROJECT, "ndvi", {"year": 2020}) == f"gee_analysis:{_PROJECT}:ndvi"
+def test_cache_key_for_an_unconfigurable_analysis_ignores_a_stray_request_params():
+    # Defensive: even if a caller somehow passed request_params for an id
+    # with nothing configurable, the key must not vary by it.
+    assert cache_key(_PROJECT, "hansen_gfc", {"year": 2020}) == f"gee_analysis:{_PROJECT}:hansen_gfc"
+
+
+def test_cache_key_for_ndvi_varies_by_resolved_year():
+    # ndvi is one of the 7 ids Wave: analysis config and methodology made
+    # configurable - its key now varies by the (already-resolved) params
+    # dict, same as the browse ids vary by year, just via
+    # analysis_config.params_key()'s canonical-JSON suffix instead.
+    key_2022 = cache_key(_PROJECT, "ndvi", {"year_mode": "single", "year": 2022})
+    key_2023 = cache_key(_PROJECT, "ndvi", {"year_mode": "single", "year": 2023})
+    assert key_2022 != key_2023
+    assert key_2022 == cache_key(_PROJECT, "ndvi", {"year_mode": "single", "year": 2022})
+
+
+def test_cache_key_for_ndvi_with_no_params_is_still_default():
+    # cache_key() itself doesn't resolve defaults (that's resolve_and_validate's
+    # job, called upstream) - called with nothing at all, it degrades to the
+    # same bare key every unconfigurable analysis gets.
+    assert cache_key(_PROJECT, "ndvi", None) == f"gee_analysis:{_PROJECT}:ndvi"
+
+
+def test_cache_key_for_io_lulc_varies_by_year_range():
+    key_a = cache_key(_PROJECT, "io_lulc", {"year_mode": "range", "year_start": 2018, "year_end": 2020})
+    key_b = cache_key(_PROJECT, "io_lulc", {"year_mode": "range", "year_start": 2018, "year_end": 2021})
+    assert key_a != key_b
 
 
 def test_cache_key_for_a_browse_layer_with_no_year_is_latest():
