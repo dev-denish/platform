@@ -36,6 +36,7 @@ from app.services.membership_service import MembershipService
 from app.services.permission_service import PermissionService
 from app.services.project_service import ProjectService
 from app.services.reference_layer_service import ReferenceLayerService
+from app.services.report_service import ReportService
 from app.services.tile_service import TileService
 from app.services.user_service import UserService
 from app.services.vector_layer_service import VectorLayerService
@@ -88,6 +89,10 @@ def get_permission_service(db: Annotated[Database, Depends(get_db)]) -> Permissi
 
 def get_gee_analysis_service(db: Annotated[Database, Depends(get_db)]) -> GEEAnalysisService:
     return GEEAnalysisService(db)
+
+
+def get_report_service(db: Annotated[Database, Depends(get_db)]) -> ReportService:
+    return ReportService(db)
 
 
 def get_forest_definition_service(

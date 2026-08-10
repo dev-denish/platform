@@ -19,6 +19,7 @@ from app.api.v1 import (
     permissions,
     projects,
     reference_layers,
+    reports,
     tiles,
     users,
     wms_domains,
@@ -40,3 +41,4 @@ api_router.include_router(external_layers.router)
 api_router.include_router(reference_layers.router)
 api_router.include_router(adhoc_layers.router)
 api_router.include_router(forest_definition.router)
+api_router.include_router(reports.router)

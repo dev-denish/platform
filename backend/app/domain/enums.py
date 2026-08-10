@@ -141,3 +141,4 @@ class AuditAction(StrEnum):
     REVOKE_PERMISSION = "revoke_permission"
     UPDATE_FOREST_DEFINITION = "update_forest_definition"
     REFRESH_ANALYSIS = "refresh_analysis"
+    GENERATE_REPORT = "generate_report"

@@ -685,6 +685,34 @@ class AnalysisResultOut(BaseModel):
     tile_url_template: str | None = None
 
 
+# ---------------------------------------------------------------- PDF report
+# Wave: PDF report. The selection checklist offers ONLY analyses this project
+# already has a real cached result for (computed_at is not None) - never an
+# analysis with no data, same "don't offer what isn't real" rule the catalog
+# itself already follows for status="in-development" entries.
+
+
+class ReportAnalysisOption(BaseModel):
+    analysis_id: str
+    name: str
+    category: str
+    computed_at: datetime
+    # True for the 5 vegetation indices (ndvi/evi/savi/mndwi/nbr) - the report
+    # includes their full year-series trend, not a single-year snapshot, for
+    # these and only these (see report_content.MULTI_YEAR_INDEX_IDS).
+    is_multi_year: bool
+
+
+class ReportOptions(BaseModel):
+    project_id: UUID
+    project_name: str
+    analyses: list[ReportAnalysisOption]
+
+
+class GenerateReportRequest(BaseModel):
+    analysis_ids: list[str] = Field(min_length=1, max_length=13)
+
+
 # ---------------------------------------------------------------- health
 
 
