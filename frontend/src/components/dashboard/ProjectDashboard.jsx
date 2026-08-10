@@ -13,6 +13,7 @@ import EmptyState from "../EmptyState.jsx";
 import LandCoverPie from "../LandCoverPie.jsx";
 import Legend from "../Legend.jsx";
 import ActivityFeed from "./ActivityFeed.jsx";
+import ReportGenerator from "./ReportGenerator.jsx";
 import { formatDate, formatNumber, humanizeMetricName } from "../../lib/format.js";
 import { classColor } from "../../lib/colors.js";
 import { datedLayerGroups } from "../../lib/timeline.js";
@@ -239,6 +240,8 @@ export default function ProjectDashboard({ projectId, projectName, layers, kpis,
           <ActivityFeed projectId={projectId} />
         </section>
       </div>
+
+      <ReportGenerator projectId={projectId} />
     </div>
   );
 }
