@@ -92,6 +92,12 @@ test.describe("AOI clip and raw-imagery browsing", () => {
         dataset_type: "Boundary",
         source: "E2E partial-coverage fixture",
         date_processed: "2024-06-01",
+        // Wave: upload project-name footgun fix (merged after this test was
+        // originally written) - POST /datasets/upload now rejects a
+        // project_name that doesn't already exist unless the caller
+        // explicitly confirms it's new. `projectName` above is always a
+        // fresh, timestamped, never-before-seen name, so this must be true.
+        create_new_project: "true",
       },
     });
     expect(uploadRes.ok()).toBe(true);
