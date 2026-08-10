@@ -150,6 +150,27 @@ _ESRI_LULC_YEARS = analysis_config._ESRI_LULC_YEARS
 _MODIS_YEARS = analysis_config._MODIS_YEARS
 
 
+def _catalog_entries_with_live_config() -> list[dict[str, Any]]:
+    """CATALOG as plain dicts, with each vegetation index's `config["year_max"]`
+    (declared `None` in the static catalog - see analysis_catalog.py's own
+    `_VEG_INDEX_CONFIG`) overlaid with the REAL live ceiling
+    (`max(current_veg_index_years())`) - evaluated fresh on every call, same
+    "never freeze a value that changes every year" reasoning
+    `current_veg_index_years()` itself already documents. This is how
+    "current-year exclusion still applies" reaches the UI: the frontend is
+    always told the real eligible ceiling, never left to guess or hardcode
+    one. Returns new dicts; never mutates CATALOG, a shared module-level
+    constant every request reads."""
+    live_year_max = max(_current_veg_index_years())
+    entries = []
+    for entry in CATALOG:
+        config = entry.get("config")
+        if config is not None and config.get("year_max") is None:
+            entry = {**entry, "config": {**config, "year_max": live_year_max}}
+        entries.append(entry)
+    return entries
+
+
 def _result_out_from_row(row: dict[str, Any]) -> AnalysisResultOut:
     """Constructs explicitly rather than `AnalysisResultOut(**row)` - the DB
     row carries a `params_key` column (Wave: analysis config and
@@ -172,7 +193,7 @@ class GEEAnalysisService:
     # ---- catalog / cache metadata - no GEE calls ----
 
     def list_catalog(self) -> list[dict[str, Any]]:
-        return list(CATALOG)
+        return _catalog_entries_with_live_config()
 
     def get_project_analyses(
         self, project_id: UUID, user: CurrentUser
@@ -182,7 +203,7 @@ class GEEAnalysisService:
             computed_at_by_id = AnalysisResultRepository(cur).list_for_project(project_id)
         analyses = [
             ProjectAnalysisSummary(**entry, computed_at=computed_at_by_id.get(entry["id"]))
-            for entry in CATALOG
+            for entry in _catalog_entries_with_live_config()
         ]
         return ProjectAnalysisCatalog(project_id=project_id, analyses=analyses)
 

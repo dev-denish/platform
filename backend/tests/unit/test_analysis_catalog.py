@@ -59,3 +59,51 @@ def test_the_five_vegetation_indices_are_available_and_async():
         assert entry["status"] == "available"
         assert entry["execution"] == "async"
         assert entry["category"] == "Vegetation Indices"
+
+
+# ---------------------------------------------- Wave: analysis config and methodology
+
+
+def test_exactly_the_seven_expected_ids_declare_a_config():
+    configured_ids = {e["id"] for e in CATALOG if "config" in e}
+    assert configured_ids == {"io_lulc", "modis_lulc", "ndvi", "evi", "savi", "mndwi", "nbr"}
+
+
+def test_every_config_declaring_entry_is_status_available_and_execution_matches():
+    by_id = {e["id"]: e for e in CATALOG}
+    assert by_id["io_lulc"]["execution"] == "sync"
+    assert by_id["modis_lulc"]["execution"] == "sync"
+    for analysis_id in ("ndvi", "evi", "savi", "mndwi", "nbr"):
+        assert by_id[analysis_id]["status"] == "available"
+        assert by_id[analysis_id]["execution"] == "async"
+
+
+def test_land_cover_configs_have_a_static_year_max_not_live():
+    by_id = {e["id"]: e for e in CATALOG}
+    assert by_id["io_lulc"]["config"] == {
+        "year_mode_default": "single", "year_min": 2017, "year_max": 2023,
+    }
+    assert by_id["modis_lulc"]["config"] == {
+        "year_mode_default": "single", "year_min": 2001, "year_max": 2023,
+    }
+
+
+def test_all_five_indices_share_the_identical_config_spec():
+    by_id = {e["id"]: e for e in CATALOG}
+    index_ids = ("ndvi", "evi", "savi", "mndwi", "nbr")
+    specs = [by_id[i]["config"] for i in index_ids]
+    assert all(spec == specs[0] for spec in specs)
+    assert specs[0]["year_max"] is None  # ask current_veg_index_years() live, not static
+    assert specs[0]["supported_combos"] == [("sentinel2", "cloud_score_plus")]
+
+
+def test_no_other_catalog_entry_declares_a_config():
+    no_config_ids = {
+        "hansen_gfc", "dynamic_world", "esa_worldcover",
+        "s2_browse", "s1_browse", "landsat_browse",
+        "sar", "landtrendr", "canopy_density", "satellite_timelapse",
+        "falsecolor_timelapse", "cultivated_area",
+    }
+    by_id = {e["id"]: e for e in CATALOG}
+    for analysis_id in no_config_ids:
+        assert "config" not in by_id[analysis_id], analysis_id

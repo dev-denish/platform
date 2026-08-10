@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from typing import Literal, NotRequired, TypedDict
 
+from app.domain.analysis_config import AnalysisConfigSpec
+
 AnalysisStatus = Literal["available", "in-development"]
 # Decided per entry from REAL measured timing (Wave: vegetation indices), not
 # guessed: "sync" analyses query a pre-built GEE dataset and return in a
@@ -44,7 +46,39 @@ class AnalysisCatalogEntry(TypedDict):
     # parameter-free as they've always been; this field is absent (falsy) on
     # all of them, not retrofitted.
     year_selectable: NotRequired[bool]
+    # Wave: analysis config and methodology. Present only on the 7 ids with
+    # something real to configure (io_lulc/modis_lulc/the 5 vegetation
+    # indices) - absent (not an empty dict) on the other 6, same "NotRequired
+    # means genuinely not applicable" convention `year_selectable` already
+    # uses. `GEEAnalysisService._prepare_refresh` gates on `"config" in
+    # entry` to decide whether to call `analysis_config.resolve_and_validate`
+    # at all.
+    config: NotRequired[AnalysisConfigSpec]
 
+
+# All 5 vegetation indices share the exact same real config surface (same
+# season window, same imagery-source/cloud-masking options, same single
+# implemented combination) - a shared reference rather than 5 repeated
+# literal dicts, since this is real structured config compared for equality
+# elsewhere (test_analysis_catalog.py), not prose that happens to look
+# similar. `year_max: None` = ask `current_veg_index_years()` live (the
+# ceiling moves every year); io_lulc/modis_lulc use a static year instead.
+_VEG_INDEX_CONFIG: AnalysisConfigSpec = {
+    "year_mode_default": "single",
+    "year_min": 2017,
+    "year_max": None,
+    "season_editable": True,
+    "season_start_default": "02-01",
+    "season_end_default": "05-31",
+    "imagery_sources": ["sentinel2", "landsat8", "landsat9"],
+    "cloud_masking_methods": ["cloud_score_plus", "qa_pixel", "none"],
+    # Landsat needs different cloud-masking (no Cloud Score+ equivalent) and
+    # risks a false trend-break at the sensor handoff year - out of scope
+    # for this wave (see gee_analysis_service.py's own _annual_index_series
+    # note). The UI still shows every real GEE option above; only this one
+    # combination is actually implemented.
+    "supported_combos": [("sentinel2", "cloud_score_plus")],
+}
 
 CATALOG: tuple[AnalysisCatalogEntry, ...] = (
     # --- Real (10 original + 3 Raw Imagery below = 13), status "available" ---
@@ -82,7 +116,14 @@ CATALOG: tuple[AnalysisCatalogEntry, ...] = (
         "category": "Land Cover",
         "status": "available",
         "execution": "sync",
-        "description": "10m annual land-cover class breakdown, 2017-present.",
+        "description": (
+            "10m annual land-cover class breakdown for a selected year (or range), "
+            "2017-2023."
+        ),
+        # Wave: analysis config and methodology. Every year in this range is
+        # already computed unconditionally on every refresh today (real,
+        # unnecessary GEE cost) - single-year default makes that opt-in.
+        "config": {"year_mode_default": "single", "year_min": 2017, "year_max": 2023},
     },
     {
         "id": "modis_lulc",
@@ -91,9 +132,11 @@ CATALOG: tuple[AnalysisCatalogEntry, ...] = (
         "status": "available",
         "execution": "sync",
         "description": (
-            "500m annual land-cover class breakdown, 2001-present (longest history; "
-            "coarse resolution - context/trend only, not microlandscape-scale)."
+            "500m annual land-cover class breakdown for a selected year (or range), "
+            "2001-2023 (longest history; coarse resolution - context/trend only, not "
+            "microlandscape-scale)."
         ),
+        "config": {"year_mode_default": "single", "year_min": 2001, "year_max": 2023},
     },
     {
         "id": "ndvi",
@@ -102,9 +145,10 @@ CATALOG: tuple[AnalysisCatalogEntry, ...] = (
         "status": "available",
         "execution": "async",
         "description": (
-            "Normalized Difference Vegetation Index, one value per year "
-            "(2017-present) from cloud-masked Sentinel-2 composites."
+            "Normalized Difference Vegetation Index for a selected year (or range, "
+            "2017-present) and season window, from cloud-masked Sentinel-2 composites."
         ),
+        "config": _VEG_INDEX_CONFIG,
     },
     {
         "id": "evi",
@@ -113,9 +157,10 @@ CATALOG: tuple[AnalysisCatalogEntry, ...] = (
         "status": "available",
         "execution": "async",
         "description": (
-            "Enhanced Vegetation Index, one value per year (2017-present) from "
-            "cloud-masked Sentinel-2 composites."
+            "Enhanced Vegetation Index for a selected year (or range, 2017-present) "
+            "and season window, from cloud-masked Sentinel-2 composites."
         ),
+        "config": _VEG_INDEX_CONFIG,
     },
     {
         "id": "savi",
@@ -124,9 +169,10 @@ CATALOG: tuple[AnalysisCatalogEntry, ...] = (
         "status": "available",
         "execution": "async",
         "description": (
-            "Soil-Adjusted Vegetation Index, one value per year (2017-present) from "
-            "cloud-masked Sentinel-2 composites."
+            "Soil-Adjusted Vegetation Index for a selected year (or range, "
+            "2017-present) and season window, from cloud-masked Sentinel-2 composites."
         ),
+        "config": _VEG_INDEX_CONFIG,
     },
     {
         "id": "mndwi",
@@ -135,9 +181,11 @@ CATALOG: tuple[AnalysisCatalogEntry, ...] = (
         "status": "available",
         "execution": "async",
         "description": (
-            "Modified Normalized Difference Water Index, one value per year "
-            "(2017-present) from cloud-masked Sentinel-2 composites."
+            "Modified Normalized Difference Water Index for a selected year (or "
+            "range, 2017-present) and season window, from cloud-masked Sentinel-2 "
+            "composites."
         ),
+        "config": _VEG_INDEX_CONFIG,
     },
     {
         "id": "nbr",
@@ -146,9 +194,10 @@ CATALOG: tuple[AnalysisCatalogEntry, ...] = (
         "status": "available",
         "execution": "async",
         "description": (
-            "Normalized Burn Ratio, one value per year (2017-present) from "
-            "cloud-masked Sentinel-2 composites."
+            "Normalized Burn Ratio for a selected year (or range, 2017-present) and "
+            "season window, from cloud-masked Sentinel-2 composites."
         ),
+        "config": _VEG_INDEX_CONFIG,
     },
     # --- Raw Imagery (3), status "available" - Wave: AOI clip / raw-imagery
     # browsing. Single-scene/same-family-mosaic browsing, no cloud-masked

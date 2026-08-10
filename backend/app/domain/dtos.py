@@ -656,6 +656,13 @@ class AnalysisCatalogEntryOut(BaseModel):
     # Wave: AOI clip / raw-imagery browsing. True only for the 3 "Raw
     # Imagery" entries - see analysis_catalog.py's own field docstring.
     year_selectable: bool = False
+    # Wave: analysis config and methodology. Present only for the 7 ids with
+    # something real to configure - see analysis_catalog.py's own `config`
+    # field docstring. `year_max: None` in the raw catalog spec (the 5
+    # indices) is overlaid with a LIVE value by
+    # GEEAnalysisService.list_catalog()/get_project_analyses() before this
+    # DTO is built, so the frontend always sees a real number, never `None`.
+    config: dict[str, Any] | None = None
 
 
 class ProjectAnalysisSummary(BaseModel):
@@ -668,6 +675,7 @@ class ProjectAnalysisSummary(BaseModel):
     status: str
     description: str
     year_selectable: bool = False
+    config: dict[str, Any] | None = None
     computed_at: datetime | None = None
 
 
