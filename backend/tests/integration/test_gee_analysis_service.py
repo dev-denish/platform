@@ -34,6 +34,7 @@ from app.domain.dtos import AnalysisPointValue, CurrentUser  # noqa: E402
 from app.domain.enums import Role  # noqa: E402
 from app.repositories.analysis_results import AnalysisResultRepository  # noqa: E402
 from app.repositories.datasets import DatasetRepository, LayerRepository  # noqa: E402
+from app.repositories.forest_definition import ForestDefinitionRepository  # noqa: E402
 from app.repositories.memberships import ProjectMembershipRepository  # noqa: E402
 from app.repositories.projects import ProjectRepository  # noqa: E402
 from app.repositories.users import UserRepository  # noqa: E402
@@ -405,6 +406,91 @@ def test_refresh_without_a_boundary_layer_is_a_validation_error(db, analysis_ser
         analysis_service.refresh(pid, "hansen_gfc", admin)
 
     assert fake_compute == []  # never called GEE with no AOI
+
+
+# ------------------------------------------ Wave: analysis config and methodology
+
+
+@pytest.mark.parametrize(
+    ("imagery_source", "cloud_masking"),
+    [
+        ("landsat8", "cloud_score_plus"),
+        ("landsat9", "cloud_score_plus"),
+        ("sentinel2", "qa_pixel"),
+        ("sentinel2", "none"),
+        ("landsat8", "qa_pixel"),
+    ],
+)
+def test_refresh_rejects_every_unsupported_source_masking_combo_before_reaching_gee(
+    db, analysis_service, fake_compute, imagery_source, cloud_masking
+):
+    """_prepare_refresh (shared by refresh() and enqueue_refresh()) resolves
+    and validates request_params BEFORE the routing-invariant assert - so
+    this is reachable via refresh() directly even for ndvi (an
+    "async"-execution id) without a fake job/runner harness: the
+    ValidationError fires before that assert is ever reached."""
+    admin = _make_user(db, Role.ADMINISTRATOR)
+    pid = _make_project(db, f"Proj-{uuid.uuid4()}")
+    _add_boundary(db, pid)
+
+    with pytest.raises(ValidationError) as exc_info:
+        analysis_service.refresh(
+            pid, "ndvi", admin,
+            request_params={"imagery_source": imagery_source, "cloud_masking": cloud_masking},
+        )
+
+    assert "isn't implemented yet" in exc_info.value.message
+    assert exc_info.value.status_code == 422
+    assert fake_compute == []  # rejected before ever reaching GEE
+
+
+def test_refresh_io_lulc_rejects_a_year_outside_its_domain(db, analysis_service, fake_compute):
+    admin = _make_user(db, Role.ADMINISTRATOR)
+    pid = _make_project(db, f"Proj-{uuid.uuid4()}")
+    _add_boundary(db, pid)
+
+    with pytest.raises(ValidationError) as exc_info:
+        analysis_service.refresh(pid, "io_lulc", admin, request_params={"year": 2030})
+
+    assert "between 2017 and 2023" in exc_info.value.message
+    assert fake_compute == []  # rejected before ever reaching GEE
+
+
+def test_refresh_ndvi_rejects_a_malformed_season_window(db, analysis_service, fake_compute):
+    admin = _make_user(db, Role.ADMINISTRATOR)
+    pid = _make_project(db, f"Proj-{uuid.uuid4()}")
+    _add_boundary(db, pid)
+
+    with pytest.raises(ValidationError) as exc_info:
+        analysis_service.refresh(pid, "ndvi", admin, request_params={"season_start": "bogus"})
+
+    assert "MM-DD" in exc_info.value.message
+    assert fake_compute == []
+
+
+def test_refresh_ndvi_with_a_supported_combo_reaches_compute_with_resolved_params(
+    db, analysis_service, fake_compute
+):
+    """The mirror image of the rejection tests above: a genuinely supported
+    combination is NOT rejected, and the exact resolved params (not the raw
+    request) reach `_compute`. Reads the real canopy_cover_pct rather than
+    assuming the seeded default - it's a single global setting other tests
+    in this same DB legitimately mutate (see test_forest_definition.py)."""
+    admin = _make_user(db, Role.ADMINISTRATOR)
+    pid = _make_project(db, f"Proj-{uuid.uuid4()}")
+    _add_boundary(db, pid)
+    with db.connection() as conn, conn.cursor() as cur:
+        canopy_cover_pct = float(ForestDefinitionRepository(cur).get()["canopy_cover_pct"])
+
+    result = analysis_service.refresh(
+        pid, "io_lulc", admin, request_params={"year": 2019}
+    )
+
+    assert result.analysis_id == "io_lulc"
+    assert result.resolved_params == {"year_mode": "single", "year": 2019}
+    assert fake_compute == [
+        ("io_lulc", canopy_cover_pct, {"year_mode": "single", "year": 2019})
+    ]
 
 
 @pytest.mark.parametrize("analysis_id", ["ndvi", "evi", "savi", "mndwi", "nbr"])

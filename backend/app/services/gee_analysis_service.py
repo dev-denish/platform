@@ -933,6 +933,23 @@ def _years_label(years: list[int]) -> str:
     return str(years[0]) if len(years) == 1 else f"{min(years)}-{max(years)}"
 
 
+def _land_cover_methodology(
+    dataset: str, years: list[int], years_available: tuple[int, int], resolution_m: int
+) -> dict[str, Any]:
+    """Pure - no `ee` involved - so this is unit-testable directly, unlike
+    _esri_lulc/_modis_lulc themselves (real `ee.Dictionary(...).getInfo()`
+    calls need a live authenticated GEE session, same constraint
+    tests/unit/test_gee_point_query.py's own docstring documents for
+    _compute_point). Every value here is user-facing: a spelled-out dataset
+    name, not the raw GEE collection id."""
+    return {
+        "dataset": dataset,
+        "years_computed": years,
+        "years_available": list(years_available),
+        "resolution_m": resolution_m,
+    }
+
+
 def _esri_lulc(
     boundary: ee.Geometry, years: list[int]
 ) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
@@ -978,12 +995,10 @@ def _esri_lulc(
             f"Computed for {_years_label(years)} (of {min(_ESRI_LULC_YEARS)}-"
             f"{max(_ESRI_LULC_YEARS)} available)."
         ),
-        "methodology": {
-            "dataset": "10m Annual Land Cover (Esri / Impact Observatory)",
-            "years_computed": years,
-            "years_available": [min(_ESRI_LULC_YEARS), max(_ESRI_LULC_YEARS)],
-            "resolution_m": 10,
-        },
+        "methodology": _land_cover_methodology(
+            "10m Annual Land Cover (Esri / Impact Observatory)",
+            years, (min(_ESRI_LULC_YEARS), max(_ESRI_LULC_YEARS)), 10,
+        ),
     }
 
     latest = _esri_lulc_year_mosaic(coll, max(years)).select("b1")
@@ -1045,12 +1060,10 @@ def _modis_lulc(
             "available). 500m resolution - much coarser than the 10m land-cover products "
             "above. Use for multi-year trend context, not microlandscape-scale area."
         ),
-        "methodology": {
-            "dataset": "MODIS Land Cover Type (MCD12Q1, IGBP classification)",
-            "years_computed": years,
-            "years_available": [min(_MODIS_YEARS), max(_MODIS_YEARS)],
-            "resolution_m": 500,
-        },
+        "methodology": _land_cover_methodology(
+            "MODIS Land Cover Type (MCD12Q1, IGBP classification)",
+            years, (min(_MODIS_YEARS), max(_MODIS_YEARS)), 500,
+        ),
     }
 
     latest = _modis_lulc_year_image(coll, max(years))
@@ -1250,6 +1263,39 @@ def _coverage_pct(covered_area_m2: float, boundary_area_m2: float) -> float:
     return round(min(100.0, max(0.0, 100.0 * covered_area_m2 / boundary_area_m2)), 1)
 
 
+def _veg_index_methodology(
+    imagery_source: str,
+    cloud_masking: str,
+    season_start_md: str,
+    season_end_md: str,
+    years: list[int],
+    formula_desc: str,
+) -> dict[str, Any]:
+    """Pure - no `ee` involved, unlike _annual_index_series itself - see
+    _land_cover_methodology's own docstring for why that separation matters
+    for unit-testability. `imagery_source`/`cloud_masking` are spelled out
+    in words only for the one real implemented pair (sentinel2/
+    cloud_score_plus); any other value (there is currently no other value
+    that reaches here - resolve_and_validate rejects it first) is passed
+    through as-is rather than mislabeled."""
+    return {
+        "imagery_source": (
+            "Sentinel-2 (COPERNICUS/S2_SR_HARMONIZED)"
+            if imagery_source == "sentinel2"
+            else imagery_source
+        ),
+        "cloud_masking": (
+            f"Cloud Score+ (cs_cdf ≥ {_VEG_CLOUD_THRESHOLD:g})"
+            if cloud_masking == "cloud_score_plus"
+            else cloud_masking
+        ),
+        "season_window": f"{season_start_md} to {season_end_md}",
+        "years_computed": years,
+        "formula": formula_desc,
+        "valid_range": list(_VEG_INDEX_HISTOGRAM_RANGE),
+    }
+
+
 def _annual_index_series(
     boundary: ee.Geometry, index_id: str, resolved: dict[str, Any] | None = None
 ) -> tuple[dict[str, Any], None, str]:
@@ -1430,22 +1476,9 @@ def _annual_index_series(
         # above. Every value here is the same real input already driving
         # `note`'s own prose, just structured for the UI panel to render
         # field-by-field instead of parsing free text.
-        "methodology": {
-            "imagery_source": (
-                "Sentinel-2 (COPERNICUS/S2_SR_HARMONIZED)"
-                if imagery_source == "sentinel2"
-                else imagery_source
-            ),
-            "cloud_masking": (
-                f"Cloud Score+ (cs_cdf ≥ {_VEG_CLOUD_THRESHOLD:g})"
-                if cloud_masking == "cloud_score_plus"
-                else cloud_masking
-            ),
-            "season_window": f"{season_start_md} to {season_end_md}",
-            "years_computed": years,
-            "formula": formula_desc,
-            "valid_range": list(_VEG_INDEX_HISTOGRAM_RANGE),
-        },
+        "methodology": _veg_index_methodology(
+            imagery_source, cloud_masking, season_start_md, season_end_md, years, formula_desc
+        ),
     }
     map_id = latest_image.visualize(min=-1, max=1, palette=_VEG_INDEX_PALETTE).getMapId()
     return stats, None, map_id["tile_fetcher"].url_format
