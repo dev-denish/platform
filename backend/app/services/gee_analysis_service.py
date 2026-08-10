@@ -112,6 +112,7 @@ from app.core.config import get_settings
 from app.core.db import Database
 from app.core.errors import DomainError, NotFoundError, ValidationError
 from app.core.logging import get_logger
+from app.domain import analysis_config
 from app.domain.analysis_catalog import CATALOG, get_catalog_entry
 from app.domain.authz import require_project_upload, require_project_view
 from app.domain.dtos import (
@@ -142,12 +143,11 @@ log = get_logger("dmrv.gee_analysis")
 
 AOI_CRS = "EPSG:32643"  # UTM 43N, Karnataka -- same convention as scripts/gee_phase1_agb_proxy.py
 
-# ponytail: fixed year lists rather than discovering each collection's actual
-# latest year server-side (an extra getInfo() per request for a number that
-# only changes once a year). Bump these annually, or add real "latest
-# available year" discovery if that becomes painful.
-_ESRI_LULC_YEARS = range(2017, 2024)
-_MODIS_YEARS = range(2001, 2024)
+# Wave: analysis config and methodology. Relocated to app/domain/analysis_config.py
+# (shared by the catalog and this compute path) - re-imported under their
+# original names here so every call site below is unchanged.
+_ESRI_LULC_YEARS = analysis_config._ESRI_LULC_YEARS
+_MODIS_YEARS = analysis_config._MODIS_YEARS
 
 
 class GEEAnalysisService:
@@ -912,10 +912,13 @@ def _modis_lulc(boundary: ee.Geometry) -> tuple[dict[str, Any], list[dict[str, A
 # ----------------------------------------------- vegetation/water/burn indices
 
 
-_VEG_SEASON_START_MD = "02-01"  # pre-monsoon window - same convention as
-_VEG_SEASON_END_MD = "05-31"  # scripts/gee_phase1_agb_proxy.py's usage example
-_VEG_CLOUD_BAND = "cs_cdf"
-_VEG_CLOUD_THRESHOLD = 0.60
+# Wave: analysis config and methodology. Relocated to
+# app/domain/analysis_config.py - re-imported under their original names
+# here so every call site below is unchanged.
+_VEG_SEASON_START_MD = analysis_config._VEG_SEASON_START_MD
+_VEG_SEASON_END_MD = analysis_config._VEG_SEASON_END_MD
+_VEG_CLOUD_BAND = analysis_config._VEG_CLOUD_BAND
+_VEG_CLOUD_THRESHOLD = analysis_config._VEG_CLOUD_THRESHOLD
 
 # All five indices (NDVI/EVI/SAVI/MNDWI/NBR) are defined on the same natural
 # range, ~-1..1 (already the assumption baked into this module's map-tile
@@ -946,41 +949,12 @@ _VEG_INDEX_PALETTE = [
     "d9ef8b", "a6d96a", "66bd63", "1a9850", "006837",
 ]
 
-_VEG_INDEX_FIRST_YEAR = 2017  # Sentinel-2 available since 2017
-
-
-def _current_veg_index_years(today: date | None = None) -> range:
-    """Which calendar years get a composite this call, evaluated FRESH every
-    time (a function, not a module-level constant frozen at import time) -
-    this service runs inside a long-lived worker process, so a constant
-    computed once at container start would freeze the "current year" at
-    whatever it was on startup and never pick up a new year becoming
-    eligible without a restart.
-
-    Excludes the current year until ITS OWN pre-monsoon window
-    (_VEG_SEASON_START_MD..._VEG_SEASON_END_MD, Feb-May) has fully closed:
-    from Jan 1 up to May 31 the current year's Feb-May ImageCollection is
-    either empty or only partially populated, and _s2_reflectance_composite's
-    `.median()` over zero images returns a bandless ee.Image - the
-    `_INDEX_FORMULAS` band math (`.select("B8")`/`.normalizedDifference(...)`)
-    then errors on that bandless image. Because `_annual_index_series`
-    batches every requested year into ONE `ee.Dictionary(...).getInfo()`
-    call, a single bad (not-yet-closed) year would fail the ENTIRE multi-year
-    series for all 5 indices at once, not just that year - so this excludes
-    it before it ever reaches the compute graph rather than trying to handle
-    a bandless image gracefully at reduce time.
-
-    `today` is an injectable parameter (defaults to `date.today()`) purely so
-    this is unit-testable against fixed boundary dates (Jan 1, May 31, Jun 1)
-    without patching the system clock - see
-    tests/unit/test_veg_index_years.py."""
-    if today is None:
-        today = date.today()
-    season_end_md = tuple(int(p) for p in _VEG_SEASON_END_MD.split("-"))  # (month, day)
-    last_eligible_year = today.year
-    if (today.month, today.day) < season_end_md:
-        last_eligible_year -= 1
-    return range(_VEG_INDEX_FIRST_YEAR, last_eligible_year + 1)
+# Wave: analysis config and methodology. Relocated to
+# app/domain/analysis_config.py (the catalog needs this too, to serve a live
+# `year_max` to the UI) - re-imported under their original names here so
+# every call site below is unchanged.
+_VEG_INDEX_FIRST_YEAR = analysis_config._VEG_INDEX_FIRST_YEAR
+_current_veg_index_years = analysis_config.current_veg_index_years
 
 
 def _s2_reflectance_composite(boundary: ee.Geometry, year: int) -> ee.Image:
