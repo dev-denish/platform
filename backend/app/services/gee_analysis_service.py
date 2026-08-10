@@ -941,11 +941,16 @@ def _land_cover_methodology(
     calls need a live authenticated GEE session, same constraint
     tests/unit/test_gee_point_query.py's own docstring documents for
     _compute_point). Every value here is user-facing: a spelled-out dataset
-    name, not the raw GEE collection id."""
+    name, not the raw GEE collection id. `years_available` is formatted as
+    a "min-max" range string, not a bare `[min, max]` list - caught by
+    manual UI review: the frontend's generic list renderer joins arrays
+    with ", ", so a 2-item list read as "2017, 2023" (two specific years),
+    not the range it actually means; `years_computed` stays a real list
+    since it's genuinely one-or-more individual years, not a range."""
     return {
         "dataset": dataset,
         "years_computed": years,
-        "years_available": list(years_available),
+        "years_available": f"{years_available[0]}-{years_available[1]}",
         "resolution_m": resolution_m,
     }
 

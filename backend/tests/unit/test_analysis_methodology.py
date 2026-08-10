@@ -65,7 +65,7 @@ def test_land_cover_methodology_reflects_the_requested_years_not_the_full_domain
         "10m Annual Land Cover (Esri / Impact Observatory)", [2019], (2017, 2023), 10
     )
     assert methodology["years_computed"] == [2019]
-    assert methodology["years_available"] == [2017, 2023]
+    assert methodology["years_available"] == "2017-2023"
     assert methodology["dataset"] == "10m Annual Land Cover (Esri / Impact Observatory)"
     assert methodology["resolution_m"] == 10
 

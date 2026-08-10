@@ -117,7 +117,13 @@ export async function apiFetch(path, options = {}) {
     } catch {
       /* non-JSON error body */
     }
-    throw new Error(message);
+    // Wave: analysis config and methodology. `.status` lets a caller tell
+    // "not computed with these exact settings yet" (404) apart from a real
+    // error without string-matching `message` - every pre-existing catch
+    // block only reads `.message`, so this is purely additive.
+    const err = new Error(message);
+    err.status = res.status;
+    throw err;
   }
   return res.status === 204 ? null : res.json();
 }

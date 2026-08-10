@@ -60,6 +60,62 @@ const POLL_INTERVAL_MS = 2000;
 const POLL_TIMEOUT_MS = 5 * 60 * 1000;
 const TERMINAL_STATUSES = ["succeeded", "failed", "dead_letter"];
 
+// Wave: analysis config and methodology. Wire values -> human labels for the
+// rejection hint only - the option `<select>`s render these same ids as
+// their own `<option>` text below, so a rejected combo's message uses the
+// exact words the user just picked from, not the raw wire id.
+const SOURCE_LABELS = { sentinel2: "Sentinel-2", landsat8: "Landsat 8", landsat9: "Landsat 9" };
+const MASKING_LABELS = {
+  cloud_score_plus: "Cloud Score+", qa_pixel: "QA_PIXEL", none: "No cloud masking",
+};
+
+/** Seeds `configParams` from a catalog entry's `config` block (backend-owned
+ * defaults/domain, see app/domain/analysis_catalog.py) - called once per
+ * selection change, same "reset on selected change" convention `browseYear`
+ * already follows just below. `{}` for an entry with no `config` at all
+ * (the 6 unconfigurable ids) - every reader below already guards on
+ * `selected.config` being present before looking at this. */
+function defaultConfigParams(config) {
+  if (!config) return {};
+  return {
+    yearMode: config.year_mode_default ?? "single",
+    year: config.year_max,
+    yearStart: config.year_min,
+    yearEnd: config.year_max,
+    seasonStart: config.season_start_default,
+    seasonEnd: config.season_end_default,
+    imagerySource: config.imagery_sources?.[0],
+    cloudMasking: config.cloud_masking_methods?.[0],
+  };
+}
+
+/** The inverse of the backend's `_analysis_config_query_params` dependency
+ * (app/api/v1/analyses.py) - only emits a key an entry's own `config`
+ * actually declares (season/source/masking are absent for io_lulc/
+ * modis_lulc), same "don't send what doesn't apply" rule the pre-existing
+ * browse-year query building already follows. */
+function buildConfigQuery(config, configParams) {
+  if (!config) return "";
+  const params = new URLSearchParams();
+  if (configParams.yearMode === "range") {
+    params.set("year_mode", "range");
+    if (configParams.yearStart != null) params.set("year_start", configParams.yearStart);
+    if (configParams.yearEnd != null) params.set("year_end", configParams.yearEnd);
+  } else if (configParams.year != null) {
+    params.set("year", configParams.year);
+  }
+  if (config.season_editable) {
+    if (configParams.seasonStart) params.set("season_start", configParams.seasonStart);
+    if (configParams.seasonEnd) params.set("season_end", configParams.seasonEnd);
+  }
+  if (config.imagery_sources) {
+    if (configParams.imagerySource) params.set("imagery_source", configParams.imagerySource);
+    if (configParams.cloudMasking) params.set("cloud_masking", configParams.cloudMasking);
+  }
+  const qs = params.toString();
+  return qs ? `?${qs}` : "";
+}
+
 /** The button's in-flight label. `runStatus` is only set on the async
  * (job-polling) path, and only once the first poll response lands - a sync
  * analysis, or the moment between click and that first poll, has nothing to
@@ -414,6 +470,53 @@ function IndexDistribution({ distribution }) {
   );
 }
 
+/** Wave: analysis config and methodology. A real, per-analysis methodology
+ * breakdown (`stats.methodology`, always a flat object of already-real,
+ * already-user-facing values - see app/services/gee_analysis_service.py's
+ * own methodology-builder functions) - closed by default (this is
+ * supplementary detail, not the primary result), reusing the exact
+ * `.layer-group-header`/`.collapsible-body` collapsible primitive
+ * `AnalysisGroup` above and `LayersPanel`/`ProjectMembers` elsewhere already
+ * use, and `.data-table` (HansenStats' own loss-by-year table) for the
+ * label/value rows - no new component category for this. One generic
+ * renderer for every analysis family, not one per shape, since the backend
+ * contract guarantees every value here is already a plain string/number/
+ * list a non-engineer can read. */
+function AnalysisMethodology({ methodology, analysisId }) {
+  const [open, toggle] = useCollapse(`collapse:analysis:methodology:${analysisId}`, false);
+  const rows = Object.entries(methodology).map(([key, value]) => [
+    key
+      .split("_")
+      .map((word) => word[0].toUpperCase() + word.slice(1))
+      .join(" "),
+    Array.isArray(value) ? value.join(", ") : String(value),
+  ]);
+  return (
+    <div className="layer-group">
+      <button type="button" className="layer-group-header" aria-expanded={open} onClick={toggle}>
+        <span className={`layer-group-chevron${open ? " layer-group-chevron-open" : ""}`} aria-hidden="true">
+          <ChevronDown size={16} strokeWidth={2} className="icon" />
+        </span>
+        Methodology
+      </button>
+      <div className="collapsible-body" data-open={open} inert={open ? undefined : ""}>
+        <div className="collapsible-body-inner">
+          <table className="data-table">
+            <tbody>
+              {rows.map(([label, value]) => (
+                <tr key={label}>
+                  <td>{label}</td>
+                  <td className="mono-cell">{value}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** Wave: partial coverage. Always rendered when `coverage_pct` is present
  * (even at 100%) - matches this file's own "stats.note is always shown,
  * never hidden behind a tooltip" rule below. `partial` (< 90%) switches to
@@ -447,6 +550,9 @@ function AnalysisStats({ result }) {
       {stats.series ? <IndexTrendChart series={stats.series} /> : null}
       {stats.distribution ? <IndexDistribution distribution={stats.distribution} /> : null}
       {stats.note ? <p className="analysis-note">{stats.note}</p> : null}
+      {stats.methodology ? (
+        <AnalysisMethodology methodology={stats.methodology} analysisId={result.analysis_id} />
+      ) : null}
     </>
   );
 }
@@ -464,6 +570,15 @@ export default function AnalysisPanel({ projectId, layers, onRefreshLayers, onLe
   // catalog entries - "latest" (no `year` query param at all) matches every
   // other analysis's existing parameter-free refresh request exactly.
   const [browseYear, setBrowseYear] = useState("latest");
+  // Wave: analysis config and methodology. Only meaningful for the 7
+  // catalog entries with a real `config` block - seeded from that entry's
+  // own defaults on every selection change, same reset convention
+  // `browseYear` already follows just below. Clicking Run always POSTs
+  // whatever's currently here - there's no separate "check if this variant
+  // is already cached" probe, the backend's own Redis cache (Wave: GEE tile
+  // caching) already makes a repeat request for the same resolved params
+  // cheap without the frontend needing to guess first.
+  const [configParams, setConfigParams] = useState({});
 
   // Race guard for the async (job-polling) path below: if the user switches
   // to a different analysis while one is still polling (can take a minute+
@@ -498,6 +613,7 @@ export default function AnalysisPanel({ projectId, layers, onRefreshLayers, onLe
     setResult(null);
     setResultError(null);
     setBrowseYear("latest");
+    setConfigParams(defaultConfigParams(selected?.config));
     if (!selected || selected.status !== "available" || !selected.computed_at) return undefined;
     let cancelled = false;
     (async () => {
@@ -524,6 +640,30 @@ export default function AnalysisPanel({ projectId, layers, onRefreshLayers, onLe
     const currentYear = new Date().getFullYear();
     return Array.from({ length: 8 }, (_, i) => currentYear - i);
   }, []);
+
+  // Wave: analysis config and methodology. `year_max` is always a real,
+  // live number by the time it reaches here for the 5 indices too - the
+  // backend overlays current_veg_index_years()'s real ceiling before
+  // serializing (see GEEAnalysisService.list_catalog), so this never has to
+  // guess or hardcode an eligibility cutoff itself.
+  const configYearOptions = useMemo(() => {
+    if (!selected?.config) return [];
+    const { year_min, year_max } = selected.config;
+    const opts = [];
+    for (let y = year_max; y >= year_min; y--) opts.push(y);
+    return opts;
+  }, [selected]);
+
+  // No network call - a pure client-side check against the same
+  // supported_combos the backend will otherwise reject with a specific
+  // reason, so an unsupported pick is caught before Run is even clickable,
+  // not after a wasted request.
+  const comboAllowed = useMemo(() => {
+    if (!selected?.config?.supported_combos) return true;
+    return selected.config.supported_combos.some(
+      ([source, masking]) => source === configParams.imagerySource && masking === configParams.cloudMasking
+    );
+  }, [selected, configParams]);
 
   const groups = useMemo(() => {
     const out = [];
@@ -552,10 +692,13 @@ export default function AnalysisPanel({ projectId, layers, onRefreshLayers, onLe
     try {
       // Wave: raw-imagery browsing. "latest" (the default) omits `year`
       // entirely - every non-year_selectable analysis's request is
-      // unaffected, exactly as parameter-free as before.
+      // unaffected, exactly as parameter-free as before. Mutually exclusive
+      // with configQuery below - no catalog entry is ever both
+      // year_selectable AND config-bearing.
       const yearParam = selected.year_selectable && browseYear !== "latest" ? `?year=${browseYear}` : "";
+      const configQuery = selected.config ? buildConfigQuery(selected.config, configParams) : "";
       const data = await apiFetch(
-        `/projects/${projectId}/analyses/${analysisId}/refresh${yearParam}`,
+        `/projects/${projectId}/analyses/${analysisId}/refresh${yearParam || configQuery}`,
         { method: "POST" }
       );
       let final = data;
@@ -642,8 +785,140 @@ export default function AnalysisPanel({ projectId, layers, onRefreshLayers, onLe
             </select>
           </label>
         ) : null}
+        {canRun && selected.config ? (
+          <>
+            <label className="analysis-year-select">
+              <span>Years</span>
+              <select
+                className="map-toolbar-select"
+                value={configParams.yearMode ?? "single"}
+                onChange={(e) => setConfigParams((p) => ({ ...p, yearMode: e.target.value }))}
+                disabled={running}
+              >
+                <option value="single">Single year</option>
+                <option value="range">Year range</option>
+              </select>
+            </label>
+            {configParams.yearMode === "range" ? (
+              <>
+                <label className="analysis-year-select">
+                  <span>From</span>
+                  <select
+                    className="map-toolbar-select"
+                    value={configParams.yearStart ?? ""}
+                    onChange={(e) => setConfigParams((p) => ({ ...p, yearStart: Number(e.target.value) }))}
+                    disabled={running}
+                  >
+                    {configYearOptions.map((y) => (
+                      <option key={y} value={y}>{y}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="analysis-year-select">
+                  <span>To</span>
+                  <select
+                    className="map-toolbar-select"
+                    value={configParams.yearEnd ?? ""}
+                    onChange={(e) => setConfigParams((p) => ({ ...p, yearEnd: Number(e.target.value) }))}
+                    disabled={running}
+                  >
+                    {configYearOptions.map((y) => (
+                      <option key={y} value={y}>{y}</option>
+                    ))}
+                  </select>
+                </label>
+              </>
+            ) : (
+              <label className="analysis-year-select">
+                <span>Year</span>
+                <select
+                  className="map-toolbar-select"
+                  value={configParams.year ?? ""}
+                  onChange={(e) => setConfigParams((p) => ({ ...p, year: Number(e.target.value) }))}
+                  disabled={running}
+                >
+                  {configYearOptions.map((y) => (
+                    <option key={y} value={y}>{y}</option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {selected.config.season_editable ? (
+              <>
+                <label className="analysis-year-select">
+                  <span>Season start</span>
+                  <input
+                    type="text"
+                    className="map-toolbar-select"
+                    placeholder="MM-DD"
+                    pattern="\d{2}-\d{2}"
+                    value={configParams.seasonStart ?? ""}
+                    onChange={(e) => setConfigParams((p) => ({ ...p, seasonStart: e.target.value }))}
+                    disabled={running}
+                  />
+                </label>
+                <label className="analysis-year-select">
+                  <span>Season end</span>
+                  <input
+                    type="text"
+                    className="map-toolbar-select"
+                    placeholder="MM-DD"
+                    pattern="\d{2}-\d{2}"
+                    value={configParams.seasonEnd ?? ""}
+                    onChange={(e) => setConfigParams((p) => ({ ...p, seasonEnd: e.target.value }))}
+                    disabled={running}
+                  />
+                </label>
+              </>
+            ) : null}
+            {selected.config.imagery_sources ? (
+              <>
+                <label className="analysis-year-select">
+                  <span>Imagery source</span>
+                  <select
+                    className="map-toolbar-select"
+                    value={configParams.imagerySource ?? ""}
+                    onChange={(e) => setConfigParams((p) => ({ ...p, imagerySource: e.target.value }))}
+                    disabled={running}
+                  >
+                    {selected.config.imagery_sources.map((source) => (
+                      <option key={source} value={source}>{SOURCE_LABELS[source] ?? source}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="analysis-year-select">
+                  <span>Cloud masking</span>
+                  <select
+                    className="map-toolbar-select"
+                    value={configParams.cloudMasking ?? ""}
+                    onChange={(e) => setConfigParams((p) => ({ ...p, cloudMasking: e.target.value }))}
+                    disabled={running}
+                  >
+                    {selected.config.cloud_masking_methods.map((masking) => (
+                      <option key={masking} value={masking}>{MASKING_LABELS[masking] ?? masking}</option>
+                    ))}
+                  </select>
+                </label>
+              </>
+            ) : null}
+            {!comboAllowed ? (
+              <p className="field-hint field-hint-error">
+                This combination isn't supported yet — only{" "}
+                {SOURCE_LABELS[selected.config.supported_combos[0][0]] ?? selected.config.supported_combos[0][0]}
+                {" + "}
+                {MASKING_LABELS[selected.config.supported_combos[0][1]] ?? selected.config.supported_combos[0][1]}
+                {" is implemented."}
+              </p>
+            ) : null}
+          </>
+        ) : null}
         {canRun ? (
-          <button type="button" className="primary-button" disabled={running} onClick={runAnalysis}>
+          <button
+            type="button"
+            className="primary-button"
+            disabled={running || (selected.config && !comboAllowed)}
+            onClick={runAnalysis}
+          >
             {running ? runningLabel(runStatus) : result ? "Refresh" : "Run analysis"}
           </button>
         ) : null}
