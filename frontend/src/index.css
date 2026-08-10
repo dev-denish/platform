@@ -635,8 +635,18 @@ button:not(:disabled):active,
   margin-left: 6px;
 }
 
-.checkbox-field {
+/* label.checkbox-field (not just .checkbox-field), WITH an explicit
+   flex-direction: several call sites (UploadPage.jsx,
+   AddExternalLayerDialog.jsx, ReportGenerator.jsx) combine this class with
+   .field, whose flex-direction: column is a separate property declaration
+   that keeps applying regardless of this rule's specificity UNLESS this
+   rule also sets flex-direction itself - a higher-specificity selector only
+   wins the properties it actually declares, it doesn't blank out every
+   other matching rule. Without this, the checkbox silently stacked above
+   its label text instead of beside it. */
+label.checkbox-field {
   display: flex;
+  flex-direction: row;
   align-items: center;
   gap: 6px;
   font-size: 13px;
