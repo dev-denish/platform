@@ -36,6 +36,8 @@ from app.core.db import Database  # noqa: E402
 from app.core.security import create_access_token  # noqa: E402
 from app.domain.enums import Role  # noqa: E402
 from app.main import create_app  # noqa: E402
+from app.repositories.memberships import ProjectMembershipRepository  # noqa: E402
+from app.repositories.projects import ProjectRepository  # noqa: E402
 from app.repositories.users import UserRepository  # noqa: E402
 from app.services.ingestion.storage import LocalStorage  # noqa: E402
 
@@ -215,12 +217,30 @@ def test_creating_external_layer_on_a_non_allowlisted_domain_is_rejected(db, cli
 
 
 def test_creating_external_layer_on_an_allowlisted_domain_succeeds(db, client):
+    # Wave: WMS project-name footgun fix. Real usage (AddExternalLayerDialog)
+    # always names a project that's already open on-screen, so the project
+    # must already exist here too - unlike /datasets/upload, this endpoint no
+    # longer find-or-creates on a fresh name (see test_wms_project_name_footgun.py
+    # for the mismatched-name/no-duplicate-project coverage this implies).
     admin_token = _make_token(db, Role.ADMINISTRATOR)
-    gis_token = _make_token(db, Role.GIS_ASSOCIATE)
     domain = f"geo-{uuid.uuid4().hex[:8]}.example.com"
     client.post("/api/v1/wms-domains", json={"domain": domain}, headers=_auth(admin_token))
+    project_name = f"WMS Project {uuid.uuid4()}"
+    gis_username = f"wmstest-{uuid.uuid4()}"
+    with db.transaction() as cur:
+        project_id, _ = ProjectRepository(cur).find_or_create_by_name(project_name, "Karnataka")
+        gis_row = UserRepository(cur).upsert(gis_username, "x", Role.GIS_ASSOCIATE.value)
+        ProjectMembershipRepository(cur).add(
+            project_id=project_id, user_id=gis_row["user_id"], role=Role.GIS_ASSOCIATE,
+            added_by=gis_row["user_id"],
+        )
+    settings = get_settings()
+    gis_token = create_access_token(
+        settings, user_id=str(gis_row["user_id"]), username=gis_username,
+        role=Role.GIS_ASSOCIATE.value,
+    )
     body = {
-        "project_name": f"WMS Project {uuid.uuid4()}", "region": "Karnataka",
+        "project_name": project_name, "region": "Karnataka",
         "domain": domain, "service_kind": "wms", "path": "/geoserver/wms",
         "layer_name": "test:layer",
     }

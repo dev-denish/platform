@@ -45,10 +45,17 @@ def create_external_layer(
     # project resolution is by NAME, exactly like /datasets/upload, since
     # WmsService.create_external_layer shares that find-or-create path);
     # it plays no role in the actual creation logic below.
+    #
+    # create_new_project=False (Wave: WMS project-name footgun fix): unlike
+    # /datasets/upload, this endpoint's project_name is never free text -
+    # AddExternalLayerDialog always sends the name of the project the caller
+    # already has open. A mismatch here can only mean stale client state, so
+    # it must error instead of silently forking a duplicate project; there is
+    # no legitimate case for creating a new one through this endpoint.
     layer_id = svc.create_external_layer(
         project_name=body.project_name, region=body.region, domain=body.domain,
         service_kind=body.service_kind, path=body.path, layer_name=body.layer_name,
-        actor=user, is_reference=body.is_reference,
+        actor=user, is_reference=body.is_reference, create_new_project=False,
     )
     return {"layer_id": str(layer_id)}
 

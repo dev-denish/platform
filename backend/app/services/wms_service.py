@@ -108,6 +108,7 @@ class WmsService:
     def create_external_layer(
         self, *, project_name: str, region: str, domain: str, service_kind: str,
         path: str, layer_name: str, actor: CurrentUser, is_reference: bool = False,
+        create_new_project: bool = True,
     ) -> UUID:
         """Returns the new layer_id. Domain is checked against the allow-list
         HERE too (not just at proxy-fetch time) so a non-approved domain is
@@ -120,7 +121,16 @@ class WmsService:
         Wave: Reference Layer Library - `is_reference=True` skips per-project
         membership entirely (same reasoning as IngestionService._resolve_project)
         and always lands in the one shared library project, regardless of
-        `project_name`/`region`."""
+        `project_name`/`region`.
+
+        `create_new_project` (Wave: WMS project-name footgun fix, same shape as
+        upload's - see project_access.resolve_project_for_upload) defaults True
+        here so any other/future caller of this method is unaffected; the real
+        HTTP entry point (api/v1/external_layers.py) is the one place that
+        passes False, since that endpoint's project_name always comes from the
+        project the caller already has open (ProjectDetailPage), never free
+        text - a stale/mismatched name there should error, not fork a
+        duplicate."""
         domain = domain.strip().lower()
         path = path if path.startswith("/") or not path else f"/{path}"
         base_url = f"https://{domain}{path}"
@@ -133,7 +143,8 @@ class WmsService:
                 resolve_reference_library_project(cur)
                 if is_reference
                 else resolve_project_for_upload(
-                    cur, project_name=project_name, region=region, actor=actor
+                    cur, project_name=project_name, region=region, actor=actor,
+                    create_new_project=create_new_project,
                 )
             )
             batch_id = uuid.uuid4()
