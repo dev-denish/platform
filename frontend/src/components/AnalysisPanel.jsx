@@ -52,6 +52,15 @@ import ProjectMap from "./ProjectMap.jsx";
  * are additive to the existing `stats.series` trend chart, not a
  * replacement for it - the raw per-year numbers stay exactly where they
  * were.
+ *
+ * Wave: compute-source toggle. A `computeSource` selector ("gee" | "vnv")
+ * sits above the registry list and regroups it, entirely client-side - it
+ * never changes what's fetched from `GET /projects/{id}/analyses` or what
+ * `runAnalysis` sends. "gee" shows the same live catalog entries as before,
+ * regrouped into three buckets by execution mode instead of the backend's
+ * raw `category`. "vnv" swaps in a small hardcoded preview list (the VNV
+ * Pipeline isn't live yet) that can never be selected for a real run - see
+ * VNV_PREVIEW_ENTRIES and the Run-button gating in renderResults below.
  */
 
 // Same polling pattern as UploadPage.jsx's job-status wait - job-kind
@@ -123,6 +132,51 @@ function buildConfigQuery(config, configParams) {
 function runningLabel(runStatus) {
   return runStatus === "queued" ? "Queued…" : "Computing…";
 }
+
+/** Wave: compute-source toggle. Regroups a live, `status: "available"`
+ * catalog entry for display only when `computeSource === "gee"` - the real
+ * `category` field (and everything else on the entry) is untouched, so
+ * config/methodology/run wiring downstream never has to know this
+ * regrouping happened. Raw Imagery is checked first because its 3 entries
+ * are also "sync", same as the 5 land-cover ones - execution mode alone
+ * can't tell them apart. */
+function geeGroupFor(entry) {
+  if (entry.category === "Raw Imagery") return "Raw Imagery";
+  return entry.execution === "async" ? "Compute — Sentinel-2 Composite" : "Instant Query";
+}
+
+/** Wave: compute-source toggle. The VNV Pipeline isn't live yet (see
+ * app/domain/analysis_catalog.py's own in-development entries) - this is a
+ * frontend-only preview list, never sent to any API call, so it renders
+ * through the exact same `.analysis-row-muted` / "isn't built yet" empty
+ * state every other in-development catalog entry already gets. Ids are
+ * `vnv_`-prefixed so they can never collide with a real catalog id. */
+const VNV_PREVIEW_ENTRIES = [
+  {
+    id: "vnv_ndfi",
+    name: "NDFI — Spectral Unmixing",
+    category: "VM0047 Compute — ForesToolboxRS",
+    status: "in-development",
+    description:
+      "Normalized Difference Fraction Index unmixes each pixel into soil, vegetation, and shade fractions, surfacing subtle canopy disturbance for VM0047 forest-degradation monitoring.",
+  },
+  {
+    id: "vnv_stocking_index",
+    name: "Stocking Index",
+    category: "VM0047 Compute — ForesToolboxRS",
+    status: "in-development",
+    description:
+      "Estimates per-plot stem density and canopy stocking from ForesToolboxRS outputs, flagging under-stocked areas ahead of VM0047 field verification.",
+  },
+  {
+    id: "vnv_control_plot_matching",
+    name: "Control Plot Matching",
+    category: "VM0047 Compute — ForesToolboxRS",
+    status: "in-development",
+    description:
+      "Pairs project plots with statistically similar control-area plots outside the project boundary, supporting VM0047's additionality and leakage comparisons.",
+  },
+];
 
 /** Rows are keyed on the analysis id; a whole result object is only ever
  * fetched for the one currently selected. */
@@ -566,6 +620,9 @@ export default function AnalysisPanel({ projectId, layers, onRefreshLayers, onLe
   const [resultError, setResultError] = useState(null);
   const [running, setRunning] = useState(false);
   const [runStatus, setRunStatus] = useState(null); // async-job status while polling, else null
+  // Wave: compute-source toggle. "gee" (the live catalog, as before) or
+  // "vnv" (the frontend-only preview list, VNV_PREVIEW_ENTRIES above).
+  const [computeSource, setComputeSource] = useState("gee");
   // Wave: raw-imagery browsing. Only meaningful for the 3 year_selectable
   // catalog entries - "latest" (no `year` query param at all) matches every
   // other analysis's existing parameter-free refresh request exactly.
@@ -604,7 +661,19 @@ export default function AnalysisPanel({ projectId, layers, onRefreshLayers, onLe
     };
   }, [projectId]);
 
-  const selected = entries?.find((e) => e.id === selectedId) ?? null;
+  // Wave: compute-source toggle. "gee" filters the live catalog down to
+  // `status: "available"` and regroups it (geeGroupFor) for display; "vnv"
+  // ignores `entries` entirely in favour of the frontend-only preview list.
+  // Everything downstream (selected, groups, config panel, methodology,
+  // runAnalysis) reads from this instead of raw `entries`.
+  const visibleEntries = useMemo(() => {
+    if (computeSource === "vnv") return VNV_PREVIEW_ENTRIES;
+    return (entries ?? [])
+      .filter((e) => e.status === "available")
+      .map((e) => ({ ...e, category: geeGroupFor(e) }));
+  }, [entries, computeSource]);
+
+  const selected = visibleEntries.find((e) => e.id === selectedId) ?? null;
 
   // Only ever fetched when the list already says there IS a cached result -
   // `computed_at` is authoritative, so a plain 404 (never computed) never
@@ -667,13 +736,13 @@ export default function AnalysisPanel({ projectId, layers, onRefreshLayers, onLe
 
   const groups = useMemo(() => {
     const out = [];
-    for (const e of entries ?? []) {
+    for (const e of visibleEntries) {
       const group = out.find((g) => g.category === e.category);
       if (group) group.entries.push(e);
       else out.push({ category: e.category, entries: [e] });
     }
     return out;
-  }, [entries]);
+  }, [visibleEntries]);
 
   /** Real GEE compute. Two shapes come back from POST refresh, depending on
    * the catalog entry's execution mode (app/domain/analysis_catalog.py):
@@ -738,19 +807,38 @@ export default function AnalysisPanel({ projectId, layers, onRefreshLayers, onLe
   const canRun = user && canUpload(user.role);
 
   function renderResults() {
+    // Wave: compute-source toggle. Shown regardless of whether a VNV entry
+    // is selected - none of them can ever have a result, so this reads
+    // above whichever empty state below ends up firing, not instead of it.
+    const vnvDevNote =
+      computeSource === "vnv" ? (
+        <div className="sample-data-banner">
+          VNV Pipeline is still in development — you can preview which analyses will be available, but runs aren't
+          live yet.
+        </div>
+      ) : null;
     if (!selected) {
-      return <EmptyState title="Select an analysis" detail="Pick one from the list to see its results here." />;
+      return (
+        <>
+          {vnvDevNote}
+          <EmptyState title="Select an analysis" detail="Pick one from the list to see its results here." />
+        </>
+      );
     }
     if (selected.status !== "available") {
       return (
-        <EmptyState
-          title="This analysis isn't built yet"
-          detail={`${selected.description} It's listed so you can see it's planned - nothing has been computed.`}
-        />
+        <>
+          {vnvDevNote}
+          <EmptyState
+            title="This analysis isn't built yet"
+            detail={`${selected.description} It's listed so you can see it's planned - nothing has been computed.`}
+          />
+        </>
       );
     }
     return (
       <>
+        {vnvDevNote}
         <p className="analysis-description">{selected.description}</p>
         {resultError ? <p className="field-hint field-hint-error">{resultError}</p> : null}
         {result ? (
@@ -916,10 +1004,16 @@ export default function AnalysisPanel({ projectId, layers, onRefreshLayers, onLe
           <button
             type="button"
             className="primary-button"
-            disabled={running || (selected.config && !comboAllowed)}
-            onClick={runAnalysis}
+            disabled={computeSource === "vnv" ? true : running || (selected.config && !comboAllowed)}
+            onClick={computeSource === "vnv" ? undefined : runAnalysis}
           >
-            {running ? runningLabel(runStatus) : result ? "Refresh" : "Run analysis"}
+            {computeSource === "vnv"
+              ? "Coming Soon"
+              : running
+                ? runningLabel(runStatus)
+                : result
+                  ? "Refresh"
+                  : "Run analysis"}
           </button>
         ) : null}
       </>
@@ -931,8 +1025,59 @@ export default function AnalysisPanel({ projectId, layers, onRefreshLayers, onLe
       <ErrorBanner message={listError} />
       <div className="analysis-layout">
         <aside className="analysis-column">
+          {/* Wave: compute-source toggle. Cards, not a <select> - selecting
+              either resets `selectedId` (the existing "selected became
+              null" effects already clear result/configParams/etc, no need
+              to duplicate that here). */}
+          <div className="compute-source-section">
+            <div className="compute-source-title">Compute source</div>
+            <div className="compute-source-cards">
+              <button
+                type="button"
+                className={`compute-source-card${
+                  computeSource === "gee" ? " compute-source-card-active" : ""
+                }`}
+                aria-pressed={computeSource === "gee"}
+                onClick={() => {
+                  setComputeSource("gee");
+                  setSelectedId(null);
+                }}
+              >
+                <span className="compute-source-card-top">
+                  <span className="compute-source-card-name">Google Earth Engine</span>
+                  <span className="role-badge">LIVE</span>
+                </span>
+                <span className="compute-source-card-meta">ee-kdenish4 · noncommercial account</span>
+              </button>
+              <button
+                type="button"
+                className={`compute-source-card${
+                  computeSource === "vnv" ? " compute-source-card-active" : ""
+                }`}
+                aria-pressed={computeSource === "vnv"}
+                onClick={() => {
+                  setComputeSource("vnv");
+                  setSelectedId(null);
+                }}
+              >
+                <span className="compute-source-card-top">
+                  <span className="compute-source-card-name">VNV Pipeline</span>
+                  <span className="role-badge">IN DEVELOPMENT</span>
+                </span>
+                <span className="compute-source-card-meta">CDSE + Landsat C2 · ForesToolboxRS</span>
+                <span className="compute-source-card-desc">
+                  Self-hosted pipeline sourced directly from Copernicus &amp; USGS, built for VM0047 production use.
+                </span>
+              </button>
+            </div>
+          </div>
           <div className="analysis-column-title">Analyses</div>
           <div className="analysis-column-body">
+            <p className="compute-source-sublabel">
+              {computeSource === "gee"
+                ? "Showing analyses available via Google Earth Engine."
+                : "Showing analyses available via VNV Pipeline."}
+            </p>
             {groups.map((g) => (
               <AnalysisGroup
                 key={g.category}

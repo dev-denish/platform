@@ -2897,6 +2897,86 @@ label.checkbox-field {
   color: var(--text-muted);
 }
 
+/* Wave: compute-source toggle. Two selectable cards (not a native <select>)
+   above the registry list - the active card reuses the exact accent-wash
+   treatment .analysis-row-active already established for "this is the
+   selected one", so both selections in this column read the same way. */
+.compute-source-section {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.compute-source-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-faint);
+}
+
+.compute-source-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.compute-source-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.compute-source-card:hover {
+  background: var(--surface-hover);
+}
+
+.compute-source-card-active {
+  background: var(--accent-wash);
+  border-color: var(--accent);
+}
+
+.compute-source-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.compute-source-card-name {
+  font-weight: 500;
+  font-size: 12.5px;
+}
+
+.compute-source-card-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.compute-source-card-desc {
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.compute-source-sublabel {
+  margin: 0 0 6px;
+  padding: 0 12px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
 /* Dataset caveats (stats.note) - always visible, small, never a tooltip. */
 .analysis-note {
   margin: 0;
