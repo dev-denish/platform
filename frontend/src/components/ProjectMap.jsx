@@ -507,6 +507,53 @@ export default function ProjectMap({
   // features_url (GET /layers/{id}/geojson or the WFS proxy) and cached here,
   // unlike raster tiles which stream themselves through <TileLayer>.
   const [vectorData, setVectorData] = useState({});
+  // Wave: Admin Boundaries. The Village layer (requires_district_scope) is
+  // never auto-fetched into vectorData (see the effect below, which
+  // excludes it) - a user picks a district first, via this state. layer_id
+  // -> selected district_lgd_code (string). villageCoverage is the
+  // "boundary not available" list for that same (layer_id, district)
+  // pair - a separate fetch (GET /layers/{id}/village-coverage), not
+  // derivable from vectorData alone since a village with no polygon never
+  // appears in the GeoJSON response at all.
+  const [districtScope, setDistrictScope] = useState({});
+  const [villageCoverage, setVillageCoverage] = useState({});
+  const [adminDistricts, setAdminDistricts] = useState([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await apiFetch("/admin-boundaries/districts");
+        if (!cancelled) setAdminDistricts(data);
+      } catch {
+        // District picker just stays empty - no Village layer is on this
+        // project anyway unless it's an Admin Boundaries reference layer.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const selectVillageDistrict = useCallback(async (layerId, districtLgdCode) => {
+    setDistrictScope((prev) => ({ ...prev, [layerId]: districtLgdCode }));
+    if (!districtLgdCode) return;
+    try {
+      const [geojson, coverage] = await Promise.all([
+        apiFetch(`/layers/${layerId}/geojson?district_lgd_code=${encodeURIComponent(districtLgdCode)}`),
+        apiFetch(`/layers/${layerId}/village-coverage?district_lgd_code=${encodeURIComponent(districtLgdCode)}`),
+      ]);
+      setVectorData((prev) => ({ ...prev, [layerId]: geojson }));
+      setVillageCoverage((prev) => ({ ...prev, [layerId]: coverage }));
+    } catch {
+      setVectorData((prev) => ({ ...prev, [layerId]: null }));
+      setVillageCoverage((prev) => {
+        const next = { ...prev };
+        delete next[layerId];
+        return next;
+      });
+    }
+  }, []);
 
   // Wave: tile-expiry UX. Proactive refresh is the PRIMARY defense (see this
   // component's docstring) - re-mints fresh layer/tile tokens on a timer, well
@@ -534,7 +581,14 @@ export default function ProjectMap({
   }, []);
 
   useEffect(() => {
-    const toFetch = layers.filter((l) => l.features_url && !(l.layer_id in vectorData));
+    // requires_district_scope (Wave: Admin Boundaries) - excluded here on
+    // purpose: this layer has no whole-layer response at all (a Village
+    // layer can be hundreds of thousands of features), it's only ever
+    // fetched district-scoped, via selectVillageDistrict above once a user
+    // actually picks one.
+    const toFetch = layers.filter(
+      (l) => l.features_url && !l.requires_district_scope && !(l.layer_id in vectorData)
+    );
     if (toFetch.length === 0) return undefined;
     let cancelled = false;
     (async () => {
@@ -1214,6 +1268,10 @@ export default function ProjectMap({
                 onRefreshLayers={onRefreshLayers}
                 onLegendChanged={onLegendChanged}
                 projectId={projectId}
+                adminDistricts={adminDistricts}
+                districtScope={districtScope}
+                villageCoverage={villageCoverage}
+                onSelectVillageDistrict={selectVillageDistrict}
               />
             ) : null}
             <MeasureTools

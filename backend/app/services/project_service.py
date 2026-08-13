@@ -191,6 +191,7 @@ class ProjectService:
                 date_processed=str(r["date_processed"]) if r["date_processed"] else None,
                 tile_url_template=self._tile_url_template_for(r, external_by_layer),
                 features_url=self._features_url(r["layer_id"], r["layer_kind"]),
+                requires_district_scope=r["requires_district_scope"],
                 band_count=self._band_count(r["band_count"], r["cog_key"]),
                 class_legend=r["class_legend"],
                 source=r["source"],

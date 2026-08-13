@@ -23,6 +23,7 @@ from app.core.errors import AuthError, ForbiddenError
 from app.domain.dtos import CurrentUser
 from app.domain.enums import Role
 from app.services.adhoc_layer_service import AdhocLayerService
+from app.services.admin_boundary_service import AdminBoundaryService
 from app.services.auth_service import AuthService
 from app.services.dataset_delete_service import DatasetDeleteService
 from app.services.forest_definition_service import ForestDefinitionService
@@ -118,6 +119,10 @@ def get_job_service(
 
 def get_vector_layer_service(db: Annotated[Database, Depends(get_db)]) -> VectorLayerService:
     return VectorLayerService(db)
+
+
+def get_admin_boundary_service(db: Annotated[Database, Depends(get_db)]) -> AdminBoundaryService:
+    return AdminBoundaryService(db)
 
 
 def get_wms_service(

@@ -284,6 +284,13 @@ class LayerOut(BaseModel):
     # embedded inline here: a layer can hold thousands of features, and this
     # response is fetched on every project-detail page load.
     features_url: str | None = None
+    # Wave: Admin Boundaries. True only for the Village layer (see
+    # spatial_layer.requires_district_scope, 0019_admin_boundaries) - the
+    # frontend must NOT eager-fetch features_url for this layer the way it
+    # does for every other vector layer (whole-country Village geometry is
+    # ~537K features); it has to pass a district_lgd_code query param,
+    # chosen via a district picker, instead. False for every other layer.
+    requires_district_scope: bool = False
     # Phase 3 Wave F (symbology): the real band count backing this layer's COG,
     # so the frontend can populate band-to-channel pickers without guessing.
     # None only for a layer ingested before this column existed AND whose COG
@@ -726,6 +733,27 @@ class ReportOptions(BaseModel):
 
 class GenerateReportRequest(BaseModel):
     analysis_ids: list[str] = Field(min_length=1, max_length=13)
+
+
+# ---------------------------------------------------------------- admin boundaries
+
+
+class AdminDistrictOut(BaseModel):
+    district_lgd_code: int
+    district_name: str
+    state_lgd_code: int
+    state_name: str
+
+
+class MissingVillageOut(BaseModel):
+    village_lgd_code: int
+    village_name: str
+
+
+class VillageCoverageOut(BaseModel):
+    total_registered: int
+    with_boundary: int
+    missing: list[MissingVillageOut]
 
 
 # ---------------------------------------------------------------- health
