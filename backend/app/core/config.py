@@ -140,6 +140,18 @@ class Settings(BaseSettings):
     # container (see deploy/docker-compose.yml), never an env var.
     gee_project_id: str = ""
 
+    # --- CDSE / VNV Pipeline (Phase 1: Sentinel ingestion, see
+    # app/services/cdse_ingestion.py) ---
+    # Real credentials, unlike gee_project_id above - repr=False so they never
+    # land in a log line or exception message that prints `settings`, same
+    # treatment as jwt_secret/db_password. OAuth client (search/token) and S3
+    # key pair (windowed pixel reads) are two DIFFERENT CDSE credential types,
+    # not interchangeable - see module docstring for which is used where.
+    cdse_client_id: str = Field(default="", repr=False)
+    cdse_client_secret: str = Field(default="", repr=False)
+    cdse_s3_access_key: str = Field(default="", repr=False)
+    cdse_s3_secret_key: str = Field(default="", repr=False)
+
     @field_validator("cors_allow_origins", mode="before")
     @classmethod
     def _split_csv(cls, v: object) -> object:
