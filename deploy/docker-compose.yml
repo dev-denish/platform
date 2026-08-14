@@ -68,6 +68,16 @@ services:
       # below, NOT an env var - ee.Initialize() picks them up from
       # ~/.config/earthengine/credentials automatically (container HOME=/app).
       DMRV_GEE_PROJECT_ID: ${DMRV_GEE_PROJECT_ID:?set DMRV_GEE_PROJECT_ID in .env}
+      # CDSE / VNV Pipeline (Phase 1, see app/services/cdse_ingestion.py). Two
+      # DIFFERENT credential types - OAuth client (STAC search) and S3 key pair
+      # (windowed pixel reads) - see that module's docstring. Gap found and
+      # fixed here: Phase 1's own commit deliberately skipped this wiring
+      # ("nothing called the module yet") - no longer true once Phase 2's
+      # verify_cdse_ingestion.py needs to run against a real AOI.
+      DMRV_CDSE_CLIENT_ID: ${DMRV_CDSE_CLIENT_ID:-}
+      DMRV_CDSE_CLIENT_SECRET: ${DMRV_CDSE_CLIENT_SECRET:-}
+      DMRV_CDSE_S3_ACCESS_KEY: ${DMRV_CDSE_S3_ACCESS_KEY:-}
+      DMRV_CDSE_S3_SECRET_KEY: ${DMRV_CDSE_S3_SECRET_KEY:-}
     volumes:
       - raster_data:/var/lib/dmrv/data
       - upload_staging:/var/lib/dmrv/staging
@@ -121,6 +131,12 @@ services:
       # analysis was synchronous (ran in `backend`), but the first async one would
       # have failed with "no project found" the moment it actually ran.
       DMRV_GEE_PROJECT_ID: ${DMRV_GEE_PROJECT_ID:?set DMRV_GEE_PROJECT_ID in .env}
+      # CDSE / VNV Pipeline (Phase 1) - verify_cdse_ingestion.py runs in this
+      # container, so it needs the same CDSE wiring `backend` has.
+      DMRV_CDSE_CLIENT_ID: ${DMRV_CDSE_CLIENT_ID:-}
+      DMRV_CDSE_CLIENT_SECRET: ${DMRV_CDSE_CLIENT_SECRET:-}
+      DMRV_CDSE_S3_ACCESS_KEY: ${DMRV_CDSE_S3_ACCESS_KEY:-}
+      DMRV_CDSE_S3_SECRET_KEY: ${DMRV_CDSE_S3_SECRET_KEY:-}
     volumes:
       - raster_data:/var/lib/dmrv/data
       - upload_staging:/var/lib/dmrv/staging

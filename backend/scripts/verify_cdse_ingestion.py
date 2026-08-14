@@ -21,6 +21,27 @@ from app.core.config import get_settings
 from app.services.cdse_ingestion import CDSEClient
 
 
+# HARDCODED TEST AOI - NOT a real project boundary. Added for a one-off run
+# against the isolated `-p ndfi-sidecar` compose stack, whose database is
+# brand new/empty (the real "rekalakunta" project only exists in the main
+# checkout's database - see chat history, 2026-08-13). A small (~5km x 4km),
+# real-world polygon in Bandipur forest, Karnataka, India - chosen for
+# real Sentinel-2/Sentinel-1 coverage and (being a forest reserve) a
+# meaningful Hansen Global Forest Change cross-check. `_get_real_aoi` below
+# is untouched and should be used again once this stack has real project
+# data - do not treat this constant's output as project-linked evidence.
+_HARDCODED_TEST_AOI: dict = {
+    "type": "Polygon",
+    "coordinates": [[
+        [76.58, 11.68],
+        [76.63, 11.68],
+        [76.63, 11.72],
+        [76.58, 11.72],
+        [76.58, 11.68],
+    ]],
+}
+
+
 def _get_real_aoi(project_id: str) -> dict:
     """A real project's unioned Boundary-layer geometry, via the SAME query
     AnalysisResultRepository.get_project_boundary_geojson runs - not
@@ -59,10 +80,13 @@ def main() -> int:
     settings = get_settings()
     client = CDSEClient(settings)
 
-    # Real project ("rekalakunta"), real boundary layer - queried live above.
-    project_id = "fd7d77cb-21b5-4a51-9894-0b073b2b60d5"
-    aoi = _get_real_aoi(project_id)
-    print(f"AOI: real boundary of project {project_id} ('rekalakunta')")
+    # HARDCODED TEST AOI for this run - NOT a real project boundary. See
+    # _HARDCODED_TEST_AOI's own comment above for why (isolated `-p
+    # ndfi-sidecar` stack, empty DB). Swap back to _get_real_aoi(project_id)
+    # once this stack has real project data.
+    aoi = _HARDCODED_TEST_AOI
+    print("AOI: *** HARDCODED TEST POLYGON (Bandipur forest, Karnataka, India) ***")
+    print("     *** NOT a real project boundary - synthetic test AOI only ***")
 
     date_start, date_end = "2026-06-01", "2026-08-01"
 
