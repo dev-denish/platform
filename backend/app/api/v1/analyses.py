@@ -31,6 +31,7 @@ from app.api.deps import (
     get_job_service,
     get_settings,
     get_task_runner,
+    get_vnv_analysis_service,
     require_role,
 )
 from app.core.config import Settings
@@ -46,6 +47,7 @@ from app.domain.dtos import (
 from app.domain.enums import UPLOAD_ROLES
 from app.services.gee_analysis_service import GEEAnalysisService
 from app.services.jobs_service import JobService
+from app.services.vnv_analysis_service import VNVAnalysisService
 from app.workers.queue import TaskRunner
 
 router = APIRouter(tags=["analyses"])
@@ -150,6 +152,7 @@ async def refresh_analysis(
     analysis_id: str,
     user: Annotated[CurrentUser, Depends(require_role(*UPLOAD_ROLES))],
     svc: Annotated[GEEAnalysisService, Depends(get_gee_analysis_service)],
+    vnv_svc: Annotated[VNVAnalysisService, Depends(get_vnv_analysis_service)],
     jobs: Annotated[JobService, Depends(get_job_service)],
     runner: Annotated[TaskRunner, Depends(get_task_runner)],
     settings: Annotated[Settings, Depends(get_settings)],
@@ -166,9 +169,18 @@ async def refresh_analysis(
 ) -> AnalysisResultOut | JobAccepted:
     entry = get_catalog_entry(analysis_id)
     if entry is not None and entry.get("execution") == "async":
-        job_id = await svc.enqueue_refresh(
-            project_id, analysis_id, user, jobs, runner, config_params
-        )
+        # Wave: VNV Pipeline NDFI go-live. Same 202 + JobAccepted shape
+        # either way - only which service does the enqueueing differs, so
+        # the frontend's existing poll-then-refetch flow (GET /jobs/{id}
+        # then GET /projects/{id}/analyses/{analysis_id}) is unchanged for
+        # this compute source too. Never touches GEEAnalysisService's own
+        # path/logic for a "gee" (or absent, meaning "gee") entry.
+        if entry.get("compute_source") == "vnv_pipeline":
+            job_id = await vnv_svc.enqueue_refresh(project_id, analysis_id, user, jobs, runner)
+        else:
+            job_id = await svc.enqueue_refresh(
+                project_id, analysis_id, user, jobs, runner, config_params
+            )
         response.status_code = 202
         return JobAccepted(job_id=job_id, status_url=f"{settings.api_v1_prefix}/jobs/{job_id}")
     # "sync"-execution (or unknown/not-yet-implemented, which svc.refresh()

@@ -56,11 +56,15 @@ import ProjectMap from "./ProjectMap.jsx";
  * Wave: compute-source toggle. A `computeSource` selector ("gee" | "vnv")
  * sits above the registry list and regroups it, entirely client-side - it
  * never changes what's fetched from `GET /projects/{id}/analyses` or what
- * `runAnalysis` sends. "gee" shows the same live catalog entries as before,
- * regrouped into three buckets by execution mode instead of the backend's
- * raw `category`. "vnv" swaps in a small hardcoded preview list (the VNV
- * Pipeline isn't live yet) that can never be selected for a real run - see
- * VNV_PREVIEW_ENTRIES and the Run-button gating in renderResults below.
+ * `runAnalysis` sends (both compute sources' entries come back from that
+ * one call, distinguished by the backend's own `compute_source` field).
+ * "gee" shows the live catalog entries minus any `compute_source ===
+ * "vnv_pipeline"` one, regrouped into three buckets by execution mode
+ * instead of the backend's raw `category`. "vnv" shows the real, runnable
+ * `vnv_ndfi` catalog entry (VNV Pipeline going live, see NdfiExperimentalNotice
+ * below for its always-on experimental disclosure) plus two still-hardcoded,
+ * still-never-runnable preview stubs - see VNV_PREVIEW_ENTRIES and the
+ * Run-button gating in renderResults below.
  */
 
 // Same polling pattern as UploadPage.jsx's job-status wait - job-kind
@@ -145,21 +149,17 @@ function geeGroupFor(entry) {
   return entry.execution === "async" ? "Compute — Sentinel-2 Composite" : "Instant Query";
 }
 
-/** Wave: compute-source toggle. The VNV Pipeline isn't live yet (see
- * app/domain/analysis_catalog.py's own in-development entries) - this is a
- * frontend-only preview list, never sent to any API call, so it renders
- * through the exact same `.analysis-row-muted` / "isn't built yet" empty
- * state every other in-development catalog entry already gets. Ids are
- * `vnv_`-prefixed so they can never collide with a real catalog id. */
+/** Wave: VNV pipeline NDFI goes live. `vnv_ndfi` is now a real, runnable
+ * catalog entry (`compute_source: "vnv_pipeline"`, `status: "available"`)
+ * fetched from `GET /projects/{id}/analyses` just like every GEE entry - see
+ * `visibleEntries` below, which merges it in ahead of these two. Stocking
+ * Index and Control Plot Matching are NOT in the backend catalog and have no
+ * implementation at all - this frontend-only preview list is now only
+ * these two, never sent to any API call, rendering through the exact same
+ * `.analysis-row-muted` / "isn't built yet" empty state every other
+ * in-development catalog entry already gets. Ids are `vnv_`-prefixed so they
+ * can never collide with a real catalog id. */
 const VNV_PREVIEW_ENTRIES = [
-  {
-    id: "vnv_ndfi",
-    name: "NDFI — Spectral Unmixing",
-    category: "VM0047 Compute — ForesToolboxRS",
-    status: "in-development",
-    description:
-      "Normalized Difference Fraction Index unmixes each pixel into soil, vegetation, and shade fractions, surfacing subtle canopy disturbance for VM0047 forest-degradation monitoring.",
-  },
   {
     id: "vnv_stocking_index",
     name: "Stocking Index",
@@ -590,10 +590,61 @@ function CoverageBanner({ pct }) {
   );
 }
 
+/** Wave: VNV pipeline NDFI goes live. Rendered every time a `vnv_ndfi`
+ * result is shown - a persistent disclosure, not a one-time/dismissible
+ * warning, same "always rendered, never hidden behind a tooltip" rule
+ * `stats.note` already follows just below. Reuses `.sample-data-banner`
+ * (the same amber convention the compute-source card's own dev note above
+ * uses) rather than inventing new styling. The exact copy here is
+ * load-bearing - it must match the compute-source card's own disclosure
+ * verbatim. */
+function NdfiExperimentalNotice() {
+  return (
+    <div className="sample-data-banner">
+      Experimental — this method has not yet passed domain review and may be unreliable, especially on densely
+      forested areas. Not for compliance reporting.
+    </div>
+  );
+}
+
+/** Wave: VNV pipeline NDFI goes live. `stats.masked_fraction` /
+ * `valid_pixel_count` / `total_pixel_count` - the fraction of the boundary
+ * NDFI's spectral unmixing could not classify (cloud/shadow/no-data),
+ * surfaced with the same `.stat-grid` > `.stat-card` idiom `IndexDistribution`
+ * above already uses, not buried as a raw fraction. Phase 2's own prototype
+ * measured 97.66% masking on forest-heavy scenes, so a mostly-masked result
+ * has to be obvious at a glance: `.stat-card-warning` switches the masked-
+ * fraction card to the same amber warning treatment `CoverageBanner` already
+ * uses for partial coverage once masking exceeds 50%. */
+function NdfiQualityStats({ stats }) {
+  const maskedPct = stats.masked_fraction * 100;
+  const heavilyMasked = stats.masked_fraction > 0.5;
+  return (
+    <div className="stat-grid">
+      <div className={`stat-card${heavilyMasked ? " stat-card-warning" : ""}`}>
+        <span className="stat-label">Masked area (cloud/shadow/no-data)</span>
+        <span className="stat-value">{maskedPct.toFixed(1)}%</span>
+        {heavilyMasked ? (
+          <span className="stat-warning-hint">Most of this boundary could not be classified - treat this result with caution.</span>
+        ) : null}
+      </div>
+      <div className="stat-card">
+        <span className="stat-label">Valid pixels used</span>
+        <span className="stat-value">{formatNumber(stats.valid_pixel_count, 0)}</span>
+      </div>
+      <div className="stat-card">
+        <span className="stat-label">Total pixels in boundary</span>
+        <span className="stat-value">{formatNumber(stats.total_pixel_count, 0)}</span>
+      </div>
+    </div>
+  );
+}
+
 function AnalysisStats({ result }) {
   const { stats, legend } = result;
   return (
     <>
+      {result.analysis_id === "vnv_ndfi" ? <NdfiExperimentalNotice /> : null}
       <CoverageBanner pct={stats.coverage_pct} />
       {stats.summary ? <IndexSummaryCallout summary={stats.summary} /> : null}
       {stats.canopy_cover_threshold_pct != null ? <HansenStats stats={stats} /> : null}
@@ -603,6 +654,7 @@ function AnalysisStats({ result }) {
       ) : null}
       {stats.series ? <IndexTrendChart series={stats.series} /> : null}
       {stats.distribution ? <IndexDistribution distribution={stats.distribution} /> : null}
+      {stats.masked_fraction != null ? <NdfiQualityStats stats={stats} /> : null}
       {stats.note ? <p className="analysis-note">{stats.note}</p> : null}
       {stats.methodology ? (
         <AnalysisMethodology methodology={stats.methodology} analysisId={result.analysis_id} />
@@ -662,14 +714,22 @@ export default function AnalysisPanel({ projectId, layers, onRefreshLayers, onLe
   }, [projectId]);
 
   // Wave: compute-source toggle. "gee" filters the live catalog down to
-  // `status: "available"` and regroups it (geeGroupFor) for display; "vnv"
-  // ignores `entries` entirely in favour of the frontend-only preview list.
-  // Everything downstream (selected, groups, config panel, methodology,
-  // runAnalysis) reads from this instead of raw `entries`.
+  // `status: "available"` entries that are NOT the VNV pipeline's own
+  // catalog entry (`compute_source === "vnv_pipeline"` - excluded here so it
+  // can't leak into a geeGroupFor bucket, since that grouping only looks at
+  // category/execution) and regroups the rest (geeGroupFor) for display.
+  // "vnv" shows the real vnv_ndfi entry as fetched from the backend (first,
+  // real status/computed_at, selectable/runnable) followed by the two
+  // still-hardcoded, still-never-runnable preview stubs. Everything
+  // downstream (selected, groups, config panel, methodology, runAnalysis)
+  // reads from this instead of raw `entries`.
   const visibleEntries = useMemo(() => {
-    if (computeSource === "vnv") return VNV_PREVIEW_ENTRIES;
+    if (computeSource === "vnv") {
+      const realNdfi = (entries ?? []).find((e) => e.compute_source === "vnv_pipeline");
+      return realNdfi ? [realNdfi, ...VNV_PREVIEW_ENTRIES] : VNV_PREVIEW_ENTRIES;
+    }
     return (entries ?? [])
-      .filter((e) => e.status === "available")
+      .filter((e) => e.status === "available" && e.compute_source !== "vnv_pipeline")
       .map((e) => ({ ...e, category: geeGroupFor(e) }));
   }, [entries, computeSource]);
 
@@ -807,14 +867,17 @@ export default function AnalysisPanel({ projectId, layers, onRefreshLayers, onLe
   const canRun = user && canUpload(user.role);
 
   function renderResults() {
-    // Wave: compute-source toggle. Shown regardless of whether a VNV entry
-    // is selected - none of them can ever have a result, so this reads
-    // above whichever empty state below ends up firing, not instead of it.
+    // Wave: VNV pipeline NDFI goes live. Shown regardless of which VNV entry
+    // (if any) is selected, above whichever empty state below ends up
+    // firing, not instead of it - now honest that NDFI itself is live
+    // (still experimental, never for compliance use) while the other two
+    // ForesToolboxRS methods genuinely have no implementation yet.
     const vnvDevNote =
       computeSource === "vnv" ? (
         <div className="sample-data-banner">
-          VNV Pipeline is still in development — you can preview which analyses will be available, but runs aren't
-          live yet.
+          NDFI — Spectral Unmixing now runs on the VNV Pipeline. Experimental — this method has not yet passed domain
+          review and may be unreliable, especially on densely forested areas. Not for compliance reporting. Stocking
+          Index and Control Plot Matching are still in development and cannot be run yet.
         </div>
       ) : null;
     if (!selected) {
@@ -1001,20 +1064,33 @@ export default function AnalysisPanel({ projectId, layers, onRefreshLayers, onLe
           </div>
         ) : null}
         {canRun ? (
-          <button
-            type="button"
-            className="primary-button"
-            disabled={computeSource === "vnv" ? true : running || (selected.config && !comboAllowed)}
-            onClick={computeSource === "vnv" ? undefined : runAnalysis}
-          >
-            {computeSource === "vnv"
-              ? "Coming Soon"
-              : running
-                ? runningLabel(runStatus)
-                : result
-                  ? "Refresh"
-                  : "Run analysis"}
-          </button>
+          // Wave: VNV pipeline NDFI goes live. vnv_ndfi is real and runnable
+          // even under computeSource === "vnv" - it behaves exactly like any
+          // GEE async analysis below (same running/comboAllowed gating, same
+          // labels, same runAnalysis call). The two still-unbuilt preview
+          // stubs (vnv_stocking_index, vnv_control_plot_matching) stay
+          // permanently disabled - this branch is unreachable for them today
+          // since they never leave the "isn't built yet" empty state above,
+          // but is kept explicit here as the documented, permanent gate.
+          (() => {
+            const vnvStubSelected = computeSource === "vnv" && selected.id !== "vnv_ndfi";
+            return (
+              <button
+                type="button"
+                className="primary-button"
+                disabled={vnvStubSelected ? true : running || (selected.config && !comboAllowed)}
+                onClick={vnvStubSelected ? undefined : runAnalysis}
+              >
+                {vnvStubSelected
+                  ? "Not yet available"
+                  : running
+                    ? runningLabel(runStatus)
+                    : result
+                      ? "Refresh"
+                      : "Run analysis"}
+              </button>
+            );
+          })()
         ) : null}
       </>
     );
@@ -1062,11 +1138,18 @@ export default function AnalysisPanel({ projectId, layers, onRefreshLayers, onLe
               >
                 <span className="compute-source-card-top">
                   <span className="compute-source-card-name">VNV Pipeline</span>
-                  <span className="role-badge">IN DEVELOPMENT</span>
+                  <span className="role-badge role-badge-warning">EXPERIMENTAL</span>
                 </span>
                 <span className="compute-source-card-meta">CDSE + Landsat C2 · ForesToolboxRS</span>
                 <span className="compute-source-card-desc">
                   Self-hosted pipeline sourced directly from Copernicus &amp; USGS, built for VM0047 production use.
+                </span>
+                {/* Wave: VNV pipeline NDFI goes live. Always rendered - not
+                    gated on computeSource === "vnv" - since this card is
+                    visible whether or not it's the selected one. */}
+                <span className="compute-source-card-warning">
+                  Experimental — this method has not yet passed domain review and may be unreliable, especially on
+                  densely forested areas. Not for compliance reporting.
                 </span>
               </button>
             </div>

@@ -152,6 +152,18 @@ class Settings(BaseSettings):
     cdse_s3_access_key: str = Field(default="", repr=False)
     cdse_s3_secret_key: str = Field(default="", repr=False)
 
+    # --- VNV Pipeline Phase 2/3: ForesToolboxRS NDFI sidecar (see
+    # app/workers/vnv_analysis_jobs.py, sidecars/forestoolbox/) ---
+    # A benign default ENDPOINT (same posture as redis_url/db_host above),
+    # not a secret. Unlike every DMRV_CDSE_* credential above, this is NOT
+    # required/enforced in _enforce_secret_hygiene: the sidecar is optional/
+    # experimental (see analysis_catalog.py's "vnv_ndfi" entry, status
+    # "Experimental — pending domain review"), so a deployment with no
+    # forestoolbox container running is a normal, supported state - the job
+    # just fails (a real, visible analysis_runs.status="failed" row), it
+    # doesn't stop the whole service from booting.
+    forestoolbox_url: str = "http://forestoolbox:8002"
+
     @field_validator("cors_allow_origins", mode="before")
     @classmethod
     def _split_csv(cls, v: object) -> object:

@@ -150,6 +150,34 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
+  forestoolbox:
+    # VNV Pipeline Phase 2 - R/plumber NDFI (spectral unmixing) sidecar. Phase 2
+    # shipped this image as deliberately standalone ("not referenced from
+    # docker-compose.yml" per sidecars/forestoolbox/Dockerfile); this is the
+    # wiring that changes. `worker` calls it over the implicit default network
+    # at http://forestoolbox:8002 - same service-name DNS already used for
+    # `db`/`redis`, so no top-level `networks:` key is needed.
+    build:
+      context: ../sidecars/forestoolbox
+      dockerfile: Dockerfile
+    # No `ports:` on purpose - internal only. Nothing outside the compose
+    # network calls it, and it has no auth of its own (plumber.R's only trust
+    # boundary is the NDFI_DATA_DIR path-containment check below).
+    environment:
+      # Overrides plumber.R's /data default so BOTH the containment check and
+      # the mount below resolve against the SAME absolute path `worker` uses.
+      NDFI_DATA_DIR: /var/lib/dmrv/data
+    volumes:
+      # Identical mountpoint to `worker`'s raster_data mount, NOT the image's
+      # documented /data. That identity is the point: a file `worker` writes to
+      # /var/lib/dmrv/data/vnv/<run_id>/s2_aoi.tif is visible at that exact path
+      # here, so the worker POSTs its own local path string as input_path/
+      # output_path with zero translation logic on the Python side.
+      - raster_data:/var/lib/dmrv/data
+    # No healthcheck: plumber.R exposes only POST /ndfi - there is no GET / or
+    # health route to probe, and nothing in this file gates on it being healthy.
+    restart: unless-stopped
+
   frontend:
     build:
       context: ../frontend

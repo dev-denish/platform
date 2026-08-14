@@ -54,6 +54,13 @@ class AnalysisCatalogEntry(TypedDict):
     # entry` to decide whether to call `analysis_config.resolve_and_validate`
     # at all.
     config: NotRequired[AnalysisConfigSpec]
+    # Wave: VNV Pipeline NDFI go-live. Which compute path owns this entry -
+    # absent (falsy) means "gee", the original 18 entries' unchanged,
+    # implicit default (never retrofitted onto them). Only "vnv_ndfi" below
+    # sets this to "vnv_pipeline"; app/api/v1/analyses.py's refresh_analysis
+    # dispatches to VNVAnalysisService instead of GEEAnalysisService when
+    # this is "vnv_pipeline".
+    compute_source: NotRequired[Literal["gee", "vnv_pipeline"]]
 
 
 # All 5 vegetation indices share the exact same real config surface (same
@@ -255,6 +262,29 @@ CATALOG: tuple[AnalysisCatalogEntry, ...] = (
      "description": "False-color (NIR) imagery timelapse over the project boundary."},
     {"id": "cultivated_area", "name": "Cultivated Area", "category": "Land Use",
      "status": "in-development", "description": "Cultivated-area detection and change."},
+    # --- VNV Pipeline (self-hosted compute, not GEE) - Wave: VNV Pipeline
+    # NDFI go-live. `status: "available"` because this really does compute
+    # and store a real result via app/services/vnv_analysis_service.py /
+    # app/workers/vnv_analysis_jobs.py - "available" here means "wired to a
+    # real compute path", same meaning it has for every GEE entry above, NOT
+    # "validated for compliance reporting" (see its own description). Do NOT
+    # add stocking_index or control_plot_matching entries here - those stay
+    # frontend-only stubs, out of scope for this wave. ---
+    {
+        "id": "vnv_ndfi",
+        "name": "NDFI — Spectral Unmixing",
+        "category": "VM0047 Compute — ForesToolboxRS",
+        "status": "available",
+        "execution": "async",
+        "compute_source": "vnv_pipeline",
+        "description": (
+            "Experimental — pending domain review. Normalized Difference Fraction "
+            "Index unmixes each pixel into soil, vegetation, and shade fractions via "
+            "the ForesToolboxRS sidecar. A confirmed methodology gap exists on "
+            "forest-heavy scenes (up to 97.66% of pixels masked, near-zero Hansen "
+            "correlation in testing) — not for compliance reporting."
+        ),
+    },
 )
 
 _BY_ID: dict[str, AnalysisCatalogEntry] = {e["id"]: e for e in CATALOG}

@@ -6,13 +6,14 @@ from __future__ import annotations
 from app.domain.analysis_catalog import CATALOG, REAL_ANALYSIS_IDS, get_catalog_entry
 
 
-def test_catalog_has_exactly_thirteen_available_and_six_in_development_entries():
-    # 10 original + 3 Raw Imagery (Wave: raw-imagery browsing).
+def test_catalog_has_exactly_fourteen_available_and_six_in_development_entries():
+    # 10 original + 3 Raw Imagery (Wave: raw-imagery browsing) + 1 vnv_ndfi
+    # (Wave: VNV Pipeline NDFI go-live).
     available = [e for e in CATALOG if e["status"] == "available"]
     in_development = [e for e in CATALOG if e["status"] == "in-development"]
-    assert len(available) == 13
+    assert len(available) == 14
     assert len(in_development) == 6
-    assert len(CATALOG) == 19
+    assert len(CATALOG) == 20
 
 
 def test_only_the_three_raw_imagery_entries_are_year_selectable():
@@ -95,6 +96,25 @@ def test_all_five_indices_share_the_identical_config_spec():
     assert all(spec == specs[0] for spec in specs)
     assert specs[0]["year_max"] is None  # ask current_veg_index_years() live, not static
     assert specs[0]["supported_combos"] == [("sentinel2", "cloud_score_plus")]
+
+
+# ---------------------------------------------- Wave: VNV Pipeline NDFI go-live
+
+
+def test_only_vnv_ndfi_declares_a_non_gee_compute_source():
+    non_gee_ids = {e["id"] for e in CATALOG if e.get("compute_source") == "vnv_pipeline"}
+    assert non_gee_ids == {"vnv_ndfi"}
+    for entry in CATALOG:
+        if entry["id"] != "vnv_ndfi":
+            assert "compute_source" not in entry, entry["id"]
+
+
+def test_vnv_ndfi_is_available_async_and_uncategorized_as_config():
+    entry = get_catalog_entry("vnv_ndfi")
+    assert entry is not None
+    assert entry["status"] == "available"
+    assert entry["execution"] == "async"
+    assert "config" not in entry
 
 
 def test_no_other_catalog_entry_declares_a_config():
