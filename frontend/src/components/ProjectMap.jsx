@@ -18,11 +18,13 @@ import {
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { toPng } from "html-to-image";
-import { Layers as LayersIcon, Wrench } from "lucide-react";
+import { Layers as LayersIcon, Wrench, Globe } from "lucide-react";
 import { apiFetch, API_BASE } from "../config.js";
 import { DATASET_TYPE_COLORS } from "../lib/colors.js";
 import { basemapFor } from "../lib/basemap.js";
 import { initSymbologyState, buildTileUrl, legendEntryLabel, legendEntryColor } from "../lib/symbology.js";
+import { initVectorStyleState, defaultVectorStyle } from "../lib/vectorStyle.js";
+import { readLayerOrder, writeLayerOrder, sortByLayerOrder, moveBefore } from "../lib/layerOrder.js";
 import { lineDistanceMeters, polygonAreaHectares, scaleRatioLabel } from "../lib/measure.js";
 import { formatNumber } from "../lib/format.js";
 import { useCollapse } from "../lib/useCollapse.js";
@@ -31,6 +33,10 @@ import MeasureTools from "./MeasureTools.jsx";
 import DrawTools from "./DrawTools.jsx";
 import MapToolbar from "./MapToolbar.jsx";
 import FullscreenToggle from "./FullscreenToggle.jsx";
+import CompassIndicator from "./CompassIndicator.jsx";
+import BasemapPanel from "./BasemapPanel.jsx";
+import MapContextMenu from "./MapContextMenu.jsx";
+import AttributeTableDialog from "./AttributeTableDialog.jsx";
 import ErrorBanner from "./ErrorBanner.jsx";
 
 /**
@@ -315,14 +321,28 @@ function SwipeClip({ layer, pct }) {
  * on the same Leaflet map - no conflict with that component's own click
  * handling, which still runs too.
  */
-function MapClickRouter({ mode, drawMode, onInspect, onMeasurePoint, onDrawPoint }) {
+/**
+ * `onContextMenu`/`onCloseContextMenu` (Wave: Map Toolbar Enhancement v2,
+ * Tier 3): a plain left `click` always closes an open right-click menu
+ * (matches the requirement that it "close cleanly on click-away" - a click
+ * on the map itself is the most common click-away there is), and
+ * `contextmenu` opens a new one at the clicked point. `preventDefault` on
+ * the native event blocks the browser's own right-click menu from appearing
+ * underneath ours.
+ */
+function MapClickRouter({ mode, drawMode, onInspect, onMeasurePoint, onDrawPoint, onContextMenu, onCloseContextMenu }) {
   useMapEvents({
     click(e) {
+      onCloseContextMenu();
       // Draw wins while it's active: selecting a draw mode already forces
       // measure back to "inspect" (selectDrawMode), so these never overlap.
       if (drawMode !== "none") onDrawPoint(e.latlng);
       else if (mode === "inspect") onInspect(e.latlng);
       else onMeasurePoint(e.latlng);
+    },
+    contextmenu(e) {
+      e.originalEvent.preventDefault();
+      onContextMenu(e.latlng, e.containerPoint);
     },
   });
   return null;
@@ -420,6 +440,46 @@ function FullscreenInvalidate() {
   return null;
 }
 
+/**
+ * Crossfades between the previous and next basemap instead of a hard swap
+ * (Wave: Map Toolbar Enhancement v2, Tier 2 smoothness requirement). The
+ * render below still gives each basemap source its own `key` (needed so
+ * Leaflet actually applies the new source's `maxNativeZoom` - see the block
+ * comment this replaces), which means every switch mounts a brand new tile
+ * grid that re-requests every tile from zero; rendered alone that's a blank/
+ * grey flash for however long the network takes. Keeping the OLD layer
+ * mounted underneath (lower zIndex) until the NEW one's own Leaflet `load`
+ * event fires (every tile needed for the current view has arrived) means a
+ * fully-tiled basemap stays on screen the whole time - the new one simply
+ * fades in over it, tile by tile, via Leaflet's own default tile fade
+ * animation. A timeout fallback clears the old layer even if `load` never
+ * fires (e.g. the source is down), so a bad switch can't strand it forever.
+ */
+function useBasemapCrossfade(basemap) {
+  const [current, setCurrent] = useState(basemap);
+  const [previous, setPrevious] = useState(null);
+  const timeoutRef = useRef(null);
+
+  useEffect(() => {
+    setCurrent((prevCurrent) => {
+      if (basemap.key === prevCurrent.key) return prevCurrent;
+      setPrevious(prevCurrent);
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = setTimeout(() => setPrevious(null), 4000);
+      return basemap;
+    });
+  }, [basemap]);
+
+  useEffect(() => () => clearTimeout(timeoutRef.current), []);
+
+  const clearPrevious = useCallback(() => {
+    clearTimeout(timeoutRef.current);
+    setPrevious(null);
+  }, []);
+
+  return { current, previous, clearPrevious };
+}
+
 function initLayerState(layers) {
   const s = {};
   for (const l of layers) s[l.layer_id] = { visible: true, opacity: 1 };
@@ -492,6 +552,9 @@ export default function ProjectMap({
   const [mapRef, setMapRef] = useState(null);
   const [mapView, setMapView] = useState({ pos: null, zoom: null, center: null });
   const [symbologyState, setSymbologyState] = useState(() => initSymbologyState(layers));
+  // Wave: Map Toolbar Enhancement v2, Tier 4. Vector layers' counterpart to
+  // symbologyState above (raster-only) - see lib/vectorStyle.js.
+  const [vectorStyleState, setVectorStyleState] = useState(() => initVectorStyleState(layers));
   const [tilesExpired, setTilesExpired] = useState(false);
   // 'idle' (no retry outstanding) | 'pending' (one in flight) | 'failed' (the
   // one attempt already lost). Replaces a plain boolean: with a boolean, an
@@ -545,7 +608,21 @@ export default function ProjectMap({
           // that one (used raw as a Leaflet tile URL), this goes through
           // apiFetch, which itself prepends API_BASE. Strip it first or every
           // vector/WFS layer 404s on a doubled `/api/v1/api/v1/...` path.
-          const data = await apiFetch(l.features_url.replace(API_BASE, ""));
+          //
+          // Bugfix: `.replace(API_BASE, "")` only ever matched when API_BASE
+          // was the relative default ("/api/v1") - the backend always
+          // returns features_url as that same relative path, never with a
+          // host. The moment API_BASE is set to an ABSOLUTE url (exactly
+          // what VITE_API_BASE is in this repo's own e2e config,
+          // playwright.config.js), the literal string API_BASE never occurs
+          // inside a relative features_url, the replace is a silent no-op,
+          // and apiFetch prepends API_BASE a second time - the doubled path
+          // this comment already warned about, just from a different cause
+          // than a missing strip. Stripping only API_BASE's PATHNAME (always
+          // "/api/v1" regardless of whether a host is configured) matches
+          // what's actually embedded in features_url either way.
+          const apiBasePath = API_BASE.startsWith("http") ? new URL(API_BASE).pathname : API_BASE;
+          const data = await apiFetch(l.features_url.replace(apiBasePath, ""));
           if (!cancelled) setVectorData((prev) => ({ ...prev, [l.layer_id]: data }));
         } catch {
           if (!cancelled) setVectorData((prev) => ({ ...prev, [l.layer_id]: null }));
@@ -565,6 +642,21 @@ export default function ProjectMap({
   // symbology/visibility state above.
   const [basemapMode, setBasemapMode] = useState("satellite");
   const basemap = basemapFor(basemapMode);
+  const basemapCrossfade = useBasemapCrossfade(basemap);
+  // A stable object reference, not `{ load: basemapCrossfade.clearPrevious }`
+  // written inline at the JSX callsite below: react-leaflet re-subscribes a
+  // layer's Leaflet event listeners whenever `eventHandlers` changes
+  // IDENTITY (not contents), and ProjectMap re-renders on every
+  // mousemove-driven `mapView` update (see MapViewSync) - an inline literal
+  // is a brand new object every one of those renders, which was
+  // re-subscribing 'load' on the (already-loaded) current tile layer
+  // continuously and tripped React's "Maximum update depth exceeded" guard.
+  // `clearPrevious` itself is already useCallback-stabilized (empty deps);
+  // this just stops the WRAPPING object from being the thing that changes.
+  const basemapLoadHandlers = useMemo(
+    () => ({ load: basemapCrossfade.clearPrevious }),
+    [basemapCrossfade.clearPrevious]
+  );
 
   // Wave: map toolbar capabilities. Compare mode: { before, after } layer ids,
   // or null when off. `swipePct` is the divider's position across the map
@@ -586,6 +678,11 @@ export default function ProjectMap({
   // `panelOpen`-driven one this replaced.
   const [toolbarOpen, toggleToolbar] = useCollapse("collapse:map-toolbar-panel", false);
   const [layersOpen, toggleLayers] = useCollapse("collapse:map-layers-panel", false);
+  // Wave: Map Toolbar Enhancement v2, Tier 2. Same floating-panel toggle
+  // convention as toolbar/layers above - a third independent panel, not
+  // mutually exclusive with either (a user picking a basemap while the
+  // Layers panel is also open is normal, not a conflict).
+  const [basemapPanelOpen, toggleBasemapPanel] = useCollapse("collapse:map-basemap-panel", false);
 
   // Phase 3 Wave F: real browser Fullscreen API (not a CSS-only fake) on the
   // whole `.map-frame` card, so the map AND its overlaid chrome (toolbar,
@@ -626,14 +723,75 @@ export default function ProjectMap({
       for (const l of layers) next[l.layer_id] = prev[l.layer_id] ?? fresh[l.layer_id];
       return next;
     });
+    setVectorStyleState((prev) => {
+      const fresh = initVectorStyleState(layers);
+      const next = {};
+      for (const l of layers) {
+        if (l.layer_kind !== "vector" && l.layer_kind !== "external_wfs") continue;
+        next[l.layer_id] = prev[l.layer_id] ?? fresh[l.layer_id];
+      }
+      return next;
+    });
   }, [layers]);
 
-  // These three are handed straight to the memoized <LayersPanel> - useCallback
+  // Wave: Map Toolbar Enhancement v2, Tier 4 (drag-to-reorder). A SPARSE
+  // list - only layer_ids someone has actually dragged, in the order they
+  // ended up in - not a full list eagerly populated on every load. That
+  // matters: `sortByLayerOrder` treats anything NOT in this list as
+  // "unranked" and leaves it wherever the caller's own default sort (byDate)
+  // already put it, so a project nobody has ever dragged a layer on still
+  // renders in plain byDate order, same as before this feature existed. An
+  // earlier version of this effect eagerly appended every layer_id from the
+  // raw (non-byDate-sorted) `layers` prop the first time it saw them - which
+  // made EVERY layer "ranked" immediately, in whatever order the API
+  // happened to return them, silently overriding byDate for every project on
+  // first load with zero user interaction. Re-read on a genuine project
+  // switch; a deleted layer's stale id is pruned from a saved order so it
+  // doesn't linger forever, but nothing is ever ADDED here except by an
+  // actual drag (see reorderLayers below).
+  const [layerOrder, setLayerOrder] = useState(() => readLayerOrder(projectId));
+
+  useEffect(() => {
+    setLayerOrder(readLayerOrder(projectId));
+  }, [projectId]);
+
+  useEffect(() => {
+    setLayerOrder((prev) => {
+      if (prev.length === 0) return prev;
+      const ids = new Set(layers.map((l) => l.layer_id));
+      const next = prev.filter((id) => ids.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [layers]);
+
+  // `currentOrder`: the FULL sequence LayersPanel actually has on screen
+  // right now (its own byDate-then-sortByLayerOrder result, flattened) - not
+  // this component's own possibly-sparse `layerOrder` state. Reordering
+  // relative to a layer that's never been dragged before (so it isn't in
+  // `layerOrder` yet) needs to know where that layer visually IS, or
+  // `moveBefore` can't find `targetId` and silently appends to the end
+  // instead of inserting where the drop actually happened. From this point
+  // on `layerOrder` holds a real (if still only partially customized)
+  // sequence for every layer that's been touched by a drag.
+  const reorderLayers = useCallback(
+    (currentOrder, draggedId, targetId) => {
+      const next = moveBefore(currentOrder, draggedId, targetId);
+      writeLayerOrder(projectId, next);
+      setLayerOrder(next);
+    },
+    [projectId]
+  );
+
+  // These are handed straight to the memoized <LayersPanel> - useCallback
   // (empty deps: they only ever call the always-stable setState updaters) is
   // what makes that React.memo actually skip re-renders instead of being a
   // no-op on a fresh function identity every render.
   const updateSymbology = useCallback((layerId, next) => {
     setSymbologyState((prev) => ({ ...prev, [layerId]: next }));
+  }, []);
+
+  const updateVectorStyle = useCallback((layerId, next) => {
+    setVectorStyleState((prev) => ({ ...prev, [layerId]: next }));
   }, []);
 
   const toggle = useCallback((layerId, visible) => {
@@ -650,6 +808,28 @@ export default function ProjectMap({
   const [measureMode, setMeasureMode] = useState("inspect");
   const [measurePoints, setMeasurePoints] = useState([]);
   const [pixelPopup, setPixelPopup] = useState(null); // { latlng, loading, rows: [{layer, values?, error?}] }
+  // Stable references (Wave: Map Toolbar Enhancement v2 - found while fixing
+  // the identical pattern on the new basemap crossfade's TileLayer): an
+  // inline `eventHandlers={{ remove: ... }}` object literal at the <Popup>
+  // callsite below is a brand new object every ProjectMap re-render (e.g.
+  // every mousemove-driven mapView update), and react-leaflet re-subscribes
+  // Leaflet's own Popup events whenever that object's IDENTITY changes -
+  // reproducibly trips React's "Maximum update depth exceeded" guard the
+  // moment a pixel-inspect popup is open. Same fix as basemapLoadHandlers:
+  // hoist the handler to a stable useCallback and the wrapping object to a
+  // stable useMemo.
+  const closePixelPopup = useCallback(() => setPixelPopup(null), []);
+  const pixelPopupEventHandlers = useMemo(() => ({ remove: closePixelPopup }), [closePixelPopup]);
+
+  // Wave: Map Toolbar Enhancement v2, Tier 3. `contextMenu` is the open
+  // right-click menu: { latlng, point } where `point` is Leaflet's own
+  // containerPoint (pixel coords relative to the map container, which
+  // .map-canvas-wrap - this menu's positioned ancestor - fills exactly).
+  // `attributeTable` is the full-attributes dialog one of that menu's items
+  // opens, same shape as pixelPopup above (loading/rows) but rendered as a
+  // modal, not a map Popup - see AttributeTableDialog.jsx.
+  const [contextMenu, setContextMenu] = useState(null); // { latlng, point }
+  const [attributeTable, setAttributeTable] = useState(null); // { latlng, loading, rows }
 
   // Draw tools: point/line/polygon vertices collected by the same click
   // gesture the measure tools use, so the two are mutually exclusive - picking
@@ -710,22 +890,23 @@ export default function ProjectMap({
     return null;
   }, [measureMode, measurePoints]);
 
-  // Inspects whichever layer(s) are currently checked/visible in
-  // LayersPanel, PLUS the Analysis tab's one selected GEE analysis
-  // (`activeAnalysis`, passed down from AnalysisPanel - null on the Layers
-  // tab's own ProjectMap instance, which has no such thing) - reused as-is
-  // instead of a second "which layer did you mean" resolution just for
-  // clicks. With several targets active at once this naturally inspects all
-  // of them, each labeled with its own source, rather than silently picking
-  // one - see renderGeePixelRow below for how a not-yet-computed async
-  // analysis surfaces as a row instead of a network error.
-  async function inspectPixel(latlng) {
+  // Fetches whichever layer(s) are currently checked/visible in LayersPanel,
+  // PLUS the Analysis tab's one selected GEE analysis (`activeAnalysis`,
+  // passed down from AnalysisPanel - null on the Layers tab's own ProjectMap
+  // instance, which has no such thing), for one clicked point. Shared by
+  // "What's here" (the small map Popup, via inspectPixel below) and the
+  // right-click menu's "Attribute table" (a full unabbreviated dialog, via
+  // openAttributeTable below - Wave: Map Toolbar Enhancement v2, Tier 3) so
+  // there's exactly one place that calls GET /layers/{id}/pixel and GET
+  // /projects/{id}/analyses/{id}/point, not two copies of the same fetch -
+  // see renderGeePixelRow below for how a not-yet-computed async analysis
+  // surfaces as a row instead of a network error.
+  async function fetchPointRows(latlng) {
     // `symbologyLayers` is declared further down in this same function body,
     // but this closure only reads it when a click actually happens - always
     // after the full render (and its `const` assignments) has completed.
     const targets = symbologyLayers;
-    if (targets.length === 0 && !activeAnalysis) return;
-    setPixelPopup({ latlng, loading: true, rows: [] });
+    if (targets.length === 0 && !activeAnalysis) return [];
     const cogRows = await Promise.all(
       targets.map(async (l) => {
         try {
@@ -756,7 +937,65 @@ export default function ProjectMap({
         });
       }
     }
-    setPixelPopup({ latlng, loading: false, rows: [...cogRows, ...geeRows] });
+    return [...cogRows, ...geeRows];
+  }
+
+  // Nothing to inspect - matches fetchPointRows' own early-return guard, so
+  // neither caller below ever shows a "loading" popup/dialog for a click that
+  // can never resolve to anything.
+  function hasInspectTargets() {
+    return symbologyLayers.length > 0 || !!activeAnalysis;
+  }
+
+  async function inspectPixel(latlng) {
+    if (!hasInspectTargets()) return;
+    setPixelPopup({ latlng, loading: true, rows: [] });
+    const rows = await fetchPointRows(latlng);
+    setPixelPopup({ latlng, loading: false, rows });
+  }
+
+  // Right-click menu's "Attribute table" (Wave: Map Toolbar Enhancement v2,
+  // Tier 3) - same fetch as inspectPixel, rendered as a full unabbreviated
+  // dialog (AttributeTableDialog) instead of the small map Popup.
+  async function openAttributeTable(latlng) {
+    if (!hasInspectTargets()) return;
+    setAttributeTable({ latlng, loading: true, rows: [] });
+    const rows = await fetchPointRows(latlng);
+    setAttributeTable({ latlng, loading: false, rows });
+  }
+
+  // `openId` increments on every open and becomes <MapContextMenu>'s `key`
+  // below - React reuses the SAME component instance across two different
+  // opens unless its key changes (same element, same JSX position, just new
+  // props), which left MapContextMenu's internal "Copy as GeoJSON" confirm-
+  // then-auto-close timer alive across opens: right-clicking a NEW spot
+  // shortly after copying at the OLD spot let that stale timer fire and
+  // close the brand new, unrelated menu out from under it. A fresh key per
+  // open forces a real remount, which resets that (and any other) internal
+  // state for free instead of hunting down each individual timer/effect.
+  const contextMenuOpenIdRef = useRef(0);
+
+  function openContextMenu(latlng, point) {
+    contextMenuOpenIdRef.current += 1;
+    setContextMenu({ latlng, point, openId: contextMenuOpenIdRef.current });
+  }
+
+  function closeContextMenu() {
+    setContextMenu(null);
+  }
+
+  // "Center map here" / "Zoom in here" (right-click menu). `setZoomAround`
+  // (not `setView`) for zoom-in: it keeps the CLICKED point anchored under
+  // the cursor as the map zooms, the same feel as Leaflet's own
+  // scroll-to-zoom, instead of re-centering the view on it.
+  function centerHere(latlng) {
+    mapRef?.setView(latlng, mapRef.getZoom());
+    closeContextMenu();
+  }
+
+  function zoomInHere(latlng) {
+    mapRef?.setZoomAround(latlng, Math.min(mapRef.getZoom() + 2, mapRef.getMaxZoom()));
+    closeContextMenu();
   }
 
   // Wave: multi-format layers. An external_wms/external_wfs layer's stored
@@ -946,14 +1185,25 @@ export default function ProjectMap({
   function renderVectorLayer(l, { opacity = 1, key } = {}) {
     const data = vectorData[l.layer_id];
     if (!data) return null;
-    const color = DATASET_TYPE_COLORS[l.type] ?? "#0B6B46";
+    // Wave: Map Toolbar Enhancement v2, Tier 4 - user-adjustable via
+    // VectorStylePanel (LayersPanel's gear popover); the `?? default` is a
+    // safety net for the one render tick between a layer appearing in
+    // `layers` and the merge effect above populating vectorStyleState for
+    // it, not the expected steady-state path.
+    const { color, weight, fillOpacity } = vectorStyleState[l.layer_id] ?? defaultVectorStyle(l);
     return (
       <GeoJSON
         key={key ?? `${l.layer_id}-vector`}
         data={data}
-        style={() => ({ color, weight: 2, fillOpacity: 0.15, opacity })}
+        style={() => ({ color, weight, fillOpacity, opacity })}
+        // Point markers keep their own fixed 0.7 fill (unchanged from before
+        // this feature) rather than the polygon `fillOpacity` control above -
+        // that value defaults to 0.15 (right for a filled polygon's
+        // interior), which would make a point layer's circle markers look
+        // nearly invisible by default the moment vectorStyleState existed,
+        // even for a project no one has touched the new controls on.
         pointToLayer={(_feature, latlng) =>
-          L.circleMarker(latlng, { radius: 5, color, weight: 2, fillOpacity: 0.7 * opacity, opacity })
+          L.circleMarker(latlng, { radius: 5, color, weight, fillOpacity: 0.7 * opacity, opacity })
         }
       />
     );
@@ -1006,8 +1256,16 @@ export default function ProjectMap({
   // Every layer is independently visible/opaque via its own checkbox in
   // LayersPanel (Wave G removed the old Time/Compare exclusivity) - render
   // whichever ones are currently checked, simultaneously.
+  //
+  // Wave: Map Toolbar Enhancement v2, Tier 4 (drag-to-reorder) - sorted by
+  // layerOrder before mapping, so React's keyed reconciliation actually
+  // moves each layer's real DOM node (and with it, paint order within its
+  // Leaflet pane - tiles below vectors regardless, but raster-vs-raster and
+  // vector-vs-vector both follow this) to match. No explicit zIndex needed:
+  // Leaflet already stacks same-pane layers by DOM/add order, which is
+  // exactly what a keyed-array re-sort changes.
   function renderGenericLayers(list) {
-    return list.map((l) => {
+    return sortByLayerOrder(list, layerOrder).map((l) => {
       const state = layerState[l.layer_id] ?? { visible: true, opacity: 1 };
       if (!state.visible) return null;
       return renderLayer(l, { opacity: state.opacity });
@@ -1180,6 +1438,25 @@ export default function ProjectMap({
                   <LayersIcon size={16} strokeWidth={2} className="icon" />
                 </button>
               ) : null}
+              <button
+                type="button"
+                className="map-floating-toggle map-floating-toggle-basemap"
+                onClick={toggleBasemapPanel}
+                aria-expanded={basemapPanelOpen}
+                // "map sources", not "Basemap panel": BasemapToggle's own
+                // native <select aria-label="Basemap"> is what the existing
+                // e2e suite drives via getByLabel("Basemap") (map.spec.js,
+                // redesign.spec.js) - Playwright's getByLabel default is a
+                // case-insensitive SUBSTRING match, so any accessible name
+                // containing the word "Basemap" here would make that
+                // existing lookup ambiguous (2+ matches) and break those
+                // tests. `title` still says "Basemap panel" for the visible
+                // hover tooltip - only the accessible name avoids the word.
+                aria-label={basemapPanelOpen ? "Hide map sources" : "Show map sources"}
+                title={basemapPanelOpen ? "Hide the Basemap panel" : "Show the Basemap panel"}
+              >
+                <Globe size={16} strokeWidth={2} className="icon" />
+              </button>
             </div>
             {toolbarOpen ? (
               <MapToolbar
@@ -1207,15 +1484,20 @@ export default function ProjectMap({
                 layers={layers}
                 layerState={layerState}
                 symbologyState={symbologyState}
+                vectorStyleState={vectorStyleState}
                 vectorData={vectorData}
+                layerOrder={layerOrder}
+                onReorder={reorderLayers}
                 onToggleVisibility={toggle}
                 onOpacityChange={setOpacity}
                 onSymbologyChange={updateSymbology}
+                onVectorStyleChange={updateVectorStyle}
                 onRefreshLayers={onRefreshLayers}
                 onLegendChanged={onLegendChanged}
                 projectId={projectId}
               />
             ) : null}
+            {basemapPanelOpen ? <BasemapPanel mode={basemapMode} onChange={setBasemapMode} /> : null}
             <MeasureTools
               mode={measureMode}
               onClear={clearMeasurement}
@@ -1235,6 +1517,7 @@ export default function ProjectMap({
           </div>
           <div className="map-overlay-topright">
             <FullscreenToggle active={isFullscreen} onClick={toggleFullscreen} />
+            <CompassIndicator />
           </div>
           {compare ? (
               <div
@@ -1271,11 +1554,13 @@ export default function ProjectMap({
                 onInspect={inspectPixel}
                 onMeasurePoint={addMeasurePoint}
                 onDrawPoint={addDrawPoint}
+                onContextMenu={openContextMenu}
+                onCloseContextMenu={closeContextMenu}
               />
               <MeasureDrawing mode={measureMode} points={measurePoints} />
               <DrawDrawing mode={drawMode} points={drawPoints} />
               {pixelPopup ? (
-                <Popup position={pixelPopup.latlng} eventHandlers={{ remove: () => setPixelPopup(null) }}>
+                <Popup position={pixelPopup.latlng} eventHandlers={pixelPopupEventHandlers}>
                   <div className="pixel-popup">
                     {pixelPopup.loading ? (
                       "Reading pixel…"
@@ -1299,12 +1584,43 @@ export default function ProjectMap({
                 * @react-leaflet/core's updateGridLayer/updateTileLayer), so
                 * without this the per-source native-zoom cap silently kept
                 * whichever basemap was mounted FIRST and the blank-tile bug
-                * came back the moment you switched sources. */}
+                * came back the moment you switched sources.
+                *
+                * Two layers, not one - see useBasemapCrossfade's own
+                * docstring: `previous` (lower zIndex) stays mounted until
+                * `current`'s own tiles have actually loaded, so a basemap
+                * switch never shows a blank/grey gap while the new source's
+                * tiles are still in flight. */}
+              {basemapCrossfade.previous ? (
+                <TileLayer
+                  key={basemapCrossfade.previous.key}
+                  attribution={basemapCrossfade.previous.attribution}
+                  url={basemapCrossfade.previous.url}
+                  /* Leaflet's own default is 'abc' when this option is
+                   * omitted from the constructor - but react-leaflet passes
+                   * every prop straight into that constructor's options
+                   * object, and an explicit `subdomains: undefined` key
+                   * (which is what a bare `basemap.subdomains` would send
+                   * for every non-Google entry, none of which set it)
+                   * OVERWRITES that default with `undefined` rather than
+                   * falling back to it - confirmed by the exact crash this
+                   * produced: Leaflet's own subdomain-picking code reads
+                   * `this.options.subdomains.length`. `?? "abc"` keeps the
+                   * key always a real string. */
+                  subdomains={basemapCrossfade.previous.subdomains ?? "abc"}
+                  maxNativeZoom={basemapCrossfade.previous.maxNativeZoom}
+                  crossOrigin="anonymous"
+                  zIndex={199}
+                />
+              ) : null}
               <TileLayer
-                key={basemap.key}
-                attribution={basemap.attribution}
-                url={basemap.url}
-                maxNativeZoom={basemap.maxNativeZoom}
+                key={basemapCrossfade.current.key}
+                attribution={basemapCrossfade.current.attribution}
+                url={basemapCrossfade.current.url}
+                subdomains={basemapCrossfade.current.subdomains ?? "abc"}
+                maxNativeZoom={basemapCrossfade.current.maxNativeZoom}
+                zIndex={200}
+                eventHandlers={basemapLoadHandlers}
                 // "Save image" (exportImage) rasterizes this whole container to a
                 // canvas via html-to-image. Every basemap sends a real
                 // Access-Control-Allow-Origin header (verified directly), but the
@@ -1353,8 +1669,32 @@ export default function ProjectMap({
                 <TileLayer key={overlayTileUrl} url={overlayTileUrl} opacity={0.8} zIndex={400} maxZoom={22} />
               ) : null}
             </MapContainer>
+            {contextMenu ? (
+              <MapContextMenu
+                key={contextMenu.openId}
+                point={contextMenu.point}
+                latlng={contextMenu.latlng}
+                containerSize={canvasRef.current?.getBoundingClientRect() ?? { width: 0, height: 0 }}
+                onWhatsHere={() => {
+                  inspectPixel(contextMenu.latlng);
+                  closeContextMenu();
+                }}
+                onAttributeTable={() => {
+                  openAttributeTable(contextMenu.latlng);
+                  closeContextMenu();
+                }}
+                onCenterHere={() => centerHere(contextMenu.latlng)}
+                onZoomInHere={() => zoomInHere(contextMenu.latlng)}
+                onClose={closeContextMenu}
+              />
+            ) : null}
         </div>
       </div>
+      <AttributeTableDialog
+        data={attributeTable}
+        symbologyState={symbologyState}
+        onClose={() => setAttributeTable(null)}
+      />
     </div>
   );
 }

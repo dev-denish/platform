@@ -1838,6 +1838,21 @@ label.checkbox-field {
   background: var(--accent-strong);
 }
 
+/* Basemap panel's own toggle (Wave: Map Toolbar Enhancement v2, Tier 2) -
+ * --accent-secondary rather than a third one-off color: it's the app's
+ * existing "distinct from the orange accent" token (already used for the
+ * Draw tool's shape color), so this reads as a third, deliberately different
+ * entry point next to Tools (neutral) and Layers (orange) without inventing
+ * a new hue just for this button. */
+.map-floating-toggle-basemap {
+  background: var(--accent-secondary);
+}
+
+.map-floating-toggle-basemap:hover {
+  background: var(--accent-secondary);
+  opacity: 0.85;
+}
+
 /* Leaflet's default scale control, restyled to match the app's chrome
  * (Wave: map UI redesign) - a real cartographic distance bar, bottom-right
  * of the map. */
@@ -1896,6 +1911,25 @@ label.checkbox-field {
 .icon-button:hover {
   background: var(--chrome-wash-hover);
   color: var(--accent-strong);
+}
+
+/* CompassIndicator (Wave: Map Toolbar Enhancement v2) - same small floating
+ * chrome as .icon-button (FullscreenToggle, right above it in
+ * .map-overlay-topright) but not a button: it's a static, non-interactive
+ * badge (Leaflet doesn't rotate by default, so there's no bearing to click
+ * into and no state to toggle), so no hover/active treatment and `cursor:
+ * default` instead of `pointer`. */
+.compass-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  background: var(--chrome-wash);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-card);
+  color: var(--text-muted);
+  cursor: default;
 }
 
 /* Wave: floating map controls - a floating card (same treatment as
@@ -2013,6 +2047,21 @@ label.checkbox-field {
   border-bottom: none;
 }
 
+/* Drag-to-reorder (Wave: Map Toolbar Enhancement v2, Tier 4) - the dragged
+ * row itself dims rather than disappearing, so its ORIGINAL position stays
+ * visible as a reference point while you drag it elsewhere in the same
+ * list, matching the drag-and-drop feel most file managers/list UIs use. */
+.layer-row-dragging {
+  opacity: 0.4;
+}
+
+.layer-row-drag-handle {
+  flex-shrink: 0;
+  display: inline-flex;
+  color: var(--text-faint);
+  cursor: grab;
+}
+
 .layer-row-checkbox {
   flex-shrink: 0;
   cursor: pointer;
@@ -2123,6 +2172,173 @@ label.checkbox-field {
 .layer-rename-field .ghost-button {
   padding: 5px 10px;
   font-size: 12.5px;
+}
+
+/* Wave: Map Toolbar Enhancement v2 (smoothness requirement) - a short
+ * fade + slight-slide-down entrance for a floating panel that just mounted,
+ * instead of an instant snap. Applied on mount only (React's conditional
+ * `{open ? <Panel/> : null}` unmounts on close - same as every other
+ * dropdown/popover in this file, e.g. .map-toolbar-menu/.symbology-popover,
+ * which already close instantly with no complaints; only the OPEN side of
+ * Layers/Basemap needed fixing here). */
+@keyframes panelIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.layers-panel,
+.basemap-panel {
+  animation: panelIn 0.18s ease-out;
+}
+
+/* Basemap panel (Wave: Map Toolbar Enhancement v2, Tier 2) - same floating-
+ * card shape as .layers-panel (accent header, --shadow-lift), opened from its
+ * own toggle in .map-floating-toggle-row rather than replacing
+ * BasemapToggle's plain <select> inside MapToolbar (that one stays for the
+ * existing e2e tests - see this component's own docstring). */
+.basemap-panel {
+  width: 300px;
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lift);
+  font-size: 12.5px;
+  overflow: hidden;
+}
+
+.basemap-panel-header {
+  background: var(--accent);
+  color: #ffffff;
+  font-weight: 600;
+  padding: 8px 12px;
+}
+
+.basemap-panel-body {
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.basemap-panel-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.basemap-panel-tab {
+  font-size: 11.5px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border-strong);
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.basemap-panel-tab:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.basemap-panel-tab-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #ffffff;
+}
+
+.basemap-panel-options {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.basemap-panel-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.basemap-panel-option:hover {
+  background: var(--surface-hover);
+}
+
+.basemap-panel-option-selected {
+  background: var(--accent-wash);
+}
+
+.basemap-panel-thumb {
+  flex: none;
+  width: 40px;
+  height: 30px;
+  border-radius: 5px;
+  border: 1px solid var(--border-strong);
+  background: linear-gradient(160deg, #9db894, #6f8f63);
+}
+
+.basemap-panel-thumb-map,
+.basemap-panel-thumb-google-streets {
+  background: linear-gradient(160deg, #f2efe6, #cfd6db);
+}
+
+.basemap-panel-thumb-dark {
+  background: linear-gradient(160deg, #3a3f3d, #1d2321);
+}
+
+.basemap-panel-thumb-osm {
+  background: linear-gradient(160deg, #cfe0d8, #a8c7de);
+}
+
+.basemap-panel-thumb-topo,
+.basemap-panel-thumb-google-terrain {
+  background: linear-gradient(160deg, #d8cfa8, #b6a674);
+}
+
+.basemap-panel-thumb-google-hybrid {
+  background: linear-gradient(160deg, #9db894, #b6a674);
+}
+
+.basemap-panel-option-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.basemap-panel-option-name {
+  color: var(--text);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.basemap-panel-option-sub {
+  font-size: 10.5px;
+  color: var(--text-faint);
+  text-transform: capitalize;
+}
+
+.basemap-panel-check {
+  flex: none;
+  color: var(--accent-strong);
 }
 
 .symbology-popover {
@@ -2315,6 +2531,135 @@ label.checkbox-field {
   margin-top: 2px;
 }
 
+/* Right-click context menu (Wave: Map Toolbar Enhancement v2, Tier 3) -
+ * absolutely positioned within .map-canvas-wrap using Leaflet's own
+ * containerPoint (see MapContextMenu.jsx), clamped there against the
+ * wrapper's measured size. No entrance transition, deliberately - see that
+ * component's own docstring: this control's smoothness requirement is "no
+ * visible delay," the opposite of the Layers/Basemap panels' fade-in. */
+.map-context-menu {
+  position: absolute;
+  z-index: var(--z-map-overlay);
+  width: 220px;
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lift);
+  padding: 4px;
+  font-size: 12.5px;
+}
+
+.map-context-menu-coords {
+  padding: 6px 10px 8px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.map-context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 10px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  text-align: left;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.map-context-menu-item:hover {
+  background: var(--accent-wash);
+  color: var(--accent-strong);
+}
+
+.map-context-menu-item .icon {
+  flex: none;
+  color: var(--text-faint);
+}
+
+.map-context-menu-item:hover .icon {
+  color: var(--accent-strong);
+}
+
+.map-context-menu-divider {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}
+
+/* Attribute table dialog (Wave: Map Toolbar Enhancement v2, Tier 3) - same
+ * <dialog> chrome as .confirm-dialog (it shares that class), just wider to
+ * fit a real data table. */
+.attribute-table-dialog {
+  width: min(560px, calc(100vw - 48px));
+}
+
+.attribute-table-coords {
+  font-family: var(--font-mono);
+}
+
+.attribute-table-scroll {
+  max-height: 50vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin-bottom: 16px;
+}
+
+.attribute-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.attribute-table th,
+.attribute-table td {
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.attribute-table thead th {
+  background: var(--bg-elevated);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.attribute-table tbody th {
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.attribute-table td {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.attribute-table-row-error td {
+  color: var(--clay);
+  font-family: var(--font-body);
+}
+
+/* .legend-swatch (shared, defined below) relies on being a flex child
+ * elsewhere (e.g. .pixel-popup-value) for its width/height to apply as a
+ * plain inline <span> otherwise ignores both - a table cell isn't a flex
+ * container, so this scopes the same fix locally instead of changing the
+ * shared class's default behavior everywhere else it's used. */
+.attribute-table .legend-swatch {
+  display: inline-block;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+
 .map-scroll-hint {
   position: absolute;
   left: 50%;
@@ -2495,6 +2840,35 @@ label.checkbox-field {
 
 .symbology-stretch-row input[type="range"] {
   width: 100px;
+}
+
+/* VectorStylePanel (Wave: Map Toolbar Enhancement v2, Tier 4) - stroke color/
+ * weight/fill-opacity, the vector counterpart to the three rows above. A
+ * full-width row (not inline-flex like those three, which sit inside a
+ * flex-wrap raster-only parent) since VectorStylePanel's own root already
+ * lays its rows out in a column. */
+.vector-style-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.vector-style-row input[type="color"] {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
+}
+
+.vector-style-row input[type="range"] {
+  flex: 1;
+  max-width: 140px;
 }
 
 /* ---------------------------------------------------------- legend */

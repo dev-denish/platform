@@ -66,10 +66,41 @@ export const CARTO_BASEMAP_MAX_NATIVE_ZOOM = 20;
  *   renders as nothing). maxNativeZoom 17, so Leaflet upscales the real z17
  *   tile instead of showing that placeholder.
  */
+/**
+ * Wave: Basemap panel (Map Toolbar Enhancement v2). Google Satellite/Terrain/
+ * Hybrid/Streets, added at the user's explicit direction despite the ToS risk
+ * flagged during planning: this app has no Google Maps Platform API key or
+ * billing account configured anywhere (confirmed - grepped the whole repo),
+ * so these hit Google's undocumented mt0-3.google.com/vt tile endpoint
+ * instead of the real (keyed, billed) Tiles API. No SLA, unsupported, can
+ * break or get IP-blocked without warning - if that happens, the fix is a
+ * real Maps Platform key + billing account, swapped in here the same way
+ * VITE_BASEMAP_URL already lets satellite's own URL be overridden.
+ *
+ * Reachability + real tile content spot-checked the same way every other
+ * entry in this file was (fetching actual tile bytes, not just a 200) -
+ * against Bengaluru (12.9716, 77.5946) at z20/z21, all four layer codes
+ * (s/p/y/m) returned real, non-placeholder image bytes. Only spot-checked at
+ * one city, unlike the exhaustive multi-city testing the other entries below
+ * document - an unofficial endpoint with no published LOD table to check
+ * against. maxNativeZoom 20 for all four (satellite alone also confirmed
+ * live at z21, but kept at the shared, more conservative number rather than
+ * one-off tuning a single layer past what was actually verified for the
+ * other three).
+ *
+ * `subdomains: "0123"` - Google's mt{s} convention is numeric (mt0-mt3), not
+ * Leaflet's default 'abc'; harmless no-op on every non-Google entry below
+ * (their URLs don't contain `{s}` at all).
+ */
+const GOOGLE_SUBDOMAINS = "0123";
+const GOOGLE_ATTRIBUTION = "Map data &copy; Google";
+const GOOGLE_MAX_NATIVE_ZOOM = 20;
+
 export const BASEMAPS = [
   {
     key: "satellite",
     label: "Satellite",
+    source: "esri",
     url: BASEMAP_URL,
     attribution: BASEMAP_ATTRIBUTION,
     maxNativeZoom: BASEMAP_MAX_NATIVE_ZOOM,
@@ -77,6 +108,7 @@ export const BASEMAPS = [
   {
     key: "map",
     label: "Map (light)",
+    source: "carto",
     url: CARTO_BASEMAP_URL,
     attribution: CARTO_BASEMAP_ATTRIBUTION,
     maxNativeZoom: CARTO_BASEMAP_MAX_NATIVE_ZOOM,
@@ -84,6 +116,7 @@ export const BASEMAPS = [
   {
     key: "dark",
     label: "Map (dark)",
+    source: "carto",
     url: "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
     attribution: CARTO_BASEMAP_ATTRIBUTION,
     maxNativeZoom: 20,
@@ -91,6 +124,7 @@ export const BASEMAPS = [
   {
     key: "osm",
     label: "Streets (OSM)",
+    source: "osm",
     url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     maxNativeZoom: 19,
@@ -98,10 +132,57 @@ export const BASEMAPS = [
   {
     key: "topo",
     label: "Topographic",
+    source: "esri",
     url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
     attribution: "Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ, and the GIS User Community",
     maxNativeZoom: 17,
   },
+  {
+    key: "google-satellite",
+    label: "Google Satellite",
+    source: "google",
+    url: "https://mt{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
+    subdomains: GOOGLE_SUBDOMAINS,
+    attribution: GOOGLE_ATTRIBUTION,
+    maxNativeZoom: GOOGLE_MAX_NATIVE_ZOOM,
+  },
+  {
+    key: "google-terrain",
+    label: "Google Terrain",
+    source: "google",
+    url: "https://mt{s}.google.com/vt/lyrs=p&x={x}&y={y}&z={z}",
+    subdomains: GOOGLE_SUBDOMAINS,
+    attribution: GOOGLE_ATTRIBUTION,
+    maxNativeZoom: GOOGLE_MAX_NATIVE_ZOOM,
+  },
+  {
+    key: "google-hybrid",
+    label: "Google Hybrid",
+    source: "google",
+    url: "https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}",
+    subdomains: GOOGLE_SUBDOMAINS,
+    attribution: GOOGLE_ATTRIBUTION,
+    maxNativeZoom: GOOGLE_MAX_NATIVE_ZOOM,
+  },
+  {
+    key: "google-streets",
+    label: "Google Streets",
+    source: "google",
+    url: "https://mt{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}",
+    subdomains: GOOGLE_SUBDOMAINS,
+    attribution: GOOGLE_ATTRIBUTION,
+    maxNativeZoom: GOOGLE_MAX_NATIVE_ZOOM,
+  },
+];
+
+/** Display order + labels for the Basemap panel's source tabs (Wave: Basemap
+ * panel). Google first - it's the one source this pass actually built,
+ * mirroring the mockup's Google-first tab order. */
+export const BASEMAP_SOURCES = [
+  { key: "google", label: "Google" },
+  { key: "esri", label: "Esri" },
+  { key: "carto", label: "Carto" },
+  { key: "osm", label: "OpenStreetMap" },
 ];
 
 /** Falls back to the first entry so an unknown/stale stored mode still renders
