@@ -203,7 +203,14 @@ def main() -> None:
     if args.command in ("blocks", "villages"):
         ingest_boundary_layer(
             kind=args.command, csv_path=args.csv_path, display_name=args.display_name,
-            source_tag=args.source_tag, requires_district_scope=(args.command == "villages"),
+            # Perf fix: Block was originally judged "small enough" nationwide
+            # (0019_admin_boundaries) at 7,114 features - measured reality is
+            # ST_AsGeoJSON of that whole layer is ~29MB of text, enough on its
+            # own to make every pan/zoom janky client-side regardless of what
+            # else is on the map. Same district scoping as Village, using the
+            # same properties->>'district_lgd_code' every Admin Boundaries
+            # feature already carries.
+            source_tag=args.source_tag, requires_district_scope=True,
             simplify_tolerance=args.simplify_tolerance,
         )
     else:

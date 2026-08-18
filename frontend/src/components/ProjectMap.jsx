@@ -485,14 +485,16 @@ export default function ProjectMap({
   // features_url (GET /layers/{id}/geojson or the WFS proxy) and cached here,
   // unlike raster tiles which stream themselves through <TileLayer>.
   const [vectorData, setVectorData] = useState({});
-  // Wave: Admin Boundaries. The Village layer (requires_district_scope) is
-  // never auto-fetched into vectorData (see the effect below, which
-  // excludes it) - a user picks a district first, via this state. layer_id
-  // -> selected district_lgd_code (string). villageCoverage is the
-  // "boundary not available" list for that same (layer_id, district)
-  // pair - a separate fetch (GET /layers/{id}/village-coverage), not
-  // derivable from vectorData alone since a village with no polygon never
-  // appears in the GeoJSON response at all.
+  // Wave: Admin Boundaries. A requires_district_scope layer (Village, and
+  // now Block - see 0020_block_boundaries_district_scope) is never
+  // auto-fetched into vectorData (see the effect below, which excludes it) -
+  // a user picks a district first, via this state. layer_id -> selected
+  // district_lgd_code (string). villageCoverage is the "boundary not
+  // available" list for that same (layer_id, district) pair, Village layers
+  // only (see selectVillageDistrict) - a separate fetch (GET
+  // /layers/{id}/village-coverage), not derivable from vectorData alone
+  // since a village with no polygon never appears in the GeoJSON response
+  // at all.
   const [districtScope, setDistrictScope] = useState({});
   const [villageCoverage, setVillageCoverage] = useState({});
   const [adminDistricts, setAdminDistricts] = useState([]);
@@ -516,13 +518,24 @@ export default function ProjectMap({
   const selectVillageDistrict = useCallback(async (layerId, districtLgdCode) => {
     setDistrictScope((prev) => ({ ...prev, [layerId]: districtLgdCode }));
     if (!districtLgdCode) return;
+    // Perf fix (Wave: Admin Boundaries) - Block is now requires_district_scope
+    // too (see 0020_block_boundaries_district_scope), but /village-coverage
+    // cross-checks against admin_village_registry specifically; calling it
+    // for Block would return a nonsensical "N of M villages" count. Only a
+    // real Village layer (source tag "admin-boundaries-village-lgd-...")
+    // gets the coverage fetch - Block just gets its district-scoped geojson.
+    const layer = layers.find((l) => l.layer_id === layerId);
+    const isVillageLayer = layer?.source?.startsWith("admin-boundaries-village-lgd");
     try {
-      const [geojson, coverage] = await Promise.all([
-        apiFetch(`/layers/${layerId}/geojson?district_lgd_code=${encodeURIComponent(districtLgdCode)}`),
-        apiFetch(`/layers/${layerId}/village-coverage?district_lgd_code=${encodeURIComponent(districtLgdCode)}`),
-      ]);
+      const geojsonPromise = apiFetch(
+        `/layers/${layerId}/geojson?district_lgd_code=${encodeURIComponent(districtLgdCode)}`
+      );
+      const coveragePromise = isVillageLayer
+        ? apiFetch(`/layers/${layerId}/village-coverage?district_lgd_code=${encodeURIComponent(districtLgdCode)}`)
+        : Promise.resolve(null);
+      const [geojson, coverage] = await Promise.all([geojsonPromise, coveragePromise]);
       setVectorData((prev) => ({ ...prev, [layerId]: geojson }));
-      setVillageCoverage((prev) => ({ ...prev, [layerId]: coverage }));
+      if (coverage) setVillageCoverage((prev) => ({ ...prev, [layerId]: coverage }));
     } catch {
       setVectorData((prev) => ({ ...prev, [layerId]: null }));
       setVillageCoverage((prev) => {
@@ -531,7 +544,7 @@ export default function ProjectMap({
         return next;
       });
     }
-  }, []);
+  }, [layers]);
 
   // Wave: tile-expiry UX. Proactive refresh is the PRIMARY defense (see this
   // component's docstring) - re-mints fresh layer/tile tokens on a timer, well
@@ -1146,6 +1159,24 @@ export default function ProjectMap({
     // but wait for it; that attempt's own resolution will set 'idle'/'failed'.
   }
 
+  // Perf fix (vector-layer pan/zoom lag, part 2): react-leaflet's <GeoJSON>
+  // treats a new `style` reference as a changed prop and calls
+  // layer.setStyle() across every feature in the layer - for India
+  // Block/Village (thousands of features) that's real DOM/canvas work
+  // repeated on every moveend/zoomend re-render even when color/weight/
+  // fillOpacity/opacity haven't actually changed. Caching the style object
+  // per layer_id, keyed on its own values, keeps the same reference across
+  // renders so react-leaflet skips the no-op restyle.
+  const vectorStyleCacheRef = useRef(new Map());
+  function getStableVectorStyle(layerId, color, weight, fillOpacity, opacity) {
+    const depsKey = `${color}|${weight}|${fillOpacity}|${opacity}`;
+    const cached = vectorStyleCacheRef.current.get(layerId);
+    if (cached && cached.depsKey === depsKey) return cached.style;
+    const style = { color, weight, fillOpacity, opacity };
+    vectorStyleCacheRef.current.set(layerId, { depsKey, style });
+    return style;
+  }
+
   // Wave: multi-format layers. Real geometries (vector layers, and an
   // external_wfs layer's live GetFeature response - both fetched once into
   // `vectorData` above) render as an actual Leaflet <GeoJSON>, not a raster
@@ -1160,11 +1191,12 @@ export default function ProjectMap({
     // `layers` and the merge effect above populating vectorStyleState for
     // it, not the expected steady-state path.
     const { color, weight, fillOpacity } = vectorStyleState[l.layer_id] ?? defaultVectorStyle(l);
+    const style = getStableVectorStyle(l.layer_id, color, weight, fillOpacity, opacity);
     return (
       <GeoJSON
         key={key ?? `${l.layer_id}-vector`}
         data={data}
-        style={() => ({ color, weight, fillOpacity, opacity })}
+        style={style}
         // Point markers keep their own fixed 0.7 fill (unchanged from before
         // this feature) rather than the polygon `fillOpacity` control above -
         // that value defaults to 0.15 (right for a filled polygon's
@@ -1514,6 +1546,14 @@ export default function ProjectMap({
               // which shows the exact same text plus a real interactive "i"
               // toggle Leaflet's own control has no equivalent for.
               attributionControl={false}
+              // Perf fix (vector-layer pan/zoom lag): Leaflet's default SVG
+              // renderer gives every polygon its own DOM <path> element -
+              // fine for a handful of features, but India Block/Village
+              // boundaries put thousands of paths in the same pane, which
+              // makes every pan/zoom a large-scale DOM repaint. Canvas draws
+              // all vector layers into one bitmap instead, which is the
+              // well-established fix for this exact symptom.
+              preferCanvas
               maxZoom={22}
               className="map-root"
             >
