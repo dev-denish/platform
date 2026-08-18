@@ -151,6 +151,51 @@ function LayerNameField({ layer, onRenamed }) {
   );
 }
 
+/**
+ * Wave: Admin Boundaries. The Village layer's district picker + "boundary
+ * not available" gap indicator - rendered inline in its layer row instead
+ * of a checkbox-only toggle, since (unlike every other reference layer)
+ * there's genuinely nothing to show until a district is chosen (see
+ * ProjectMap.jsx's selectVillageDistrict, which is what this calls).
+ * `coverage` is the GET /layers/{id}/village-coverage response for the
+ * CURRENTLY selected district - undefined until a district is picked, so
+ * the count line is simply absent until then rather than showing a stale
+ * previous district's numbers.
+ */
+function VillageDistrictScope({ layer, districts, selectedDistrict, coverage, onSelectDistrict }) {
+  return (
+    <span className="layer-row-district-scope">
+      <select
+        className="field-input layer-row-district-select"
+        aria-label={`Select a district for ${displayLabel(layer)}`}
+        value={selectedDistrict ?? ""}
+        onChange={(e) => onSelectDistrict?.(layer.layer_id, e.target.value || null)}
+      >
+        <option value="">Select a district…</option>
+        {districts.map((d) => (
+          <option key={d.district_lgd_code} value={d.district_lgd_code}>
+            {d.district_name} ({d.state_name})
+          </option>
+        ))}
+      </select>
+      {coverage ? (
+        <span className="layer-row-village-coverage">
+          {formatNumber(coverage.with_boundary, 0)} of {formatNumber(coverage.total_registered, 0)} villages
+          have a boundary shown
+          {coverage.missing.length > 0 ? (
+            <>
+              {" — "}
+              <span className="layer-row-village-coverage-missing">
+                {formatNumber(coverage.missing.length, 0)} boundary not available
+              </span>
+            </>
+          ) : null}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
 function featureCountFor(layer, vectorData) {
   if (layer.layer_kind !== "vector" && layer.layer_kind !== "external_wfs") return null;
   const data = vectorData?.[layer.layer_id];
@@ -172,6 +217,10 @@ function LayersPanel({
   onRefreshLayers,
   onLegendChanged,
   projectId,
+  adminDistricts = [],
+  districtScope = {},
+  villageCoverage = {},
+  onSelectVillageDistrict,
 }) {
   const { user } = useAuth();
   // Shared collapsible primitive (sessionStorage-backed, so a collapsed
@@ -387,6 +436,15 @@ function LayersPanel({
                                   <span className="layer-row-label">{displayLabelWithDate(l)}</span>
                                   {featureCount != null ? (
                                     <span className="layer-row-feature-count">{formatNumber(featureCount, 0)} features</span>
+                                  ) : null}
+                                  {l.requires_district_scope ? (
+                                    <VillageDistrictScope
+                                      layer={l}
+                                      districts={adminDistricts}
+                                      selectedDistrict={districtScope[l.layer_id]}
+                                      coverage={villageCoverage[l.layer_id]}
+                                      onSelectDistrict={onSelectVillageDistrict}
+                                    />
                                   ) : null}
                                 </span>
                                 {l.needs_reingestion ? (

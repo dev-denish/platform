@@ -8,6 +8,7 @@ from fastapi import APIRouter
 
 from app.api.v1 import (
     adhoc_layers,
+    admin_boundaries,
     analyses,
     auth,
     datasets,
@@ -40,5 +41,6 @@ api_router.include_router(wms_domains.router)
 api_router.include_router(external_layers.router)
 api_router.include_router(reference_layers.router)
 api_router.include_router(adhoc_layers.router)
+api_router.include_router(admin_boundaries.router)
 api_router.include_router(forest_definition.router)
 api_router.include_router(reports.router)

@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from app.api.deps import (
     CurrentUserDep,
@@ -23,6 +23,7 @@ from app.domain.dtos import (
     LayerRenameResult,
     RenameLayerRequest,
     UpdateClassLegendRequest,
+    VillageCoverageOut,
 )
 from app.domain.enums import RENAME_LAYER_ROLES, UPLOAD_ROLES
 from app.services.layer_rename_service import LayerRenameService
@@ -37,8 +38,26 @@ def get_layer_geojson(
     layer_id: UUID,
     user: CurrentUserDep,
     svc: Annotated[VectorLayerService, Depends(get_vector_layer_service)],
+    district_lgd_code: Annotated[str | None, Query()] = None,
 ) -> dict:
-    return svc.get_geojson(layer_id, user)
+    # Wave: Admin Boundaries. Every other vector layer ignores this param
+    # (as before); the Village layer requires it - see
+    # VectorLayerService.get_geojson.
+    return svc.get_geojson(layer_id, user, district_lgd_code)
+
+
+@router.get("/layers/{layer_id}/village-coverage", response_model=VillageCoverageOut)
+def get_village_coverage(
+    layer_id: UUID,
+    district_lgd_code: Annotated[str, Query()],
+    user: CurrentUserDep,
+    svc: Annotated[VectorLayerService, Depends(get_vector_layer_service)],
+) -> VillageCoverageOut:
+    """Wave: Admin Boundaries. The "boundary not available" list for one
+    district's Village layer - official registry vs. what actually has a
+    polygon, not the aggregate coverage percentage from the sourcing
+    research."""
+    return VillageCoverageOut(**svc.get_village_coverage(layer_id, user, district_lgd_code))
 
 
 @router.patch("/layers/{layer_id}/class-legend", response_model=ClassLegendUpdateResult)

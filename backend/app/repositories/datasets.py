@@ -174,20 +174,32 @@ class LayerRepository:
     def insert_non_raster(
         self, *, dataset_id: UUID, layer_kind: str, crs: str,
         bounds: tuple[float, float, float, float],
+        requires_district_scope: bool = False,
     ) -> UUID:
         """Wave: multi-format layers. A vector or external_wms/external_wfs
         row has no file/preview/pixel_size/band_count/class_legend at all -
         those stay NULL, exactly like a raster row before its COG exists,
-        just permanently rather than transiently."""
+        just permanently rather than transiently.
+
+        requires_district_scope (Wave: Admin Boundaries): true only for a
+        Village-level layer, whose feature count makes a whole-layer
+        GET /layers/{id}/geojson impractical - see VectorLayerService.
+        get_geojson, which enforces a district_lgd_code filter whenever
+        this is set. False (default) for every other vector layer,
+        unchanged."""
         minx, miny, maxx, maxy = bounds
         self.cur.execute(
             """
             INSERT INTO spatial_layer (dataset_id, crs, bbox_minx, bbox_miny,
-                                        bbox_maxx, bbox_maxy, extent, layer_kind)
-            VALUES (%s, %s, %s, %s, %s, %s, ST_MakeEnvelope(%s, %s, %s, %s, 4326), %s)
+                                        bbox_maxx, bbox_maxy, extent, layer_kind,
+                                        requires_district_scope)
+            VALUES (%s, %s, %s, %s, %s, %s, ST_MakeEnvelope(%s, %s, %s, %s, 4326), %s, %s)
             RETURNING layer_id
             """,
-            (str(dataset_id), crs, minx, miny, maxx, maxy, minx, miny, maxx, maxy, layer_kind),
+            (
+                str(dataset_id), crs, minx, miny, maxx, maxy, minx, miny, maxx, maxy,
+                layer_kind, requires_district_scope,
+            ),
         )
         return self.cur.fetchone()["layer_id"]  # type: ignore[index]
 
@@ -202,7 +214,8 @@ class LayerRepository:
             """
             SELECT sl.layer_id, sl.layer_kind, sl.crs, sl.bbox_minx, sl.bbox_miny,
                    sl.bbox_maxx, sl.bbox_maxy, sl.pixel_size_m, sl.preview_key,
-                   sl.cog_key, sl.band_count, sl.class_legend, d.type, d.date_processed,
+                   sl.cog_key, sl.band_count, sl.class_legend, sl.requires_district_scope,
+                   d.type, d.date_processed,
                    d.source, d.display_name, d.accuracy_score, d.is_reference, d.is_adhoc
             FROM spatial_layer sl
             JOIN dataset d ON d.dataset_id = sl.dataset_id
@@ -247,7 +260,7 @@ class LayerRepository:
         self.cur.execute(
             """
             SELECT sl.layer_id, sl.dataset_id, sl.layer_kind, sl.cog_key, sl.file_key,
-                   sl.preview_key, sl.class_legend, p.project_id,
+                   sl.preview_key, sl.class_legend, sl.requires_district_scope, p.project_id,
                    d.type, d.date_processed, d.display_name, d.source, d.is_adhoc
             FROM spatial_layer sl
             JOIN dataset d ON d.dataset_id = sl.dataset_id

@@ -2206,6 +2206,33 @@ label.checkbox-field {
   font-family: var(--font-mono);
 }
 
+/* Wave: Admin Boundaries - the Village layer's inline district picker +
+ * "boundary not available" gap indicator (see VillageDistrictScope in
+ * LayersPanel.jsx). Sized to sit inside a 340px floating panel row, same
+ * trim-down reasoning as .layer-rename-field .field-input above. */
+.layer-row-district-scope {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 4px;
+}
+
+.layer-row-district-select {
+  padding: 4px 6px;
+  font-size: 12px;
+  font-family: var(--font-body);
+  max-width: 100%;
+}
+
+.layer-row-village-coverage {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.layer-row-village-coverage-missing {
+  color: #b8860b;
+}
+
 .layer-row-warning {
   flex-shrink: 0;
   font-size: 12px;
