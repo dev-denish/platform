@@ -41,6 +41,7 @@ from app.services.report_service import ReportService
 from app.services.tile_service import TileService
 from app.services.user_service import UserService
 from app.services.vector_layer_service import VectorLayerService
+from app.services.vnv_analysis_service import VNVAnalysisService
 from app.services.wms_service import WmsService
 from app.workers.queue import TaskRunner
 
@@ -90,6 +91,10 @@ def get_permission_service(db: Annotated[Database, Depends(get_db)]) -> Permissi
 
 def get_gee_analysis_service(db: Annotated[Database, Depends(get_db)]) -> GEEAnalysisService:
     return GEEAnalysisService(db)
+
+
+def get_vnv_analysis_service(db: Annotated[Database, Depends(get_db)]) -> VNVAnalysisService:
+    return VNVAnalysisService(db)
 
 
 def get_report_service(db: Annotated[Database, Depends(get_db)]) -> ReportService:

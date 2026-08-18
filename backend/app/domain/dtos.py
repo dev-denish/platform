@@ -670,6 +670,14 @@ class AnalysisCatalogEntryOut(BaseModel):
     # GEEAnalysisService.list_catalog()/get_project_analyses() before this
     # DTO is built, so the frontend always sees a real number, never `None`.
     config: dict[str, Any] | None = None
+    # Wave: VNV Pipeline NDFI go-live. Defaults to "gee" (the pre-existing,
+    # only compute source before this wave), so every one of the original
+    # entries' API responses stay byte-identical - only the new "vnv_ndfi"
+    # entry (built via `**entry` spread from analysis_catalog.CATALOG, whose
+    # own dict carries a real "vnv_pipeline" value for this key) shows
+    # anything else. Lets the frontend separate the VNV card's real entry
+    # from the GEE card's list without a second endpoint.
+    compute_source: str = "gee"
 
 
 class ProjectAnalysisSummary(BaseModel):
@@ -683,6 +691,9 @@ class ProjectAnalysisSummary(BaseModel):
     description: str
     year_selectable: bool = False
     config: dict[str, Any] | None = None
+    # Wave: VNV Pipeline NDFI go-live. Same default/reasoning as
+    # AnalysisCatalogEntryOut.compute_source above.
+    compute_source: str = "gee"
     computed_at: datetime | None = None
 
 

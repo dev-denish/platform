@@ -114,7 +114,7 @@ from app.core.errors import DomainError, NotFoundError, ValidationError
 from app.core.logging import get_logger
 from app.domain import analysis_config
 from app.domain.analysis_catalog import CATALOG, get_catalog_entry
-from app.domain.authz import require_project_upload, require_project_view
+from app.domain.authz import require_project_view
 from app.domain.dtos import (
     AnalysisPointValue,
     AnalysisResultOut,
@@ -134,6 +134,7 @@ from app.repositories.analysis_results import AnalysisResultRepository
 from app.repositories.audit import AuditRepository
 from app.repositories.forest_definition import ForestDefinitionRepository
 from app.services import gee_tile_cache
+from app.services.analysis_shared import prepare_analysis_refresh
 from app.services.gee_client import init_ee
 from app.services.index_summary import summarize_index_result
 from app.services.jobs_service import JobService
@@ -334,30 +335,16 @@ class GEEAnalysisService:
         source/masking combination is rejected with its specific reason
         whether or not the caller could even upload to this project.
         Unconfigured ids (`"config" not in entry`) pass `request_params`
-        through unchanged - the pre-existing browse-id behavior."""
-        entry = get_catalog_entry(analysis_id)
-        if entry is None:
-            raise NotFoundError("Unknown analysis.")
-        if entry["status"] != "available":
-            raise ValidationError(f"'{entry['name']}' is not implemented yet.")
-        resolved_params = (
-            analysis_config.resolve_and_validate(analysis_id, entry["config"], request_params)
-            if "config" in entry
-            else request_params
-        )
+        through unchanged - the pre-existing browse-id behavior.
 
-        with self.db.connection() as conn, conn.cursor() as cur:
-            require_project_upload(cur, project_id, actor)
-            boundary_geojson = AnalysisResultRepository(cur).get_project_boundary_geojson(
-                project_id
-            )
-            canopy_cover_pct = float(ForestDefinitionRepository(cur).get()["canopy_cover_pct"])
-
-        if boundary_geojson is None:
-            raise ValidationError(
-                "This project has no Boundary layer yet - upload one before running an analysis."
-            )
-        return entry, boundary_geojson, canopy_cover_pct, resolved_params
+        Wave: VNV Pipeline NDFI go-live. This is now a thin wrapper around
+        `app.services.analysis_shared.prepare_analysis_refresh` - that
+        logic had zero GEE-specific code in it to begin with, so it was
+        extracted there once a second compute source (VNVAnalysisService)
+        needed the identical catalog/permission/boundary validation, rather
+        than reimplementing a second, slightly-different copy. Signature
+        and behavior here are unchanged."""
+        return prepare_analysis_refresh(self.db, project_id, analysis_id, actor, request_params)
 
     def refresh(
         self,

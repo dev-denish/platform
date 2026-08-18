@@ -54,6 +54,13 @@ class AnalysisCatalogEntry(TypedDict):
     # entry` to decide whether to call `analysis_config.resolve_and_validate`
     # at all.
     config: NotRequired[AnalysisConfigSpec]
+    # Wave: VNV Pipeline NDFI go-live. Which compute path owns this entry -
+    # absent (falsy) means "gee", the original 18 entries' unchanged,
+    # implicit default (never retrofitted onto them). Only "vnv_ndfi" below
+    # sets this to "vnv_pipeline"; app/api/v1/analyses.py's refresh_analysis
+    # dispatches to VNVAnalysisService instead of GEEAnalysisService when
+    # this is "vnv_pipeline".
+    compute_source: NotRequired[Literal["gee", "vnv_pipeline"]]
 
 
 # All 5 vegetation indices share the exact same real config surface (same
@@ -388,6 +395,181 @@ CATALOG: tuple[AnalysisCatalogEntry, ...] = (
      "description": "False-color (NIR) imagery timelapse over the project boundary."},
     {"id": "cultivated_area", "name": "Cultivated Area", "category": "Land Use",
      "status": "in-development", "description": "Cultivated-area detection and change."},
+    # --- VNV Pipeline (self-hosted compute, not GEE) - Wave: VNV Pipeline
+    # NDFI go-live. `status: "available"` because this really does compute
+    # and store a real result via app/services/vnv_analysis_service.py /
+    # app/workers/vnv_analysis_jobs.py - "available" here means "wired to a
+    # real compute path", same meaning it has for every GEE entry above, NOT
+    # "validated for compliance reporting" (see its own description). Do NOT
+    # add stocking_index or control_plot_matching entries here - those stay
+    # frontend-only stubs, out of scope for this wave. ---
+    {
+        "id": "vnv_ndfi",
+        "name": "NDFI — Spectral Unmixing",
+        "category": "VM0047 Compute — ForesToolboxRS",
+        "status": "available",
+        "execution": "async",
+        "compute_source": "vnv_pipeline",
+        "description": (
+            "Experimental — pending domain review. Normalized Difference Fraction "
+            "Index unmixes each pixel into soil, vegetation, and shade fractions via "
+            "the ForesToolboxRS sidecar. A confirmed methodology gap exists on "
+            "forest-heavy scenes (up to 97.66% of pixels masked, near-zero Hansen "
+            "correlation in testing) — not for compliance reporting."
+        ),
+    },
+    # --- VNV Pipeline band indices (Wave: VNV band indices) - 13 direct
+    # band-math indices computed from CDSEClient's existing 6-band Sentinel-2
+    # AOI raster (see app/services/vnv_band_indices.py). 12 are real and
+    # runnable (status: "available"); vnv_nddi is the one exception - fully
+    # implemented but held at "in-development" pending a real, confirmed
+    # formula-degeneracy issue (see that entry's own comment below).
+    # Deliberately a DIFFERENT category from `vnv_ndfi` above (no
+    # ForesToolboxRS/spectral unmixing involved at all - pure numpy
+    # arithmetic, no R sidecar call) so the frontend can group them
+    # separately and NOT apply vnv_ndfi's masked_fraction warning styling to
+    # results that don't share its failure mode. No `config` block (unlike
+    # the 5 GEE vegetation indices above) - these compute over a fixed
+    # 90-day trailing window with no caller-choosable year/season, same as
+    # vnv_ndfi. ---
+    {
+        "id": "vnv_ndvi", "name": "NDVI — Band Math", "category": "VM0047 Compute — Band Indices",
+        "status": "available", "execution": "async", "compute_source": "vnv_pipeline",
+        "description": (
+            "Normalized Difference Vegetation Index computed directly from Sentinel-2 "
+            "surface reflectance (no spectral unmixing) — a 90-day trailing composite. "
+            "Experimental — pending domain review. Not for compliance reporting."
+        ),
+    },
+    {
+        "id": "vnv_evi", "name": "EVI — Band Math", "category": "VM0047 Compute — Band Indices",
+        "status": "available", "execution": "async", "compute_source": "vnv_pipeline",
+        "description": (
+            "Enhanced Vegetation Index, optimized for dense-canopy scenes — a 90-day "
+            "trailing Sentinel-2 composite. Pixels where EVI's denominator is severely "
+            "unstable (near zero) are masked rather than reported, but a real, smaller "
+            "excursion beyond the nominal [-1,1] range can still occur (observed max "
+            "~3.0 on a real scene) - see app/services/vnv_band_indices.py's evi(). "
+            "Experimental — pending domain review. Not for compliance reporting."
+        ),
+    },
+    {
+        "id": "vnv_savi", "name": "SAVI — Band Math", "category": "VM0047 Compute — Band Indices",
+        "status": "available", "execution": "async", "compute_source": "vnv_pipeline",
+        "description": (
+            "Soil-Adjusted Vegetation Index, minimizing bare-soil background effects — "
+            "a 90-day trailing Sentinel-2 composite. Experimental — pending domain "
+            "review. Not for compliance reporting."
+        ),
+    },
+    {
+        "id": "vnv_ndwi", "name": "NDWI — Band Math", "category": "VM0047 Compute — Band Indices",
+        "status": "available", "execution": "async", "compute_source": "vnv_pipeline",
+        "description": (
+            "Normalized Difference Water Index (McFeeters) for surface-water detection — "
+            "a 90-day trailing Sentinel-2 composite. Experimental — pending domain "
+            "review. Not for compliance reporting."
+        ),
+    },
+    {
+        "id": "vnv_mndwi", "name": "MNDWI — Band Math", "category": "VM0047 Compute — Band Indices",
+        "status": "available", "execution": "async", "compute_source": "vnv_pipeline",
+        "description": (
+            "Modified NDWI (SWIR-based), for mangrove/tidal-wetland delineation — a "
+            "90-day trailing Sentinel-2 composite. Experimental — pending domain "
+            "review. Not for compliance reporting."
+        ),
+    },
+    {
+        "id": "vnv_ndmi", "name": "NDMI — Band Math", "category": "VM0047 Compute — Band Indices",
+        "status": "available", "execution": "async", "compute_source": "vnv_pipeline",
+        "description": (
+            "Normalized Difference Moisture Index (also known as NDII/LSWI — one formula, "
+            "implemented once) for canopy moisture/drought stress — a 90-day trailing "
+            "Sentinel-2 composite. Experimental — pending domain review. Not for "
+            "compliance reporting."
+        ),
+    },
+    {
+        "id": "vnv_nbr", "name": "NBR — Band Math", "category": "VM0047 Compute — Band Indices",
+        "status": "available", "execution": "async", "compute_source": "vnv_pipeline",
+        "description": (
+            "Normalized Burn Ratio for burn severity / post-fire carbon-loss estimation "
+            "— a 90-day trailing Sentinel-2 composite. Experimental — pending domain "
+            "review. Not for compliance reporting."
+        ),
+    },
+    {
+        "id": "vnv_bsi", "name": "BSI — Band Math", "category": "VM0047 Compute — Band Indices",
+        "status": "available", "execution": "async", "compute_source": "vnv_pipeline",
+        "description": (
+            "Bare Soil Index for soil-erosion/degradation/potential-emission-zone "
+            "monitoring — a 90-day trailing Sentinel-2 composite. Experimental — pending "
+            "domain review. Not for compliance reporting."
+        ),
+    },
+    {
+        "id": "vnv_ndbi", "name": "NDBI — Band Math", "category": "VM0047 Compute — Band Indices",
+        "status": "available", "execution": "async", "compute_source": "vnv_pipeline",
+        "description": (
+            "Normalized Difference Built-up Index, to exclude urban pixels from carbon "
+            "baselines — a 90-day trailing Sentinel-2 composite. Experimental — pending "
+            "domain review. Not for compliance reporting."
+        ),
+    },
+    {
+        "id": "vnv_arvi", "name": "ARVI — Band Math", "category": "VM0047 Compute — Band Indices",
+        "status": "available", "execution": "async", "compute_source": "vnv_pipeline",
+        "description": (
+            "Atmospherically Resistant Vegetation Index, for haze/aerosol-robust "
+            "vegetation monitoring — a 90-day trailing Sentinel-2 composite. Can exceed "
+            "the nominal [-1,1] range on real scenes (a known characteristic of this "
+            "formula, not a masking bug — see app/services/vnv_band_indices.py's arvi()). "
+            "Experimental — pending domain review. Not for compliance reporting."
+        ),
+    },
+    {
+        "id": "vnv_gndvi", "name": "GNDVI — Band Math", "category": "VM0047 Compute — Band Indices",
+        "status": "available", "execution": "async", "compute_source": "vnv_pipeline",
+        "description": (
+            "Green NDVI for chlorophyll/canopy-stress sensitivity — a 90-day trailing "
+            "Sentinel-2 composite. Experimental — pending domain review. Not for "
+            "compliance reporting."
+        ),
+    },
+    # vnv_nddi is deliberately status: "in-development", unlike the other 12
+    # band indices above - the formula is fully implemented and tested
+    # (app/services/vnv_band_indices.py's nddi()) but confirmed, via a real
+    # run over a real forest AOI, to be mathematically degenerate on
+    # vegetated land: this document's own NDVI and NDWI rows are near-mirror
+    # images there, so NDDI's denominator (NDVI+NDWI) sits within 0.14 of
+    # zero across 99.9% of a real scene - no masking threshold produces both
+    # usable coverage and sane output (see nddi()'s own docstring for the
+    # exact numbers). `compute_source: "vnv_pipeline"` is kept (unlike other
+    # in-development entries, which have none) so the frontend's "vnv" tab
+    # still lists this honestly, muted, under the VNV Pipeline compute
+    # source rather than defaulting to "gee" or disappearing entirely.
+    {
+        "id": "vnv_nddi", "name": "NDDI — Band Math", "category": "VM0047 Compute — Band Indices",
+        "status": "in-development", "compute_source": "vnv_pipeline",
+        "description": (
+            "Normalized Difference Drought Index (composed from this pipeline's own "
+            "NDVI/NDWI) for vegetation-water interaction and drought severity. Blocked: "
+            "confirmed mathematically degenerate on vegetated land using the source "
+            "document's own NDWI definition (near-zero denominator scene-wide) - see "
+            "app/services/vnv_band_indices.py's nddi() for the real-data evidence and the "
+            "flagged conflict with outside published literature that likely resolves it."
+        ),
+    },
+    {
+        "id": "vnv_psri", "name": "PSRI — Band Math", "category": "VM0047 Compute — Band Indices",
+        "status": "available", "execution": "async", "compute_source": "vnv_pipeline",
+        "description": (
+            "Plant Senescence Reflectance Index for growth-stage/phenology tracking — a "
+            "90-day trailing Sentinel-2 composite. Experimental — pending domain "
+            "review. Not for compliance reporting."
+        ),
+    },
 )
 
 _BY_ID: dict[str, AnalysisCatalogEntry] = {e["id"]: e for e in CATALOG}

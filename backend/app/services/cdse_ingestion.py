@@ -111,7 +111,7 @@ SENTINEL1_GRD_COLLECTION = "sentinel-1-grd"
 # series toward only ever showing clear, sunlit conditions.
 _INVALID_SCL_CLASSES = frozenset({0, 1, 3, 8, 9, 10})
 
-_S2_DEFAULT_BANDS: tuple[str, ...] = ("B02", "B03", "B04", "B08")
+_S2_DEFAULT_BANDS: tuple[str, ...] = ("B02", "B03", "B04", "B08", "B11", "B12")
 _S1_DEFAULT_POLARIZATIONS: tuple[str, ...] = ("vv", "vh")
 
 
@@ -146,6 +146,28 @@ def _to_vsis3(s3_href: str) -> str:
     if not s3_href.startswith("s3://"):
         raise CDSESearchError(f"Expected an s3:// asset href, got: {s3_href}")
     return "/vsis3/" + s3_href[len("s3://") :]
+
+
+def _s2_band_href(assets: dict[str, Any], band: str) -> str:
+    """A band's own STAC asset href, trying its native resolution first
+    then coarser ones - matches this catalog's `<band>_<res>m` asset-key
+    convention (already established by SCL's own 20m/60m fallback below).
+    B02/B03/B04/B08 are native 10m; B11/B12 (SWIR, added for spectral
+    unmixing - see prepare_sentinel2_aoi_raster) are native 20m and have
+    no 10m asset in the L2A product at all.
+
+    ponytail: asset-key naming inferred from this codebase's existing SCL
+    fallback + real Sentinel-2 L2A product structure, NOT live-verified
+    against CDSE STAC for B11/B12 specifically (CDSE OAuth credentials
+    were rejected - unauthorized_client - when this was written; live
+    verification is pending working credentials). Re-run
+    scripts/verify_cdse_ingestion.py once they're available and fix this
+    comment/logic if the real asset keys differ."""
+    for suffix in ("10m", "20m", "60m"):
+        key = f"{band}_{suffix}"
+        if key in assets:
+            return assets[key]["href"]
+    raise CDSESearchError(f"No asset found for band {band} (tried 10m/20m/60m).")
 
 
 def _band_transform_res(transform) -> float:
@@ -341,17 +363,26 @@ class CDSEClient:
                         ref_transform = transform
         return arrays, ref_transform, ref_crs
 
-    def _clip_scl_mask(
-        self, scl_href: str, ref_crs, ref_transform, ref_shape: tuple[int, int]
+    def _clip_band_onto_grid(
+        self,
+        href: str,
+        ref_crs,
+        ref_transform,
+        ref_shape: tuple[int, int],
+        *,
+        resampling: Resampling,
     ) -> np.ndarray:
-        """SCL resampled (nearest - categorical data) onto the exact grid of
-        the already-clipped reflectance bands, itself via a windowed read
+        """A single band's asset resampled onto the exact grid of the
+        already-clipped reference bands, itself via a windowed read
         (`WarpedVRT` with a fixed target transform/width/height only ever
-        materializes that window, never the whole 20 m scene)."""
-        with self._rasterio_env(), rasterio.open(_to_vsis3(scl_href)) as src:
+        materializes that window, never the whole scene). `resampling` is
+        caller-supplied: nearest for categorical data (SCL), bilinear for
+        continuous reflectance (B11/B12 SWIR, native 20 m, brought onto the
+        10 m grid the other bands already share)."""
+        with self._rasterio_env(), rasterio.open(_to_vsis3(href)) as src:
             with WarpedVRT(
                 src, crs=ref_crs, transform=ref_transform,
-                width=ref_shape[1], height=ref_shape[0], resampling=Resampling.nearest,
+                width=ref_shape[1], height=ref_shape[0], resampling=resampling,
             ) as vrt:
                 return vrt.read(1)
 
@@ -359,10 +390,26 @@ class CDSEClient:
         self, scene: dict[str, Any], bands: tuple[str, ...], aoi_4326: dict[str, Any]
     ) -> tuple[np.ndarray, Any, Any]:
         assets = scene["assets"]
-        band_hrefs = {b: assets[f"{b}_10m"]["href"] for b in bands}
+        # Only the native-10m bands go through _clip_scene_bands together -
+        # that function requires every band it's given to already share one
+        # grid (see its own docstring). Any other-resolution band (B11/B12,
+        # native 20m) is clipped separately, then resampled onto the 10m
+        # reference grid below - mixing resolutions into one
+        # _clip_scene_bands call would violate that shared-grid assumption.
+        native_10m = [b for b in bands if f"{b}_10m" in assets]
+        other_bands = [b for b in bands if b not in native_10m]
+        band_hrefs = {b: assets[f"{b}_10m"]["href"] for b in native_10m}
         arrays, transform, crs = self._clip_scene_bands(band_hrefs, aoi_4326)
+        ref_shape = arrays[native_10m[0]].shape
+        for b in other_bands:
+            arrays[b] = self._clip_band_onto_grid(
+                _s2_band_href(assets, b), crs, transform, ref_shape,
+                resampling=Resampling.bilinear,
+            )
         scl_key = "SCL_20m" if "SCL_20m" in assets else "SCL_60m"
-        scl = self._clip_scl_mask(assets[scl_key]["href"], crs, transform, arrays[bands[0]].shape)
+        scl = self._clip_band_onto_grid(
+            assets[scl_key]["href"], crs, transform, ref_shape, resampling=Resampling.nearest
+        )
         invalid = np.isin(scl, tuple(_INVALID_SCL_CLASSES))
         stacked = np.stack([np.where(invalid, 0, arrays[b]) for b in bands])
         return stacked, transform, crs
@@ -430,8 +477,12 @@ class CDSEClient:
         bands: tuple[str, ...] = _S2_DEFAULT_BANDS,
     ) -> PreparedRaster:
         """Cloud-masked, AOI-clipped Sentinel-2 L2A raster (`bands`, default
-        blue/green/red/NIR at 10 m - Phase 2's minimum for NDVI and a true-
-        color composite). Written to `output_path` on local disk (this
+        blue/green/red/NIR/SWIR1/SWIR2 - VNV Phase 1's minimum for NDVI and a
+        true-color composite, plus the SWIR bands the Phase 2 NDFI sidecar's
+        spectral unmixing needs to separate soil from vegetation). All bands
+        are delivered on the 10 m grid regardless of native resolution - see
+        `_s2_band_href`/`_clip_band_onto_grid` for how B11/B12 (native 20 m)
+        get there. Written to `output_path` on local disk (this
         environment is DMRV_ENVIRONMENT=dev, no S3 activation yet - matches
         every other local-disk artifact in this codebase, see
         app/services/ingestion/storage.py's LocalStorage)."""
