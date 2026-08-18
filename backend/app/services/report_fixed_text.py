@@ -38,6 +38,20 @@ _ANNUAL_LULC_RELEVANCE = (
     + _DESCRIPTIVE_ONLY
 )
 
+# The 12 vnv_* band-math indices (Wave: VNV band indices) share this same
+# closing frame regardless of which formula each one's own opening sentence
+# describes - computed by the self-hosted VNV Pipeline directly from
+# Sentinel-2 band math (see app/services/vnv_band_indices.py), a DIFFERENT
+# compute path from the equivalent bare-id Earth-Engine index above, not a
+# duplicate of it. `vnv_ndfi` (spectral unmixing, a confirmed masking
+# failure mode) is deliberately NOT built from this suffix - see its own
+# bespoke entry below.
+_VNV_BAND_INDEX_RELEVANCE_SUFFIX = (
+    " Computed by the self-hosted VNV Pipeline directly from Sentinel-2 band math (no "
+    "spectral unmixing), a different compute path from the equivalent Earth "
+    "Engine-based index above. Experimental - pending domain review. " + _DESCRIPTIVE_ONLY
+)
+
 CARBON_RELEVANCE: dict[str, str] = {
     "hansen_gfc": (
         "Global Forest Change data can support monitoring of tree-cover loss and gain "
@@ -155,6 +169,73 @@ CARBON_RELEVANCE: dict[str, str] = {
         "boundary, providing spatial evidence that may assist with screening areas for "
         "further review. " + _DESCRIPTIVE_ONLY
     ),
+    "vnv_ndfi": (
+        "NDFI (spectral unmixing into soil/vegetation/shade fractions, via the "
+        "self-hosted VNV Pipeline's ForesToolboxRS sidecar) is intended to support "
+        "degradation screening within the project boundary, but a confirmed "
+        "methodology gap - up to 97.66% of pixels masked on forest-heavy scenes in "
+        "testing, with near-zero correlation to Hansen Global Forest Change - means "
+        "it does not currently provide usable spatial evidence here. Experimental - "
+        "pending domain review. " + _DESCRIPTIVE_ONLY
+    ),
+    "vnv_ndvi": (
+        "NDVI can support vegetation monitoring within the project boundary by "
+        "providing spatial evidence of vegetation conditions and changes over time."
+    ) + _VNV_BAND_INDEX_RELEVANCE_SUFFIX,
+    "vnv_evi": (
+        "EVI can support vegetation monitoring in areas with dense canopy, where it "
+        "is less prone to saturation than NDVI."
+    ) + _VNV_BAND_INDEX_RELEVANCE_SUFFIX,
+    "vnv_savi": (
+        "SAVI can support vegetation monitoring in areas of sparse canopy or exposed "
+        "soil, where its soil-brightness correction gives a more reliable read than "
+        "NDVI."
+    ) + _VNV_BAND_INDEX_RELEVANCE_SUFFIX,
+    "vnv_ndwi": (
+        "NDWI can support monitoring of surface water bodies and boundary hydrology "
+        "within the project boundary. Over vegetated land its signal is the inverse "
+        "of vnv_gndvi's."
+    ) + _VNV_BAND_INDEX_RELEVANCE_SUFFIX,
+    "vnv_mndwi": (
+        "MNDWI can support monitoring of standing water and boundary hydrology "
+        "relevant to project planning. It is not a vegetation or carbon indicator."
+    ) + _VNV_BAND_INDEX_RELEVANCE_SUFFIX,
+    "vnv_ndmi": (
+        "NDMI can support monitoring of vegetation canopy water content within the "
+        "project boundary, providing spatial evidence of moisture-stress conditions."
+    ) + _VNV_BAND_INDEX_RELEVANCE_SUFFIX,
+    "vnv_nbr": (
+        "NBR can support monitoring of fire and disturbance within the project "
+        "boundary by highlighting NIR/SWIR contrast consistent with recently burned "
+        "or recovering surfaces."
+    ) + _VNV_BAND_INDEX_RELEVANCE_SUFFIX,
+    "vnv_bsi": (
+        "BSI can support screening for bare or exposed soil within the project "
+        "boundary, providing spatial evidence that may assist with detecting "
+        "clearing or loss of vegetative cover worth further review. It is not a "
+        "carbon indicator."
+    ) + _VNV_BAND_INDEX_RELEVANCE_SUFFIX,
+    "vnv_ndbi": (
+        "NDBI can support screening for built-up or impervious surface within the "
+        "project boundary. It uses the same NIR/SWIR1 bands as vnv_ndmi, negated, so "
+        "the two are one measurement reported two ways, not independent evidence."
+    ) + _VNV_BAND_INDEX_RELEVANCE_SUFFIX,
+    "vnv_arvi": (
+        "ARVI can support vegetation monitoring with reduced sensitivity to "
+        "atmospheric haze and aerosols compared to NDVI. Real-data testing found "
+        "this formula's own denominator can legitimately go negative on ordinary "
+        "land, so its values can exceed the usual [-1, 1] range more often than "
+        "NDVI's - see this analysis's own Limitations section."
+    ) + _VNV_BAND_INDEX_RELEVANCE_SUFFIX,
+    "vnv_gndvi": (
+        "GNDVI can support vegetation monitoring using the green band's chlorophyll "
+        "sensitivity. Its band pair is the exact negation of vnv_ndwi's, so the two "
+        "carry the same information with the sign reversed."
+    ) + _VNV_BAND_INDEX_RELEVANCE_SUFFIX,
+    "vnv_psri": (
+        "PSRI can support screening for plant senescence or stress within the "
+        "project boundary."
+    ) + _VNV_BAND_INDEX_RELEVANCE_SUFFIX,
 }
 
 
@@ -178,6 +259,19 @@ _REUSE_NOTE_AS_LIMITATIONS: frozenset[str] = frozenset({
 # (gee_analysis_service.py never sets one for it), and every vegetation
 # index's `note` is methodology PROSE (season window, masking) rather than a
 # limitation - so these get genuinely authored text instead of a reused field.
+
+# Shared base for the 12 vnv_* band-math indices (Wave: VNV band indices) -
+# same "not GEE, fixed 90-day window" framing regardless of formula; each
+# entry above prepends its own real, index-specific caveat (if any) to this.
+_VNV_BAND_INDEX_LIMITATIONS = (
+    "Computed from a 90-day trailing Sentinel-2 composite (least-cloud-first mosaic "
+    "of up to 4 scenes) via the self-hosted VNV Pipeline, not a caller-choosable "
+    "season/year window like the Earth Engine version of this index. Reflectance is "
+    "corrected for the Sentinel-2 L2A BOA_ADD_OFFSET (verified against real CDSE "
+    "STAC asset metadata) before this formula is applied. Experimental, pending "
+    "domain review - not for compliance reporting."
+)
+
 _AUTHORED_LIMITATIONS: dict[str, str] = {
     "dynamic_world": (
         "Reflects a rolling 12-month composite, not a fixed calendar year - two "
@@ -312,6 +406,57 @@ _AUTHORED_LIMITATIONS: dict[str, str] = {
         "default rather than a mathematical bound - it is a plain ratio whose "
         "denominator can approach zero - so the out-of-range pixel count should be "
         "checked before reading the mean."
+    ),
+    "vnv_ndfi": (
+        "Self-hosted VNV Pipeline compute (ForesToolboxRS R sidecar), not Google "
+        "Earth Engine - confirmed in testing to mask up to 97.66% of pixels on "
+        "forest-heavy scenes, with near-zero correlation to Hansen Global Forest "
+        "Change. A 90-day trailing composite with no caller-choosable season/year. "
+        "Experimental, pending domain review - not for compliance reporting."
+    ),
+    "vnv_ndvi": _VNV_BAND_INDEX_LIMITATIONS,
+    "vnv_evi": (
+        "A near-zero-denominator guard masks the most unstable pixels, but a "
+        "smaller residual excursion beyond the documented [-1, 1] range can still "
+        "occur (observed max ~3.0 on a real test AOI) - see the out-of-range pixel "
+        "count before reading the mean. " + _VNV_BAND_INDEX_LIMITATIONS
+    ),
+    "vnv_savi": _VNV_BAND_INDEX_LIMITATIONS,
+    "vnv_ndwi": (
+        "Its band pair is the exact negation of vnv_gndvi's (Green/NIR), so the two "
+        "carry the same information with the sign reversed, not two independent "
+        "lines of evidence. " + _VNV_BAND_INDEX_LIMITATIONS
+    ),
+    "vnv_mndwi": _VNV_BAND_INDEX_LIMITATIONS,
+    "vnv_ndmi": (
+        "Uses the same NIR/SWIR1 bands as vnv_ndbi, negated, so the two are one "
+        "measurement reported two ways, not independent evidence. "
+        + _VNV_BAND_INDEX_LIMITATIONS
+    ),
+    "vnv_nbr": _VNV_BAND_INDEX_LIMITATIONS,
+    "vnv_bsi": _VNV_BAND_INDEX_LIMITATIONS,
+    "vnv_ndbi": (
+        "Uses the same NIR/SWIR1 bands as vnv_ndmi, negated, so the two are one "
+        "measurement reported two ways, not independent evidence. "
+        + _VNV_BAND_INDEX_LIMITATIONS
+    ),
+    "vnv_arvi": (
+        "Can exceed the documented [-1, 1] range on real scenes (observed max 1.74 "
+        "on a real test AOI) - a genuine characteristic of this formula (its "
+        "denominator's sign can flip on ordinary land), not a divide-by-near-zero "
+        "bug. Testing confirmed no masking threshold both bounds it and preserves "
+        "coverage, so it is left unguarded and reported as-is. "
+        + _VNV_BAND_INDEX_LIMITATIONS
+    ),
+    "vnv_gndvi": (
+        "Its band pair is the exact negation of vnv_ndwi's, so the two carry the "
+        "same information with the sign reversed, not two independent lines of "
+        "evidence. " + _VNV_BAND_INDEX_LIMITATIONS
+    ),
+    "vnv_psri": (
+        "Uses the standard NIR band as its denominator, not the red-edge band - the "
+        "6-band Sentinel-2 raster this pipeline fetches has no red-edge band "
+        "available. " + _VNV_BAND_INDEX_LIMITATIONS
     ),
 }
 
