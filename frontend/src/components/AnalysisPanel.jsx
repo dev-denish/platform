@@ -60,11 +60,15 @@ import ProjectMap from "./ProjectMap.jsx";
  * one call, distinguished by the backend's own `compute_source` field).
  * "gee" shows the live catalog entries minus any `compute_source ===
  * "vnv_pipeline"` one, regrouped into three buckets by execution mode
- * instead of the backend's raw `category`. "vnv" shows the real, runnable
- * `vnv_ndfi` catalog entry (VNV Pipeline going live, see NdfiExperimentalNotice
- * below for its always-on experimental disclosure) plus two still-hardcoded,
- * still-never-runnable preview stubs - see VNV_PREVIEW_ENTRIES and the
- * Run-button gating in renderResults below.
+ * instead of the backend's raw `category`. "vnv" shows every real, runnable
+ * `compute_source === "vnv_pipeline"` catalog entry (today: `vnv_ndfi` plus
+ * the 13 `vnv_*` band-index entries, Wave: VNV band indices - see
+ * NdfiExperimentalNotice/VnvBandIndexNotice below for their disclosures)
+ * grouped by the backend's own `category` (unlike "gee", not regrouped -
+ * "VM0047 Compute — ForesToolboxRS" vs "VM0047 Compute — Band Indices" are
+ * already the right buckets), plus two still-hardcoded, still-never-runnable
+ * preview stubs - see VNV_PREVIEW_ENTRIES and the Run-button gating in
+ * renderResults below.
  */
 
 // Same polling pattern as UploadPage.jsx's job-status wait - job-kind
@@ -607,6 +611,52 @@ function NdfiExperimentalNotice() {
   );
 }
 
+/** Wave: VNV band indices. The general "not yet domain-reviewed" disclosure
+ * every VNV Pipeline result carries (see the compute-source card's own
+ * always-on warning above) - deliberately WITHOUT NdfiExperimentalNotice's
+ * "may be unreliable, especially on densely forested areas" clause. That
+ * clause describes NDFI's own confirmed spectral-unmixing failure mode
+ * (masked_fraction up to 97.66% on forest-heavy scenes); these 13 entries
+ * are direct band math with no unmixing step to fail that way, so repeating
+ * NDFI-specific language here would misattribute a problem they don't have. */
+function VnvBandIndexNotice() {
+  return (
+    <div className="sample-data-banner">
+      Experimental — this method has not yet passed domain review. Not for compliance reporting.
+    </div>
+  );
+}
+
+/** Wave: VNV band indices. Mean/min/max for a single band-index result -
+ * the shape every `vnv_*` band-index entry's `stats` carries (see
+ * app/workers/vnv_analysis_jobs.py's `run_vnv_band_index_analysis`).
+ * Reuses the `.stat-grid`/`.stat-card` idiom IndexDistribution/NdfiQualityStats
+ * already established rather than inventing new styling. Coverage (valid vs
+ * total pixels) is NOT repeated here - it already renders via the existing,
+ * fully generic CoverageBanner above (stats.coverage_pct), the same
+ * component several GEE analyses already use for cloud/scene-edge gaps -
+ * deliberately NOT NdfiQualityStats' masked_fraction treatment, whose
+ * "could not be classified" copy describes NDFI's spectral-unmixing
+ * failure mode specifically, not a plain valid-pixel count. */
+function BandIndexStats({ stats }) {
+  return (
+    <div className="stat-grid">
+      <div className="stat-card">
+        <span className="stat-label">Mean</span>
+        <span className="stat-value">{formatNumber(stats.mean, 3)}</span>
+      </div>
+      <div className="stat-card">
+        <span className="stat-label">Min</span>
+        <span className="stat-value">{formatNumber(stats.min, 3)}</span>
+      </div>
+      <div className="stat-card">
+        <span className="stat-label">Max</span>
+        <span className="stat-value">{formatNumber(stats.max, 3)}</span>
+      </div>
+    </div>
+  );
+}
+
 /** Wave: VNV pipeline NDFI goes live. `stats.masked_fraction` /
  * `valid_pixel_count` / `total_pixel_count` - the fraction of the boundary
  * NDFI's spectral unmixing could not classify (cloud/shadow/no-data),
@@ -640,11 +690,21 @@ function NdfiQualityStats({ stats }) {
   );
 }
 
+// Wave: VNV band indices. All 13 band-index catalog ids are `vnv_`-prefixed
+// and distinct from `vnv_ndfi` itself - used below to give them the generic
+// disclosure/stat treatment instead of NDFI-specific ones, without needing
+// `compute_source` threaded through AnalysisResultOut (which doesn't carry
+// it - see app/domain/dtos.py).
+function isVnvBandIndexResult(analysisId) {
+  return analysisId.startsWith("vnv_") && analysisId !== "vnv_ndfi";
+}
+
 function AnalysisStats({ result }) {
   const { stats, legend } = result;
   return (
     <>
       {result.analysis_id === "vnv_ndfi" ? <NdfiExperimentalNotice /> : null}
+      {isVnvBandIndexResult(result.analysis_id) ? <VnvBandIndexNotice /> : null}
       <CoverageBanner pct={stats.coverage_pct} />
       {stats.summary ? <IndexSummaryCallout summary={stats.summary} /> : null}
       {stats.canopy_cover_threshold_pct != null ? <HansenStats stats={stats} /> : null}
@@ -655,6 +715,7 @@ function AnalysisStats({ result }) {
       {stats.series ? <IndexTrendChart series={stats.series} /> : null}
       {stats.distribution ? <IndexDistribution distribution={stats.distribution} /> : null}
       {stats.masked_fraction != null ? <NdfiQualityStats stats={stats} /> : null}
+      {isVnvBandIndexResult(result.analysis_id) && stats.mean != null ? <BandIndexStats stats={stats} /> : null}
       {stats.note ? <p className="analysis-note">{stats.note}</p> : null}
       {stats.methodology ? (
         <AnalysisMethodology methodology={stats.methodology} analysisId={result.analysis_id} />
@@ -715,18 +776,20 @@ export default function AnalysisPanel({ projectId, layers, onRefreshLayers, onLe
 
   // Wave: compute-source toggle. "gee" filters the live catalog down to
   // `status: "available"` entries that are NOT the VNV pipeline's own
-  // catalog entry (`compute_source === "vnv_pipeline"` - excluded here so it
-  // can't leak into a geeGroupFor bucket, since that grouping only looks at
-  // category/execution) and regroups the rest (geeGroupFor) for display.
-  // "vnv" shows the real vnv_ndfi entry as fetched from the backend (first,
-  // real status/computed_at, selectable/runnable) followed by the two
-  // still-hardcoded, still-never-runnable preview stubs. Everything
+  // catalog entries (`compute_source === "vnv_pipeline"` - excluded here so
+  // they can't leak into a geeGroupFor bucket, since that grouping only
+  // looks at category/execution) and regroups the rest (geeGroupFor) for
+  // display. "vnv" shows every real `compute_source === "vnv_pipeline"`
+  // entry as fetched from the backend (Wave: VNV band indices - `vnv_ndfi`
+  // plus the 13 band-index entries, real status/computed_at, selectable/
+  // runnable, kept in the backend's own category grouping) followed by the
+  // two still-hardcoded, still-never-runnable preview stubs. Everything
   // downstream (selected, groups, config panel, methodology, runAnalysis)
   // reads from this instead of raw `entries`.
   const visibleEntries = useMemo(() => {
     if (computeSource === "vnv") {
-      const realNdfi = (entries ?? []).find((e) => e.compute_source === "vnv_pipeline");
-      return realNdfi ? [realNdfi, ...VNV_PREVIEW_ENTRIES] : VNV_PREVIEW_ENTRIES;
+      const realVnvEntries = (entries ?? []).filter((e) => e.compute_source === "vnv_pipeline");
+      return [...realVnvEntries, ...VNV_PREVIEW_ENTRIES];
     }
     return (entries ?? [])
       .filter((e) => e.status === "available" && e.compute_source !== "vnv_pipeline")
@@ -867,17 +930,23 @@ export default function AnalysisPanel({ projectId, layers, onRefreshLayers, onLe
   const canRun = user && canUpload(user.role);
 
   function renderResults() {
-    // Wave: VNV pipeline NDFI goes live. Shown regardless of which VNV entry
-    // (if any) is selected, above whichever empty state below ends up
-    // firing, not instead of it - now honest that NDFI itself is live
-    // (still experimental, never for compliance use) while the other two
-    // ForesToolboxRS methods genuinely have no implementation yet.
+    // Wave: VNV pipeline NDFI goes live; Wave: VNV band indices. Shown
+    // regardless of which VNV entry (if any) is selected, above whichever
+    // empty state below ends up firing, not instead of it - now honest that
+    // NDFI and the 13 band indices are all live (still experimental, never
+    // for compliance use) while Stocking Index and Control Plot Matching
+    // genuinely have no implementation yet. Deliberately does not repeat
+    // NDFI's own "may be unreliable, especially on densely forested areas"
+    // clause here - that describes NDFI's specific spectral-unmixing
+    // failure mode, not the band indices, which get their own, per-result
+    // disclosure (VnvBandIndexNotice) instead.
     const vnvDevNote =
       computeSource === "vnv" ? (
         <div className="sample-data-banner">
-          NDFI — Spectral Unmixing now runs on the VNV Pipeline. Experimental — this method has not yet passed domain
-          review and may be unreliable, especially on densely forested areas. Not for compliance reporting. Stocking
-          Index and Control Plot Matching are still in development and cannot be run yet.
+          NDFI — Spectral Unmixing and 13 band-math indices (NDVI, EVI, SAVI, NDWI, MNDWI, NDMI, NBR, BSI, NDBI, ARVI,
+          GNDVI, NDDI, PSRI) now run on the VNV Pipeline. Experimental — none of these methods have passed domain
+          review yet. Not for compliance reporting. Stocking Index and Control Plot Matching are still in development
+          and cannot be run yet.
         </div>
       ) : null;
     if (!selected) {
@@ -1064,16 +1133,18 @@ export default function AnalysisPanel({ projectId, layers, onRefreshLayers, onLe
           </div>
         ) : null}
         {canRun ? (
-          // Wave: VNV pipeline NDFI goes live. vnv_ndfi is real and runnable
-          // even under computeSource === "vnv" - it behaves exactly like any
-          // GEE async analysis below (same running/comboAllowed gating, same
-          // labels, same runAnalysis call). The two still-unbuilt preview
-          // stubs (vnv_stocking_index, vnv_control_plot_matching) stay
-          // permanently disabled - this branch is unreachable for them today
-          // since they never leave the "isn't built yet" empty state above,
-          // but is kept explicit here as the documented, permanent gate.
+          // Wave: VNV pipeline NDFI goes live; Wave: VNV band indices. Every
+          // real `compute_source === "vnv_pipeline"` entry (vnv_ndfi plus
+          // the 13 band indices) is real and runnable even under
+          // computeSource === "vnv" - it behaves exactly like any GEE async
+          // analysis below (same running/comboAllowed gating, same labels,
+          // same runAnalysis call). The two still-unbuilt preview stubs
+          // (vnv_stocking_index, vnv_control_plot_matching) stay permanently
+          // disabled - this branch is unreachable for them today since they
+          // never leave the "isn't built yet" empty state above, but is kept
+          // explicit here as the documented, permanent gate.
           (() => {
-            const vnvStubSelected = computeSource === "vnv" && selected.id !== "vnv_ndfi";
+            const vnvStubSelected = computeSource === "vnv" && selected.compute_source !== "vnv_pipeline";
             return (
               <button
                 type="button"

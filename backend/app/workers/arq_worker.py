@@ -20,7 +20,7 @@ from app.services.ingestion.storage import build_storage
 from app.workers.gee_analysis_jobs import run_gee_analysis_job
 from app.workers.jobs import run_ingest_job
 from app.workers.report_jobs import run_generate_report_job
-from app.workers.vnv_analysis_jobs import run_vnv_ndfi_analysis
+from app.workers.vnv_analysis_jobs import run_vnv_band_index_analysis, run_vnv_ndfi_analysis
 
 log = get_logger("dmrv.worker")
 
@@ -49,6 +49,7 @@ class WorkerSettings:
 
     functions = [
         run_ingest_job, run_gee_analysis_job, run_generate_report_job, run_vnv_ndfi_analysis,
+        run_vnv_band_index_analysis,
     ]
     on_startup = on_startup
     on_shutdown = on_shutdown

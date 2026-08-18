@@ -6,14 +6,16 @@ from __future__ import annotations
 from app.domain.analysis_catalog import CATALOG, REAL_ANALYSIS_IDS, get_catalog_entry
 
 
-def test_catalog_has_exactly_fourteen_available_and_six_in_development_entries():
+def test_catalog_has_exactly_twenty_six_available_and_seven_in_development_entries():
     # 10 original + 3 Raw Imagery (Wave: raw-imagery browsing) + 1 vnv_ndfi
-    # (Wave: VNV Pipeline NDFI go-live).
+    # (Wave: VNV Pipeline NDFI go-live) + 12 available vnv_* band indices
+    # (Wave: VNV band indices) - vnv_nddi is the 13th but is
+    # "in-development" (confirmed formula degeneracy, see its own entry).
     available = [e for e in CATALOG if e["status"] == "available"]
     in_development = [e for e in CATALOG if e["status"] == "in-development"]
-    assert len(available) == 14
-    assert len(in_development) == 6
-    assert len(CATALOG) == 20
+    assert len(available) == 26
+    assert len(in_development) == 7
+    assert len(CATALOG) == 33
 
 
 def test_only_the_three_raw_imagery_entries_are_year_selectable():
@@ -99,13 +101,22 @@ def test_all_five_indices_share_the_identical_config_spec():
 
 
 # ---------------------------------------------- Wave: VNV Pipeline NDFI go-live
+# --------------------------------------------------- Wave: VNV band indices
+
+_VNV_BAND_INDEX_IDS = {
+    "vnv_ndvi", "vnv_evi", "vnv_savi", "vnv_ndwi", "vnv_mndwi", "vnv_ndmi",
+    "vnv_nbr", "vnv_bsi", "vnv_ndbi", "vnv_arvi", "vnv_gndvi", "vnv_nddi", "vnv_psri",
+}
+# vnv_nddi is the one band index NOT status: "available" - see its own
+# catalog entry comment (confirmed formula degeneracy on vegetated land).
+_AVAILABLE_VNV_BAND_INDEX_IDS = _VNV_BAND_INDEX_IDS - {"vnv_nddi"}
 
 
-def test_only_vnv_ndfi_declares_a_non_gee_compute_source():
+def test_only_vnv_pipeline_entries_declare_a_non_gee_compute_source():
     non_gee_ids = {e["id"] for e in CATALOG if e.get("compute_source") == "vnv_pipeline"}
-    assert non_gee_ids == {"vnv_ndfi"}
+    assert non_gee_ids == {"vnv_ndfi"} | _VNV_BAND_INDEX_IDS
     for entry in CATALOG:
-        if entry["id"] != "vnv_ndfi":
+        if entry["id"] not in non_gee_ids:
             assert "compute_source" not in entry, entry["id"]
 
 
@@ -115,6 +126,40 @@ def test_vnv_ndfi_is_available_async_and_uncategorized_as_config():
     assert entry["status"] == "available"
     assert entry["execution"] == "async"
     assert "config" not in entry
+
+
+def test_twelve_band_indices_are_available_async_vnv_pipeline_no_config():
+    for analysis_id in _AVAILABLE_VNV_BAND_INDEX_IDS:
+        entry = get_catalog_entry(analysis_id)
+        assert entry is not None, analysis_id
+        assert entry["status"] == "available"
+        assert entry["execution"] == "async"
+        assert entry["compute_source"] == "vnv_pipeline"
+        assert entry["category"] == "VM0047 Compute — Band Indices"
+        assert "config" not in entry
+
+
+def test_vnv_nddi_is_in_development_despite_being_a_vnv_pipeline_entry():
+    # Confirmed, real-data formula degeneracy (see vnv_band_indices.py's
+    # nddi() docstring) - implemented but deliberately not runnable yet.
+    # compute_source is still set (unlike every other in-development entry)
+    # so the frontend's "vnv" tab lists it honestly under VNV Pipeline
+    # rather than defaulting to "gee" or vanishing.
+    entry = get_catalog_entry("vnv_nddi")
+    assert entry is not None
+    assert entry["status"] == "in-development"
+    assert entry["compute_source"] == "vnv_pipeline"
+    assert entry["category"] == "VM0047 Compute — Band Indices"
+    assert "execution" not in entry
+    assert "config" not in entry
+
+
+def test_band_index_ids_are_unique_from_the_gee_vegetation_indices():
+    # vnv_ndvi/vnv_evi/vnv_savi/vnv_mndwi/vnv_nbr are distinct catalog ids
+    # from GEE's own ndvi/evi/savi/mndwi/nbr - two different compute paths,
+    # never sharing one analysis_id/cache row.
+    gee_veg_ids = {"ndvi", "evi", "savi", "mndwi", "nbr"}
+    assert gee_veg_ids.isdisjoint(_VNV_BAND_INDEX_IDS)
 
 
 def test_no_other_catalog_entry_declares_a_config():

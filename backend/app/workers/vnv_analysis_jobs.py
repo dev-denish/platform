@@ -1,19 +1,28 @@
-"""The `compute_vnv_ndfi` job lifecycle (Wave: VNV Pipeline NDFI go-live).
+"""VNV Pipeline job lifecycles: `compute_vnv_ndfi` (Wave: VNV Pipeline NDFI
+go-live) and `compute_vnv_band_index` (Wave: VNV band indices).
 
 Separate module from workers/gee_analysis_jobs.py deliberately - this is a
 second, independent compute source (see app/services/vnv_analysis_service.py's
 own docstring) that does NOT touch the GEE compute path/logic at all.
-Mirrors that module's generic-retry lifecycle shape for the `jobs` table
-row (mark_running at start, the SAME retry-or-dead-letter treatment on ANY
-exception - a CDSE fetch failure, an unreachable sidecar, a bad sidecar
-response are all presumed transient, same as a GEE compute failure -
-mark_succeeded on success), but ALSO drives its own `analysis_runs` row
-(migrations/versions/0019_analysis_runs.py) through running/done/failed:
-that row - not `jobs.result`/`jobs.error` - is what records this specific
-run's real input/output raster paths and failure detail. EVERY exception,
-at every step below, lands in `analysis_runs.error_message` before the
-generic `jobs` retry/dead-letter handling runs - nothing is silently
-swallowed.
+Both job functions below mirror gee_analysis_jobs.py's generic-retry
+lifecycle shape for the `jobs` table row (mark_running at start, the SAME
+retry-or-dead-letter treatment on ANY exception - a CDSE fetch failure, an
+unreachable sidecar, a bad sidecar response are all presumed transient, same
+as a GEE compute failure - mark_succeeded on success), but ALSO drive their
+own `analysis_runs` row (migrations/versions/0019_analysis_runs.py) through
+running/done/failed: that row - not `jobs.result`/`jobs.error` - is what
+records this specific run's real input/output raster paths and failure
+detail. EVERY exception, at every step below, lands in
+`analysis_runs.error_message` before the generic `jobs` retry/dead-letter
+handling runs - nothing is silently swallowed.
+
+`run_vnv_ndfi_analysis` (below) calls out to the ForesToolboxRS R sidecar
+for spectral unmixing. `run_vnv_band_index_analysis` (further below) is
+architecturally simpler and shares none of that: ONE generic job, doing pure
+numpy band math (app/services/vnv_band_indices.py) on the SAME CDSE-fetched
+6-band raster, parameterized by `analysis_id` for all 13 catalog entries -
+no sidecar call, no endmembers, no seasonal-reference dependency, and none
+of NDFI's confirmed masking failure mode.
 
 Real compute steps (see CDSEClient's own docstring in
 app/services/cdse_ingestion.py and the sidecar's own plumber.R for full
@@ -62,6 +71,8 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import httpx
+import numpy as np
+import rasterio
 from arq.worker import Retry
 
 from app.core.db import Database
@@ -70,12 +81,15 @@ from app.core.metrics import job_duration_seconds, jobs_completed_total
 from app.repositories.analysis_results import AnalysisResultRepository
 from app.repositories.analysis_runs import AnalysisRunRepository
 from app.repositories.jobs import JobRepository
+from app.services import vnv_band_indices
 from app.services.cdse_ingestion import CDSEClient
 
 _KIND = "compute_vnv_ndfi"
 _ANALYSIS_ID = "vnv_ndfi"
 _WINDOW_DAYS = 90
 _ERROR_MESSAGE_MAX_LEN = 2000  # a sidecar/CDSE error body can be arbitrarily large
+
+_BAND_INDEX_KIND = "compute_vnv_band_index"
 
 
 def _backoff_seconds(job_try: int) -> float:
@@ -194,3 +208,132 @@ async def run_vnv_ndfi_analysis(
     jobs_completed_total.labels(kind=_KIND, status="succeeded").inc()
     job_duration_seconds.labels(kind=_KIND).observe(time.perf_counter() - start)
     log.info("job.succeeded", analysis_id=_ANALYSIS_ID)
+
+
+async def run_vnv_band_index_analysis(
+    ctx: dict[str, Any],
+    *,
+    job_id: str,
+    analysis_run_id: str,
+    project_id: str,
+    analysis_id: str,
+    boundary_geojson: dict[str, Any],
+    actor: dict[str, Any],
+) -> None:
+    """Job body for the `compute_vnv_band_index` kind (Wave: VNV band
+    indices) - ONE generic job for all 13 `app/services/vnv_band_indices.py`
+    formulas, parameterized by `analysis_id`, rather than 13 near-duplicate
+    job functions. Mirrors `run_vnv_ndfi_analysis`'s lifecycle shape (mark
+    running, real compute, mark done/failed, same retry-or-dead-letter
+    treatment on any exception) but is architecturally simpler: no sidecar
+    HTTP call at all, just a CDSE fetch followed by pure numpy arithmetic on
+    the fetched raster.
+
+    Real compute steps:
+      1. Same 90-day trailing window default as `run_vnv_ndfi_analysis`.
+      2. `CDSEClient.prepare_sentinel2_aoi_raster` -> the same 6-band
+         AOI-clipped, cloud-masked GeoTIFF NDFI's job fetches - reused
+         as-is, no new ingestion path.
+      3. Read all 6 bands, convert to reflectance, run the requested
+         formula (`vnv_band_indices.compute_index`), write a single-band
+         float32 GeoTIFF output.
+      4. Upsert into `analysis_result` (same table/repo the GEE and NDFI
+         paths write) and `analysis_runs`, same convention as
+         `run_vnv_ndfi_analysis`.
+    """
+    db: Database = ctx["db"]
+    job_try: int = ctx.get("job_try", 1)
+    settings = ctx["settings"]
+    log = get_logger("dmrv.jobs").bind(
+        job_id=job_id, kind=_BAND_INDEX_KIND, job_try=job_try,
+        analysis_run_id=analysis_run_id, analysis_id=analysis_id,
+    )
+
+    with db.transaction() as cur:
+        JobRepository(cur).mark_running(job_id)
+        AnalysisRunRepository(cur).mark_running(analysis_run_id)
+    log.info("job.running")
+
+    start = time.perf_counter()
+    try:
+        date_start, date_end = _trailing_window()
+        input_path = f"{settings.local_data_dir}/vnv/{analysis_run_id}/s2_aoi.tif"
+        output_path = f"{settings.local_data_dir}/vnv/{analysis_run_id}/{analysis_id}.tif"
+
+        client = CDSEClient(settings)
+        prepared = client.prepare_sentinel2_aoi_raster(boundary_geojson, date_start, date_end, input_path)
+        with db.transaction() as cur:
+            AnalysisRunRepository(cur).set_input_raster_ref(analysis_run_id, input_path)
+
+        with rasterio.open(input_path) as src:
+            stacked = src.read()  # (6, H, W), raw Sentinel-2 L2A digital numbers
+            profile = src.profile
+
+        nodata_mask = np.all(stacked == 0, axis=0)
+        bands = {
+            name: vnv_band_indices.to_reflectance(stacked[i])
+            for i, name in enumerate(vnv_band_indices.BAND_ORDER)
+        }
+        index_arr = vnv_band_indices.compute_index(analysis_id, bands)
+        index_arr = np.where(nodata_mask, np.nan, index_arr).astype(np.float32)
+
+        valid = np.isfinite(index_arr)
+        valid_pixel_count = int(valid.sum())
+        total_pixel_count = int(index_arr.size)
+        valid_values = index_arr[valid]
+        stats: dict[str, Any] = {
+            "index": analysis_id,
+            "min": float(valid_values.min()) if valid_pixel_count else None,
+            "max": float(valid_values.max()) if valid_pixel_count else None,
+            "mean": float(valid_values.mean()) if valid_pixel_count else None,
+            "valid_pixel_count": valid_pixel_count,
+            "total_pixel_count": total_pixel_count,
+            "coverage_pct": 100.0 * valid_pixel_count / total_pixel_count if total_pixel_count else 0.0,
+            "scene_count": len(prepared.scenes),
+            "note": (
+                f"Computed from a {_WINDOW_DAYS}-day trailing Sentinel-2 composite "
+                f"({date_start} to {date_end}), {len(prepared.scenes)} scene(s), "
+                "least-cloud-first. Direct band math, no spectral unmixing/machine "
+                "learning/seasonal-reference dependency."
+            ),
+        }
+
+        profile.update(count=1, dtype="float32", nodata=np.nan)
+        with rasterio.open(output_path, "w", **profile) as dst:
+            dst.write(index_arr, 1)
+            dst.descriptions = (analysis_id,)
+        output_raster_ref = output_path
+
+    except Exception as e:  # noqa: BLE001 - presumed transient (CDSE/network); classified below
+        error_message = str(e)[:_ERROR_MESSAGE_MAX_LEN]
+        with db.transaction() as cur:
+            AnalysisRunRepository(cur).mark_failed(analysis_run_id, error_message)
+
+        error = {"code": "job_error", "message": error_message}
+        max_tries = settings.job_max_retries
+        if job_try >= max_tries:
+            with db.transaction() as cur:
+                JobRepository(cur).mark_dead_letter(job_id, error)
+            jobs_completed_total.labels(kind=_BAND_INDEX_KIND, status="dead_letter").inc()
+            job_duration_seconds.labels(kind=_BAND_INDEX_KIND).observe(time.perf_counter() - start)
+            log.error("job.dead_letter", error=error_message)
+            return
+        with db.transaction() as cur:
+            JobRepository(cur).record_retry_error(job_id, error)
+        log.warning("job.retry_scheduled", error=error_message, next_try=job_try + 1)
+        raise Retry(defer=_backoff_seconds(job_try)) from e
+
+    with db.transaction() as cur:
+        AnalysisResultRepository(cur).upsert(
+            project_id=project_id, analysis_id=analysis_id, computed_by=actor["user_id"],
+            stats=stats, legend=None, tile_url_template=None,
+        )
+        AnalysisRunRepository(cur).mark_done(
+            analysis_run_id, output_raster_ref=output_raster_ref, stats=stats,
+        )
+        JobRepository(cur).mark_succeeded(
+            job_id, {"analysis_id": analysis_id, "analysis_run_id": analysis_run_id}
+        )
+    jobs_completed_total.labels(kind=_BAND_INDEX_KIND, status="succeeded").inc()
+    job_duration_seconds.labels(kind=_BAND_INDEX_KIND).observe(time.perf_counter() - start)
+    log.info("job.succeeded", analysis_id=analysis_id)

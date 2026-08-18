@@ -1,10 +1,11 @@
-"""VNV Pipeline analysis compute service (Wave: VNV Pipeline NDFI go-live).
+"""VNV Pipeline analysis compute service (Wave: VNV Pipeline NDFI go-live;
+Wave: VNV band indices).
 
 The self-hosted-compute counterpart to `GEEAnalysisService`, for catalog
-entries whose `compute_source == "vnv_pipeline"` - today that is exactly
-ONE entry, `vnv_ndfi` (Experimental, pending domain review - see
-app/domain/analysis_catalog.py's own entry). Deliberately does NOT touch
-GEE's existing analysis path/logic in any way.
+entries whose `compute_source == "vnv_pipeline"` - `vnv_ndfi` (Experimental,
+pending domain review - see app/domain/analysis_catalog.py's own entry) plus
+the 13 `vnv_*` band-index entries (app/services/vnv_band_indices.py).
+Deliberately does NOT touch GEE's existing analysis path/logic in any way.
 
 Reuses `app.services.analysis_shared.prepare_analysis_refresh` for the
 EXACT same catalog/permission/boundary validation `GEEAnalysisService`
@@ -26,6 +27,7 @@ analyses/{id}`), work completely unchanged for this compute source too.
 from __future__ import annotations
 
 import uuid
+from typing import Any
 from uuid import UUID
 
 from app.core.db import Database
@@ -53,10 +55,17 @@ class VNVAnalysisService:
         boundary checks the GEE path uses), inserts a queued `analysis_runs`
         row, submits a generic `jobs` row, then hands off to the arq worker.
         `canopy_cover_pct`/`resolved_params` from the shared validation are
-        intentionally discarded - the sidecar's spectral unmixing has no
-        forest-definition-threshold concept, and `vnv_ndfi` declares no
-        `config` (nothing to resolve), unlike the GEE analyses that use
-        both."""
+        intentionally discarded - neither the sidecar's spectral unmixing
+        nor the band-index formulas have a forest-definition-threshold
+        concept, and no `vnv_pipeline` entry declares a `config` (nothing to
+        resolve), unlike the GEE analyses that use both.
+
+        Dispatches to one of two job functions by `analysis_id` (Wave: VNV
+        band indices) - `vnv_ndfi` keeps its existing sidecar-calling job
+        unchanged; every other `vnv_pipeline` catalog id (the 13 band
+        indices) is a single, generic, parameterized job
+        (`run_vnv_band_index_analysis`), not a per-index copy of this
+        method."""
         _entry, boundary_geojson, _canopy_cover_pct, _resolved_params = prepare_analysis_refresh(
             self.db, project_id, analysis_id, actor
         )
@@ -76,19 +85,34 @@ class VNVAnalysisService:
         # (there it's also circularity-avoidance; here the module doesn't
         # import back from this one, but the deferred-import convention is
         # kept for consistency and the same import-cost reasoning).
-        from app.workers.vnv_analysis_jobs import run_vnv_ndfi_analysis
+        from app.workers.vnv_analysis_jobs import run_vnv_band_index_analysis, run_vnv_ndfi_analysis
+
+        if analysis_id == "vnv_ndfi":
+            job_kind = "compute_vnv_ndfi"
+            job_kwargs: dict[str, Any] = dict(
+                job_id=None,  # filled in below once the jobs row exists
+                analysis_run_id=str(run_id), project_id=str(project_id),
+                boundary_geojson=boundary_geojson, actor=actor.model_dump(mode="json"),
+            )
+            job_fn = run_vnv_ndfi_analysis
+        else:
+            job_kind = "compute_vnv_band_index"
+            job_kwargs = dict(
+                job_id=None,
+                analysis_run_id=str(run_id), project_id=str(project_id),
+                analysis_id=analysis_id,
+                boundary_geojson=boundary_geojson, actor=actor.model_dump(mode="json"),
+            )
+            job_fn = run_vnv_band_index_analysis
 
         job_id, is_new = jobs.submit(
-            user_id=actor.user_id, kind="compute_vnv_ndfi",
+            user_id=actor.user_id, kind=job_kind,
             idempotency_key=None, request_id=None,
         )
+        job_kwargs["job_id"] = str(job_id)
         if is_new:
             try:
-                await runner.run(
-                    run_vnv_ndfi_analysis,
-                    job_id=str(job_id), analysis_run_id=str(run_id), project_id=str(project_id),
-                    boundary_geojson=boundary_geojson, actor=actor.model_dump(mode="json"),
-                )
+                await runner.run(job_fn, **job_kwargs)
             except Exception as e:
                 # The jobs-row insert AND the analysis_runs-row insert above
                 # already committed - if enqueueing then fails (e.g. Redis
