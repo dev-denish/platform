@@ -81,7 +81,7 @@ _VEG_INDEX_CONFIG: AnalysisConfigSpec = {
 }
 
 CATALOG: tuple[AnalysisCatalogEntry, ...] = (
-    # --- Real (10 original + 3 Raw Imagery below = 13), status "available" ---
+    # --- Real (20 original + 3 Raw Imagery below = 23), status "available" ---
     {
         "id": "hansen_gfc",
         "name": "Global Forest Change (Hansen)",
@@ -196,6 +196,139 @@ CATALOG: tuple[AnalysisCatalogEntry, ...] = (
         "description": (
             "Normalized Burn Ratio for a selected year (or range, 2017-present) and "
             "season window, from cloud-masked Sentinel-2 composites."
+        ),
+        "config": _VEG_INDEX_CONFIG,
+    },
+    {
+        "id": "ndwi",
+        "name": "NDWI",
+        "category": "Vegetation Indices",
+        "status": "available",
+        "execution": "async",
+        "description": (
+            "Normalized Difference Water Index for a selected year (or range, "
+            "2017-present) and season window, from cloud-masked Sentinel-2 composites."
+        ),
+        "config": _VEG_INDEX_CONFIG,
+    },
+    {
+        "id": "gndvi",
+        "name": "GNDVI",
+        "category": "Vegetation Indices",
+        "status": "available",
+        "execution": "async",
+        "description": (
+            "Green Normalized Difference Vegetation Index for a selected year (or "
+            "range, 2017-present) and season window, from cloud-masked Sentinel-2 "
+            "composites."
+        ),
+        "config": _VEG_INDEX_CONFIG,
+    },
+    {
+        "id": "ndbi",
+        "name": "NDBI",
+        "category": "Vegetation Indices",
+        "status": "available",
+        "execution": "async",
+        "description": (
+            "Normalized Difference Built-up Index for a selected year (or range, "
+            "2017-present) and season window, from cloud-masked Sentinel-2 composites."
+        ),
+        "config": _VEG_INDEX_CONFIG,
+    },
+    {
+        "id": "ndmi",
+        "name": "NDMI",
+        "category": "Vegetation Indices",
+        "status": "available",
+        "execution": "async",
+        "description": (
+            "Normalized Difference Moisture Index for a selected year (or range, "
+            "2017-present) and season window, from cloud-masked Sentinel-2 composites."
+        ),
+        "config": _VEG_INDEX_CONFIG,
+    },
+    {
+        "id": "lswi",
+        "name": "LSWI",
+        "category": "Vegetation Indices",
+        "status": "available",
+        "execution": "async",
+        "description": (
+            "Land Surface Water Index for a selected year (or range, 2017-present) and "
+            "season window, from cloud-masked Sentinel-2 composites. Same band math as "
+            "NDMI (NIR/SWIR1), read here under its own flood/wetland-monitoring "
+            "convention rather than NDMI's canopy-moisture-stress framing."
+        ),
+        "config": _VEG_INDEX_CONFIG,
+    },
+    {
+        "id": "bsi",
+        "name": "BSI",
+        "category": "Vegetation Indices",
+        "status": "available",
+        "execution": "async",
+        "description": (
+            "Bare Soil Index for a selected year (or range, 2017-present) and season "
+            "window, from cloud-masked Sentinel-2 composites."
+        ),
+        "config": _VEG_INDEX_CONFIG,
+    },
+    {
+        "id": "arvi",
+        "name": "ARVI",
+        "category": "Vegetation Indices",
+        "status": "available",
+        "execution": "async",
+        "description": (
+            "Atmospherically Resistant Vegetation Index for a selected year (or range, "
+            "2017-present) and season window, from cloud-masked Sentinel-2 composites."
+        ),
+        "config": _VEG_INDEX_CONFIG,
+    },
+    {
+        "id": "nddi",
+        "name": "NDDI",
+        "category": "Vegetation Indices",
+        "status": "available",
+        "execution": "async",
+        "description": (
+            "Normalized Difference Drought Index for a selected year (or range, "
+            "2017-present) and season window, from cloud-masked Sentinel-2 composites. "
+            "Composite of NDVI and NDMI, computed within the same composite - no "
+            "separate NDVI/NDMI run required. Computed and masked on its own [-3,3] "
+            "range rather than the shared [-1,1] - the ratio's denominator can approach "
+            "zero on ordinary land, not just as a rare artifact."
+        ),
+        "config": _VEG_INDEX_CONFIG,
+    },
+    {
+        "id": "cmri",
+        "name": "CMRI",
+        "category": "Vegetation Indices",
+        "status": "available",
+        "execution": "async",
+        "description": (
+            "Combined Mangrove Recognition Index for a selected year (or range, "
+            "2017-present) and season window, from cloud-masked Sentinel-2 composites. "
+            "Composite of NDVI and NDWI (NDVI - NDWI). Its natural range ([-2,2]) is "
+            "wider than every other index here, so it is computed and masked on its own "
+            "[-2,2] range rather than the shared [-1,1]."
+        ),
+        "config": _VEG_INDEX_CONFIG,
+    },
+    {
+        "id": "psri",
+        "name": "PSRI",
+        "category": "Vegetation Indices",
+        "status": "available",
+        "execution": "async",
+        "description": (
+            "Plant Senescence Reflectance Index for a selected year (or range, "
+            "2017-present) and season window, from cloud-masked Sentinel-2 composites. "
+            "Uses the red-edge band (B6) as its denominator, not the standard NIR band "
+            "every other index here uses - Merzlyak et al. (1999)'s formula is defined "
+            "on Red/Blue/RedEdge (~750nm), not Red/Blue/NIR."
         ),
         "config": _VEG_INDEX_CONFIG,
     },

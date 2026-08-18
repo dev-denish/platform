@@ -22,13 +22,16 @@ from typing import Any
 
 from app.services.index_summary import DESCRIPTIVE_ONLY_TRAILER
 
-# The 5 catalog ids whose stats carry a `series`/`distribution` year-series -
+# The 15 catalog ids whose stats carry a `series`/`distribution` year-series -
 # see gee_analysis_service.py's `_annual_index_series`, the one function that
 # ever populates those two keys. Duplicated as a literal (not imported from
 # gee_analysis_service, which pulls in the whole `ee` import chain) - same
 # "small, independent constant" convention index_summary.py's own
 # INDEX_HISTOGRAM_BIN_WIDTH comment documents for the identical tradeoff.
-MULTI_YEAR_INDEX_IDS = frozenset({"ndvi", "evi", "savi", "mndwi", "nbr"})
+MULTI_YEAR_INDEX_IDS = frozenset({
+    "ndvi", "evi", "savi", "mndwi", "nbr", "ndwi", "gndvi", "ndbi",
+    "ndmi", "lswi", "bsi", "arvi", "nddi", "cmri", "psri",
+})
 
 
 def is_multi_year_index(analysis_id: str) -> bool:

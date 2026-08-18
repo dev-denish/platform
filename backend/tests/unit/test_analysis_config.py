@@ -107,6 +107,26 @@ def test_index_range_mode_upper_bound_cannot_exceed_the_live_ceiling():
         )
 
 
+@pytest.mark.parametrize(
+    "analysis_id",
+    ["ndwi", "gndvi", "ndbi", "ndmi", "lswi", "bsi", "arvi", "nddi", "cmri", "psri"],
+)
+def test_index_defaults_fill_in_every_field_for_a_newly_added_index_id(analysis_id):
+    # Proves _INDEX_IDS was actually extended, not just the catalog - these 7
+    # were added alongside the original ndvi/evi/savi/mndwi/nbr.
+    from app.domain.analysis_config import current_veg_index_years
+
+    resolved = resolve_and_validate(analysis_id, _INDEX_SPEC, None)
+    assert resolved == {
+        "year_mode": "single",
+        "year": max(current_veg_index_years()),
+        "season_start": "02-01",
+        "season_end": "05-31",
+        "imagery_source": "sentinel2",
+        "cloud_masking": "cloud_score_plus",
+    }
+
+
 def test_index_accepts_a_custom_season_window():
     resolved = resolve_and_validate("savi", _INDEX_SPEC, {"season_start": "03-01", "season_end": "06-15"})
     assert resolved["season_start"] == "03-01"

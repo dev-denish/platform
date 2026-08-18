@@ -19,30 +19,167 @@ would be a VVB finding. Wording stays on "consistent with"/"worth checking",
 deliberately, and every summary carries DESCRIPTIVE_ONLY_TRAILER.
 
 WHERE THE NUMBERS BELOW COME FROM
-Exactly ONE index has a genuine literature-standard cut point:
+Three indices have a genuine literature-standard cut point, all a binary
+0.0 split with the same "check the boundary" framing on the positive side:
   * MNDWI at 0.0 - Xu, H. (2006), "Modification of normalised difference
     water index (NDWI) to enhance open water features in remotely sensed
     imagery", Int. J. Remote Sensing 27(14):3025-3033. Open water is
     positive, vegetation/soil/built-up negative, 0 is the split.
+  * NDWI at 0.0 - McFeeters, S.K. (1996), "The use of the Normalized
+    Difference Water Index (NDWI) in the delineation of open water
+    features", Int. J. Remote Sensing 17(7):1425-1432. Same open-
+    water-positive convention as MNDWI, different band pair (Green/NIR
+    rather than Green/SWIR1) - kept as its own profile, not merged with
+    MNDWI's, since the two are genuinely different formulas.
+  * NDBI at 0.0 - Zha, Y., Gao, J., Ni, S. (2003), "Use of normalized
+    difference built-up index in automatically mapping urban areas from TM
+    imagery", Int. J. Remote Sensing 24(3):583-594. Built-up is positive,
+    vegetation/soil/water negative, 0 is the split.
   * NDVI's bands are the conventional DESCRIPTIVE ranges published by USGS
     (Landsat NDVI) and NASA Earthdata: <~0.1 barren rock/sand/snow, ~0.2-0.5
     sparse grass/shrub/senescing, ~0.6-0.9 dense green canopy. A convention
     for reading a picture, not a standard's threshold - used here only to
     pick an adjective.
-  * EVI, SAVI and NBR have NO universal absolute cut point. Rather than
-    invent per-index numbers they REUSE NDVI's edges, with the consequences
-    stated in their own caveat text:
+  * EVI, SAVI, GNDVI and NBR have NO universal absolute cut point. Rather
+    than invent per-index numbers they REUSE NDVI's edges, with the
+    consequences stated in their own caveat text:
       - EVI and SAVI (L=0.5 here) read systematically LOWER than NDVI over
         identical vegetation, so reusing NDVI's edges biases their adjective
         DOWNWARD (conservative), never upward.
+      - GNDVI substitutes green for red and is more sensitive to
+        chlorophyll concentration than NDVI over identical vegetation
+        (Gitelson, Kaufman & Merzlyak 1996, Remote Sensing of Environment
+        58(3):289-298, note the wider dynamic range, but publish no discrete
+        cut points), so reusing NDVI's edges is a convenience
+        reading, not a validated GNDVI-specific threshold.
       - NBR's severity classes (Key & Benson 2006, FIREMON Landscape
         Assessment) are defined on dNBR - pre-fire minus post-fire - not on
         the single-date absolute NBR this series computes. So NBR wording
         describes NIR-vs-SWIR contrast and names no severity class.
+  * ARVI (Kaufman & Tanre 1992, Int. J. Remote Sensing 30) is the one
+    NDVI-edge reuse with an actual literature basis for doing so: the
+    authors themselves state ARVI has a similar dynamic range to NDVI
+    (unlike EVI/SAVI, which read systematically lower) - ARVI is NDVI
+    corrected for atmospheric scattering via the blue band, not a
+    differently-scaled signal, so this reuse is a closer fit than EVI/
+    SAVI/GNDVI's.
+  * NDMI has NO literature-standard absolute cut point either - published
+    NDMI-based moisture/soil thresholds vary by study (e.g. ResearchGate
+    threads on Landsat 8 NDMI soil-moisture extraction report no single
+    agreed number) rather than converging on one value the way MNDWI's Xu
+    2006 split does. NDVI's edges are reused here too, purely as
+    convenience bucket boundaries, with NDMI's own moisture-specific
+    reading text (not NDVI's canopy-density text) and an explicit caveat
+    that this is not a validated NDMI threshold.
+  * LSWI (Xiao et al. 2005/2006) is mathematically IDENTICAL to NDMI - same
+    NIR/SWIR1 band pair - but is shipped as its own index for the flood/
+    wetland-monitoring naming convention that literature (paddy rice/
+    wetland mapping) actually uses. Its own profile deliberately uses
+    flood/saturation reading text, not NDMI's moisture-stress text, on the
+    SAME underlying numbers - same "same numbers, index-specific wording"
+    convention as EVI/SAVI/NBR reusing NDVI's numbers. Xiao et al.'s real
+    published flood-detection rule is COMPARATIVE (a pixel is flagged
+    flooded when LSWI + T >= EVI or NDVI on the SAME pixel), not an
+    absolute LSWI value alone - this module has no access to another
+    index's value inside one profile's describe_level, so LSWI's wording
+    here describes the raw value only, never a flood/no-flood
+    classification, and says so in its own caveat.
+  * BSI has no single literature-standard cut point at all (published
+    operational bare-soil-detection thresholds range from about 0.02-0.08
+    in some agricultural studies to a -0.15..0.15 tested range in others,
+    not one agreed number). 0.0 is used here only as the ratio's own
+    natural mathematical sign boundary (Rikimaru et al. 2002's own sign
+    convention: positive leans soil/mineral, negative leans vegetation/
+    moisture), not a validated classification threshold - said explicitly
+    in BSI's own words/caveat text, the same honesty NDMI/GNDVI's caveats
+    already carry.
+  * NDDI at 0.1/0.3 - Gu, Y. et al. (2007), Geophysical Research Letters
+    34, L06407, publish an actual 3-class drought classification
+    (non-drought <0.1, moderate 0.1-0.3, severe >=0.3) - a genuine
+    literature-standard multi-band threshold, not a borrowed convenience
+    bucket. Calibrated on MODIS grassland scenes with Gao (1996)'s NIR-
+    SWIR1 NDWI (this platform's NDMI), not Sentinel-2 forestry/
+    agroforestry boundaries - the class label is carried as indicative,
+    not re-validated for this platform's use case, per NDDI's own caveat.
+    NDDI's own valid range is ALSO wider than the shared [-1, 1] (its own
+    [-3, 3] - see gee_analysis_service.py's `_INDEX_VALID_RANGE`): unlike
+    CMRI's exact [-2, 2] bound, NDDI is a ratio whose denominator can
+    approach zero whenever NDVI and NDMI have opposite signs with close
+    magnitudes - common on ordinary land (positive NDVI over vegetation,
+    slightly negative NDMI under dry conditions), not a rare artifact.
+    Live verification found ~97% of one real test boundary's pixels
+    clustered near a single value just outside [-1, 1], with a genuine
+    unbounded tail beyond that (no clean fixed bound exists). [-3, 3] was
+    chosen empirically to recover the well-behaved bulk while staying well
+    short of where the real outlier tail starts - not a mathematically
+    exact bound, and no denominator-near-zero guard was added, so some
+    genuine outliers can still occasionally fall inside it on a different
+    boundary. See NDDI's own caveat.
+  * CMRI has no single universal absolute threshold either - Gupta et al.
+    (2018)'s own paper reports 73.43% mangrove/non-mangrove discrimination
+    accuracy but publishes no one masking number; a follow-on application
+    (Keta Lagoon, Ghana) used a site-specific 0.51-0.70 masking range, not
+    a validated universal cut point. 0 is used here only as the formula's
+    natural sign boundary (same honest treatment as BSI). CMRI = NDVI -
+    NDWI is also the one index in this registry whose natural range is
+    wider than [-1, 1] - a plain difference (not a ratio) of two [-1,1]
+    indices, its true range is [-2, 2]. This was FIRST implemented by
+    keeping CMRI inside the shared [-1, 1] mask, relying on
+    `out_of_range_pixel_count` to disclose (not hide) excluded pixels -
+    but live-GEE verification against a real, ordinarily-vegetated (no
+    water) test boundary showed this excludes ~98% of pixels routinely,
+    not as a rare edge case: NDVI-NDWI naturally lands above 1.0 almost
+    everywhere there is substantial vegetation on dry land, since NDVI is
+    typically positive and NDWI (Green-NIR) is typically strongly negative
+    over any non-water surface. That made the shared-range mask
+    unrepresentative for CMRI specifically, so CMRI alone gets its own
+    [-2, 2] range (`_INDEX_VALID_RANGE` in gee_analysis_service.py) -
+    every other index still shares the plain [-1, 1] default.
+  * PSRI has NO literature threshold at all - not even the inconsistent,
+    study-varying operational ranges BSI/CMRI have. Merzlyak et al. (1999)
+    establish only a DIRECTION (PSRI rises with senescence/carotenoid-to-
+    chlorophyll ratio), no numeric cut point separating "senescent" from
+    "healthy" anywhere found. So PSRI's profile uses an EMPTY edges tuple
+    (`edges=()`) rather than any band at all - `_band_index` always returns
+    0 for an empty edges tuple, so `words`/`readings` each carry exactly
+    one entry and every mean gets the same flat, honestly-caveated
+    reading, no adjective/threshold implied. Its natural range is also
+    much narrower than every other index here (verified live on two real
+    boundaries - a vegetated one, -0.23 to 0.46, and a real lake with open
+    water/shoreline, -0.49 to 0.66 - both 100% in-range, comfortably
+    inside the shared [-1, 1] but occupying only a fraction of it). PSRI
+    still shares the plain [-1, 1] range for masking rather than getting
+    its own override the way NDDI/CMRI did - not because the RedEdge
+    denominator is mathematically guaranteed never to approach zero (it
+    wasn't tested against every land-cover/turbidity/shadow combination),
+    but because both tested boundaries stayed fully in-range; the generic
+    `describe_out_of_range` clause below remains the disclosure mechanism
+    for any untested scenario where it doesn't. Bin resolution is coarser
+    relative to PSRI's own narrow dynamic range than for indices whose
+    natural range fills [-1, 1].
 
-The variability and outlier rules are keyed to the histogram's own 0.1-wide
-bucket (_VEG_INDEX_HISTOGRAM_RANGE/_BINS in gee_analysis_service.py: 20 bins
-over [-1, 1]) rather than to fresh invented constants.
+The variability and outlier rules are keyed to the histogram's own bucket
+width (_VEG_INDEX_HISTOGRAM_BINS in gee_analysis_service.py: 20 bins,
+0.1-wide over the shared [-1, 1], 0.2-wide over CMRI's own [-2, 2], 0.3-wide
+over NDDI's own [-3, 3]) rather than to fresh invented constants -
+`compose_summary` derives the real bin_width from the bin_edges it's given
+rather than assuming the shared default applies to every index.
+
+OUT-OF-RANGE DISCLOSURE (Wave: composite indices)
+`describe_out_of_range` is a distinct clause from `describe_sample`:
+`describe_sample` flags too FEW in-range pixels in absolute terms;
+`describe_out_of_range` flags a large SHARE of the pixels that existed being
+excluded by the natural-range mask (`out_of_range_pixel_count`) - a
+boundary with 5000 in-range pixels reads as "ample sample" to
+`describe_sample` even if another 5000 were thrown out right alongside
+them, and before this clause existed that exclusion could pass through the
+summary with zero mention regardless of how large the excluded share was.
+Added after live-GEE verification found NDDI's empirical [-3, 3] range
+(chosen from ONE test boundary's distribution, not a mathematically exact
+bound the way CMRI's [-2, 2] is) is not guaranteed to keep every real,
+more heterogeneous project boundary under a low exclusion ratio - this is
+the safety net for that case, generic across every index (most, EVI/SAVI
+included, simply never cross the 10% trigger and stay silent).
 """
 from __future__ import annotations
 
@@ -52,7 +189,8 @@ __all__ = [
     "INDEX_RANGE", "INDEX_HISTOGRAM_BIN_WIDTH", "DESCRIPTIVE_ONLY_TRAILER",
     "IndexProfile", "INDEX_PROFILES", "get_profile",
     "describe_level", "describe_variability", "describe_spatial_outliers",
-    "describe_sample", "describe_trend", "compose_summary", "summarize_index_result",
+    "describe_sample", "describe_out_of_range", "describe_trend",
+    "compose_summary", "summarize_index_result",
 ]
 
 # Natural range all 5 indices are read on, and the range the map tile is
@@ -113,6 +251,20 @@ _TREND_DOWN_NOTE = (
     "a drought year, or simply a drier pre-monsoon compositing window can all produce it."
 )
 
+# Shared by MNDWI and NDWI - both a single literature 0.0 open-water/land
+# split (see module docstring), differing only in which paper and which band
+# pair, not in the reading itself. Kept as one pair of word/reading tuples
+# rather than duplicated per index, same "shared constant, per-profile
+# edge_source" convention _GREEN_EDGES/_GREEN_WORDS/_GREEN_READINGS already
+# use for NDVI/EVI/SAVI/NBR.
+_WATER_EDGES = (0.0,)
+_WATER_WORDS = ("below the 0 open-water cut point", "above the 0 open-water cut point")
+_WATER_READINGS = (
+    "consistent with land - vegetation, soil or built-up surface - rather than open water",
+    "the boundary mean itself reads as open water, which for a land-based project "
+    "boundary usually means a tank, reservoir or river covers a large share of the "
+    "area - check the boundary before using the mean",
+)
 INDEX_PROFILES: dict[str, IndexProfile] = {
     "ndvi": IndexProfile(
         label="NDVI", edges=_GREEN_EDGES, words=_GREEN_WORDS, readings=_GREEN_READINGS,
@@ -163,20 +315,289 @@ INDEX_PROFILES: dict[str, IndexProfile] = {
         ),
     ),
     "mndwi": IndexProfile(
-        label="MNDWI", edges=(0.0,),
-        words=("below the 0 open-water cut point (Xu 2006)", "above the 0 open-water cut point (Xu 2006)"),
-        readings=(
-            "consistent with land - vegetation, soil or built-up surface - rather than open water",
-            "the boundary mean itself reads as open water, which for a land-based project "
-            "boundary usually means a tank, reservoir or river covers a large share of the "
-            "area - check the boundary before using the mean",
-        ),
+        label="MNDWI", edges=_WATER_EDGES,
+        words=tuple(f"{w} (Xu 2006)" for w in _WATER_WORDS),
+        readings=_WATER_READINGS,
         edge_source=(
             "Xu, H. (2006), Int. J. Remote Sensing 27(14):3025-3033 - open water positive, "
             "vegetation/soil/built-up negative, 0 the split"
         ),
         trend_up_note="Rising MNDWI usually means more standing water (season, tank filling), not vegetation change.",
         trend_down_note="Falling MNDWI usually means less standing water, not vegetation change.",
+    ),
+    "ndwi": IndexProfile(
+        label="NDWI", edges=_WATER_EDGES,
+        words=tuple(f"{w} (McFeeters 1996)" for w in _WATER_WORDS),
+        readings=_WATER_READINGS,
+        edge_source=(
+            "McFeeters, S.K. (1996), Int. J. Remote Sensing 17(7):1425-1432 - open water "
+            "positive, vegetation/soil/built-up negative, 0 the split. Distinct formula from "
+            "MNDWI (Green/NIR here vs. Green/SWIR1), not a duplicate reading of it."
+        ),
+        trend_up_note="Rising NDWI usually means more standing water (season, tank filling), not vegetation change.",
+        trend_down_note="Falling NDWI usually means less standing water, not vegetation change.",
+    ),
+    "gndvi": IndexProfile(
+        label="GNDVI", edges=_GREEN_EDGES, words=_GREEN_WORDS, readings=_GREEN_READINGS,
+        edge_source=_GREEN_SOURCE + "; reused for GNDVI, which has no universal absolute cut point",
+        caveat=(
+            "GNDVI substitutes the green band for red and is more sensitive to chlorophyll "
+            "concentration than NDVI over identical vegetation, so this wording is not "
+            "comparable word-for-word with NDVI's."
+        ),
+        trend_up_note=_TREND_UP_NOTE, trend_down_note=_TREND_DOWN_NOTE,
+    ),
+    "ndbi": IndexProfile(
+        label="NDBI", edges=(0.0,),
+        words=("below the 0 built-up cut point (Zha et al. 2003)", "above the 0 built-up cut point (Zha et al. 2003)"),
+        readings=(
+            "consistent with vegetation, soil or water rather than built-up surface",
+            "the boundary mean itself reads as built-up surface, which for a land-based "
+            "project boundary is worth checking - a real settlement/infrastructure inside "
+            "the boundary, or a misdrawn boundary edge",
+        ),
+        edge_source=(
+            "Zha, Y., Gao, J., Ni, S. (2003), Int. J. Remote Sensing 24(3):583-594 - "
+            "built-up positive, vegetation/soil/water negative, 0 the split"
+        ),
+        trend_up_note=(
+            "Rising NDBI is consistent with new construction or bare/impervious surface "
+            "expanding, not vegetation change."
+        ),
+        trend_down_note=(
+            "Falling NDBI is consistent with vegetation regrowth or a surface change away "
+            "from built-up/bare ground."
+        ),
+    ),
+    "arvi": IndexProfile(
+        label="ARVI", edges=_GREEN_EDGES, words=_GREEN_WORDS, readings=_GREEN_READINGS,
+        edge_source=(
+            _GREEN_SOURCE + "; reused for ARVI, which Kaufman & Tanre (1992) note has a "
+            "similar dynamic range to NDVI (unlike EVI/SAVI, which read systematically lower)"
+        ),
+        caveat=(
+            "ARVI is NDVI corrected for atmospheric (aerosol/haze) scattering using the blue "
+            "band, not a differently-scaled signal - readings are broadly comparable to "
+            "NDVI's, but the two can diverge under real haze/aerosol conditions, which is the "
+            "point of the correction."
+        ),
+        trend_up_note=_TREND_UP_NOTE, trend_down_note=_TREND_DOWN_NOTE,
+    ),
+    "ndmi": IndexProfile(
+        label="NDMI", edges=_GREEN_EDGES, words=_GREEN_WORDS,
+        readings=(
+            "consistent with dry, bare or strongly moisture-stressed canopy",
+            "consistent with vegetation under noticeable moisture stress",
+            "consistent with vegetation carrying moderate canopy moisture",
+            "consistent with high canopy moisture content - dense, well-watered vegetation",
+        ),
+        edge_source=(
+            _GREEN_SOURCE + "; reused for NDMI, which has no universal absolute cut point of "
+            "its own - published NDMI-based moisture thresholds vary by study rather than "
+            "converging on one number"
+        ),
+        caveat=(
+            "NDMI measures canopy/soil moisture (NIR vs. SWIR1 reflectance), not chlorophyll "
+            "or biomass - a high reading here is not the same claim as high NDVI, and this "
+            "wording is not comparable word-for-word with NDVI's."
+        ),
+        trend_up_note=(
+            "Rising NDMI is consistent with increasing canopy/soil moisture (rainfall, "
+            "irrigation, recovery), not necessarily vegetation gain - VM0047 removals come "
+            "from plot-based biomass sampling (s9.2), not this series."
+        ),
+        trend_down_note=(
+            "Falling NDMI is consistent with drying conditions, drought stress or reduced "
+            "canopy moisture - worth checking against the season/rainfall record before "
+            "reading it as vegetation loss."
+        ),
+    ),
+    "lswi": IndexProfile(
+        label="LSWI", edges=_GREEN_EDGES, words=_GREEN_WORDS,
+        readings=(
+            "consistent with a dry, bare or unflooded low-moisture surface",
+            "consistent with drier vegetation or soil, not standing water or saturated ground",
+            "consistent with moderate surface moisture - a wetter soil or partially "
+            "saturated surface",
+            "consistent with high surface water content - standing water or saturated "
+            "ground",
+        ),
+        edge_source=(
+            _GREEN_SOURCE + "; reused for LSWI, which has no absolute cut point of its own. "
+            "LSWI is mathematically identical to NDMI (same NIR/SWIR1 band pair) but is read "
+            "here for the flood/wetland convention (Xiao et al. 2005/2006), not moisture "
+            "stress - see this module's own docstring for why the same numbers get distinct "
+            "index-specific wording."
+        ),
+        caveat=(
+            "LSWI's published flood-detection use compares LSWI against EVI/NDVI on the same "
+            "pixel (LSWI + T >= EVI/NDVI), not an absolute LSWI value alone - this wording "
+            "describes the raw value only, not a flood/no-flood classification."
+        ),
+        trend_up_note=(
+            "Rising LSWI is consistent with increasing surface water or saturation "
+            "(flooding, irrigation, monsoon), not vegetation gain."
+        ),
+        trend_down_note=(
+            "Falling LSWI is consistent with surface drying or a flood/inundation event "
+            "ending, not vegetation loss."
+        ),
+    ),
+    "bsi": IndexProfile(
+        label="BSI", edges=(0.0,),
+        words=(
+            "below the ratio's zero sign boundary (no literature-standard bare-soil "
+            "threshold exists)",
+            "above the ratio's zero sign boundary (no literature-standard bare-soil "
+            "threshold exists)",
+        ),
+        readings=(
+            "consistent with vegetated or moist surface rather than exposed bare soil",
+            "consistent with exposed bare soil, degraded land, or a recently cleared/tilled "
+            "surface rather than dense vegetation",
+        ),
+        edge_source=(
+            "Rikimaru, Roy & Miyatake (2002), Tropical Ecology 43(1):39-47, defines the "
+            "ratio's sign convention (positive leans soil/mineral, negative leans "
+            "vegetation/moisture). No single absolute bare-soil detection threshold is "
+            "agreed in the literature - published operational thresholds range from about "
+            "0.02-0.08 in some agricultural studies to a -0.15..0.15 tested range in "
+            "others - so 0 is used here only as the ratio's natural mathematical sign "
+            "boundary, not a validated universal cut point."
+        ),
+        caveat=(
+            "BSI has no literature-standard absolute threshold the way MNDWI/NDWI/NDBI do - "
+            "the reading above only reports which side of zero the ratio falls, not a "
+            "validated bare-soil classification. 'Degraded land' and 'recently cleared/"
+            "tilled' name plausible causes of a soil-leaning spectral signature, not a "
+            "degradation, clearing or land-use-change determination - VM0047 degradation/"
+            "reversal findings run through the monitored disturbance record and plot data, "
+            "not a single-date spectral mean."
+        ),
+        trend_up_note=(
+            "Rising BSI is consistent with soil exposure increasing - clearing, tillage, "
+            "erosion or vegetation loss."
+        ),
+        trend_down_note=(
+            "Falling BSI is consistent with vegetation or moisture cover increasing over "
+            "previously bare/exposed ground."
+        ),
+    ),
+    "nddi": IndexProfile(
+        label="NDDI", edges=(0.1, 0.3),
+        words=(
+            "below the 0.1 non-drought cut point (Gu et al. 2007)",
+            "in the 0.1-0.3 moderate-drought band (Gu et al. 2007)",
+            "at or above the 0.3 severe-drought cut point (Gu et al. 2007)",
+        ),
+        readings=(
+            "consistent with a non-drought vegetation-water balance",
+            "consistent with moderate drought stress relative to the local "
+            "vegetation-water balance",
+            "consistent with severe drought stress relative to the local "
+            "vegetation-water balance",
+        ),
+        edge_source=(
+            "Gu, Y. et al. (2007), Geophysical Research Letters 34, L06407 - a real "
+            "published 3-class drought classification (non-drought <0.1, moderate "
+            "0.1-0.3, severe >=0.3), not a borrowed convenience bucket, derived for MODIS "
+            "grassland drought monitoring over the central Great Plains."
+        ),
+        caveat=(
+            "NDDI here uses Gao (1996)'s NIR-SWIR1 NDWI (this platform's NDMI, "
+            "mathematically identical), the same input Gu et al. used - not McFeeters' "
+            "Green-NIR NDWI. The published 0.1/0.3 classification was calibrated on "
+            "MODIS grassland scenes, not Sentinel-2 forestry/agroforestry boundaries, so "
+            "the class label is indicative, not re-validated for this platform's use case. "
+            "This class label describes the spectral vegetation-water balance only, not a "
+            "VM0047 degradation, reversal or disturbance finding - those run through the "
+            "monitored disturbance record and plot-based data (s9.2), not a single-date "
+            "spectral snapshot."
+        ),
+        trend_up_note=(
+            "Rising NDDI is consistent with drought conditions intensifying (vegetation "
+            "greenness falling relative to canopy moisture, or vice versa)."
+        ),
+        trend_down_note="Falling NDDI is consistent with drought conditions easing.",
+    ),
+    "cmri": IndexProfile(
+        label="CMRI", edges=(0.0,),
+        words=(
+            "below the ratio's zero sign boundary (no universal validated "
+            "mangrove-masking threshold exists)",
+            "above the ratio's zero sign boundary (no universal validated "
+            "mangrove-masking threshold exists)",
+        ),
+        readings=(
+            "leaning water-like rather than vegetation-like in this NDVI-vs-NDWI "
+            "comparison",
+            "leaning vegetation-like rather than water-like in this NDVI-vs-NDWI "
+            "comparison, the direction associated with mangrove/dense-vegetation pixels "
+            "in Gupta et al. (2018)",
+        ),
+        edge_source=(
+            "Gupta, K. et al. (2018), MethodsX 5:1129-1139 (Combined Mangrove "
+            "Recognition Index, CMRI = NDVI - NDWI) report 73.43% mangrove/non-mangrove "
+            "discrimination accuracy but publish no one universal absolute masking "
+            "threshold; a follow-on application (Keta Lagoon, Ghana) used a "
+            "site-specific 0.51-0.70 masking range, not a validated universal cut point "
+            "- so 0 is used here only as the formula's natural sign boundary."
+        ),
+        caveat=(
+            "CMRI = NDVI - NDWI is a plain difference, not a ratio, so its true range is "
+            "[-2, 2], wider than the [-1, 1] every other index here shares - CMRI is "
+            "computed and masked on its own [-2, 2] range (not the shared [-1, 1]) for "
+            "exactly this reason: live verification showed ordinary vegetated (non-water) "
+            "boundaries commonly land above 1.0, so a shared [-1, 1] mask would exclude "
+            "most pixels routinely, not rarely. This is not a mangrove/non-mangrove "
+            "classification - no validated universal threshold exists."
+        ),
+        trend_up_note=(
+            "Rising CMRI is consistent with the boundary reading more vegetation-like "
+            "relative to water, not a measurement of mangrove gain."
+        ),
+        trend_down_note=(
+            "Falling CMRI is consistent with the boundary reading more water-like "
+            "relative to vegetation - worth checking against tide stage/season before "
+            "reading it as vegetation loss."
+        ),
+    ),
+    "psri": IndexProfile(
+        label="PSRI", edges=(),
+        words=("not benchmarked against a literature threshold",),
+        readings=(
+            "the raw carotenoid-to-chlorophyll reflectance ratio - higher is consistent "
+            "with more senescent or ripening vegetation, lower (or negative) with "
+            "actively growing green vegetation (Merzlyak et al. 1999), though no "
+            "published cut point marks the boundary between them",
+        ),
+        edge_source=(
+            "Merzlyak, M.N. et al. (1999), 'Non-destructive optical detection of pigment "
+            "changes during leaf senescence and fruit ripening', Physiologia Plantarum "
+            "106(1):135-141 - establishes the DIRECTION (PSRI rises with senescence/"
+            "carotenoid:chlorophyll dominance) but publishes no absolute numeric "
+            "threshold separating 'senescent' from 'healthy', unlike even BSI's "
+            "inconsistent-but-real study-specific operational ranges."
+        ),
+        caveat=(
+            "PSRI has no literature-standard threshold at all - only a direction is "
+            "established, so no adjective band is assigned here, just the direction and "
+            "the raw number. PSRI's natural range is also much narrower than every other "
+            "index here (typically a fraction of [-1, 1]), so small absolute changes can "
+            "be a larger relative shift than the same change would be for NDVI. "
+            "'Senescence' and 'ripening' name plausible physiological readings of a "
+            "rising carotenoid:chlorophyll ratio, not a VM0047 degradation or reversal "
+            "determination - those run through the monitored disturbance record and "
+            "plot-based data (s9.2), not a single-date spectral mean."
+        ),
+        trend_up_note=(
+            "Rising PSRI is consistent with increasing senescence, ripening or carotenoid "
+            "dominance - not itself a forest-definition or degradation finding."
+        ),
+        trend_down_note=(
+            "Falling PSRI is consistent with fresher, more actively photosynthesizing "
+            "vegetation."
+        ),
     ),
 }
 
@@ -231,32 +652,41 @@ def describe_level(index_id: str, mean: float | None) -> str | None:
 
 # Keyed to the histogram bucket width, not to invented numbers: under half a
 # bucket = the mean describes everything; over two buckets = it describes
-# nothing in particular. Index-independent by construction - all five share
-# the same fixed [-1, 1] / 20-bin histogram, which is why there is no
-# index_id parameter here.
-_VAR_UNIFORM = 0.5 * INDEX_HISTOGRAM_BIN_WIDTH   # 0.05
-_VAR_FAIRLY_UNIFORM = 1.0 * INDEX_HISTOGRAM_BIN_WIDTH  # 0.10
-_VAR_MODERATE = 2.0 * INDEX_HISTOGRAM_BIN_WIDTH  # 0.20
+# nothing in particular. Thirteen of the fourteen indices share the same
+# fixed [-1, 1] / 20-bin histogram (0.1-wide buckets); CMRI's own [-2, 2]
+# range (see gee_analysis_service.py's `_INDEX_VALID_RANGE`) has 0.2-wide
+# buckets instead - `describe_variability`'s `bin_width` parameter carries
+# that through rather than assuming the module constant applies universally.
+_VAR_UNIFORM = 0.5   # x bin_width
+_VAR_FAIRLY_UNIFORM = 1.0  # x bin_width
+_VAR_MODERATE = 2.0  # x bin_width
 
 
-def describe_variability(std_dev: float | None) -> str | None:
+def describe_variability(
+    std_dev: float | None, bin_width: float = INDEX_HISTOGRAM_BIN_WIDTH
+) -> str | None:
     """Wording is deliberately plain-language (a field-team reviewer, not
     just a VVB auditor, reads this callout) - "a spread of about X" instead
     of "std dev X", no "histogram bin" - while still carrying the real
-    number, not just an adjective, so nothing quantitative is lost."""
+    number, not just an adjective, so nothing quantitative is lost.
+
+    `bin_width` defaults to the shared 0.1 every index but CMRI uses -
+    `compose_summary` derives the real value from the actual histogram
+    bin_edges it's given, rather than assuming the module default applies
+    to every index (see this module's own docstring)."""
     if std_dev is None:
         return None
-    if std_dev < _VAR_UNIFORM:
+    if std_dev < _VAR_UNIFORM * bin_width:
         return (
             f"Pixel values are uniform across the boundary (a spread of about {std_dev:.2f}), "
             "so the mean is a fair description of the whole area."
         )
-    if std_dev < _VAR_FAIRLY_UNIFORM:
+    if std_dev < _VAR_FAIRLY_UNIFORM * bin_width:
         return (
             f"Pixel values are fairly uniform across the boundary (a spread of about "
             f"{std_dev:.2f})."
         )
-    if std_dev < _VAR_MODERATE:
+    if std_dev < _VAR_MODERATE * bin_width:
         return (
             f"Pixel values are moderately variable across the boundary (a spread of about "
             f"{std_dev:.2f}), so the boundary covers noticeably different surfaces."
@@ -414,17 +844,84 @@ def describe_sample(counts: list[int] | None) -> str | None:
     return None
 
 
+# -------------------------------------------------- clause: out-of-range share
+
+
+# Distinct concern from describe_sample above: that one flags too FEW in-
+# range pixels in absolute terms; this flags a large SHARE of the pixels
+# that existed being excluded by the natural-range mask
+# (out_of_range_pixel_count), which describe_sample's count-only check can
+# miss entirely - a boundary with 5000 in-range pixels reads as "ample
+# sample" to describe_sample even if another 5000 were thrown out right
+# alongside them. Most indices essentially never hit this (EVI/SAVI's rare
+# denominator blowups keep this near 0%); NDDI/CMRI's wider empirical/exact
+# ranges (see gee_analysis_service.py's `_INDEX_VALID_RANGE`) were chosen
+# from ONE test boundary's distribution and are not guaranteed to keep every
+# real, more heterogeneous project boundary under a low exclusion ratio -
+# this clause is the safety net for that case, so a high-exclusion year
+# cannot pass through the summary with zero mention the way it could before
+# this clause existed.
+_OUT_OF_RANGE_RATIO_WARN = 0.10    # >=10% excluded - worth a callout
+_OUT_OF_RANGE_RATIO_SEVERE = 0.30  # >=30% excluded - the mean may not represent the boundary
+
+
+def describe_out_of_range(
+    counts: list[int] | None, out_of_range_pixel_count: int | None
+) -> str | None:
+    """Fires on the RATIO of excluded to total pixels, not the raw count -
+    `describe_sample` already covers "too few pixels total". Silent (None)
+    whenever `out_of_range_pixel_count` is falsy/unavailable, so this is a
+    strict no-op for any caller that doesn't pass it (backward compatible
+    with every existing compose_summary/summarize_index_result call).
+
+    Also silent below `_THIN_SAMPLE_PIXELS` total: with a tiny total (e.g.
+    3-10 cloud-free pixels), the ratio is highly noisy - one stray pixel can
+    cross the 30% "severe" line and trigger "the mean may not represent the
+    boundary" wording driven by n=1 noise, stacked confusingly on top of
+    `describe_sample`'s own (correct, and sufficient on its own) thin-sample
+    callout for the exact same year."""
+    if not counts or not out_of_range_pixel_count or out_of_range_pixel_count <= 0:
+        return None
+    in_range_total = sum(counts)
+    total = in_range_total + out_of_range_pixel_count
+    if total < _THIN_SAMPLE_PIXELS:
+        return None
+    ratio = out_of_range_pixel_count / total
+    if ratio < _OUT_OF_RANGE_RATIO_WARN:
+        return None
+    if ratio < _OUT_OF_RANGE_RATIO_SEVERE:
+        return (
+            f"{out_of_range_pixel_count} of {total} pixels ({ratio:.0%}) fell outside this "
+            "index's natural value range and were excluded from the numbers above - worth "
+            "noting, not yet enough to distrust the mean."
+        )
+    return (
+        f"{out_of_range_pixel_count} of {total} pixels ({ratio:.0%}) fell outside this "
+        "index's natural value range and were excluded from the numbers above - a large "
+        "enough share that the mean may not represent the whole boundary; worth confirming "
+        "against the excluded-pixel count before relying on it."
+    )
+
+
 # ------------------------------------------------------------ clause: trend
 
 
-_TREND_MIN_CHANGE = 0.5 * INDEX_HISTOGRAM_BIN_WIDTH  # 0.05 - half a histogram bin
+_TREND_MIN_CHANGE = 0.5  # x bin_width - half a histogram bin
 
 
-def describe_trend(index_id: str, series: dict[str, float | None] | None) -> str | None:
+def describe_trend(
+    index_id: str,
+    series: dict[str, float | None] | None,
+    bin_width: float = INDEX_HISTOGRAM_BIN_WIDTH,
+) -> str | None:
     """First vs last year that actually produced a mean. Deliberately a plain
     endpoint difference, not a fitted slope: a regression slope invites being
     read as a rate, and this is not the VM0047 stocking-index Z-test (Appendix
-    1) - that runs on control vs project plots, not on one boundary mean."""
+    1) - that runs on control vs project plots, not on one boundary mean.
+
+    `bin_width` defaults to the shared 0.1 every index but CMRI uses - see
+    `describe_variability`'s own docstring for why this isn't a module-level
+    constant anymore."""
     years = sorted((y for y, v in (series or {}).items() if v is not None), key=int)
     if len(years) < 2:
         return None
@@ -432,7 +929,7 @@ def describe_trend(index_id: str, series: dict[str, float | None] | None) -> str
     first, last = years[0], years[-1]
     start, end = series[first], series[last]
     change = end - start
-    if abs(change) < _TREND_MIN_CHANGE:
+    if abs(change) < _TREND_MIN_CHANGE * bin_width:
         return (
             f"Across {first}-{last} the boundary mean is essentially flat ({start:.2f} to "
             f"{end:.2f}, change {change:+.2f})."
@@ -459,18 +956,36 @@ def compose_summary(
     bin_edges: list[float] | None,
     counts: list[int] | None,
     series: dict[str, float | None] | None = None,
+    out_of_range_pixel_count: int | None = None,
 ) -> str:
     """Joins whichever clauses fired into one paragraph. Fixed clause order
-    (level, spread, shape, sample, trend) so two runs on the same numbers
-    produce the same string. Prefixed "<year>: " rather than "In <year>, "
-    so no clause ever has to be re-capitalised depending on which fired."""
+    (level, spread, shape, sample, out-of-range share, trend) so two runs on
+    the same numbers produce the same string. Prefixed "<year>: " rather
+    than "In <year>, " so no clause ever has to be re-capitalised depending
+    on which fired.
+
+    `bin_width` (Wave: composite indices) is derived from the REAL bin_edges
+    this call was given, not assumed to be the shared 0.1 - CMRI's own
+    histogram uses 0.2-wide bins (see gee_analysis_service.py's
+    `_INDEX_VALID_RANGE`), and describe_variability/describe_trend's
+    thresholds need to scale with it or CMRI's variability/trend wording
+    would be miscalibrated by 2x.
+
+    `out_of_range_pixel_count` (Wave: composite indices) defaults to None -
+    every pre-existing caller that doesn't pass it gets the exact same
+    behavior as before (describe_out_of_range is then a strict no-op)."""
     profile = get_profile(index_id)
+    bin_width = (
+        bin_edges[1] - bin_edges[0] if bin_edges and len(bin_edges) > 1
+        else INDEX_HISTOGRAM_BIN_WIDTH
+    )
     clauses = [
         describe_level(index_id, mean),
-        describe_variability(std_dev),
+        describe_variability(std_dev, bin_width),
         describe_spatial_outliers(index_id, minimum, maximum, bin_edges, counts),
         describe_sample(counts),
-        describe_trend(index_id, series),
+        describe_out_of_range(counts, out_of_range_pixel_count),
+        describe_trend(index_id, series, bin_width),
     ]
     body = " ".join(c for c in clauses if c)
     if not body:
@@ -507,4 +1022,5 @@ def summarize_index_result(
         index_id, year,
         entry.get("mean"), entry.get("std_dev"), entry.get("min"), entry.get("max"),
         hist.get("bin_edges"), hist.get("counts"), series,
+        entry.get("out_of_range_pixel_count"),
     )

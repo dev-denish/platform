@@ -6,13 +6,14 @@ from __future__ import annotations
 from app.domain.analysis_catalog import CATALOG, REAL_ANALYSIS_IDS, get_catalog_entry
 
 
-def test_catalog_has_exactly_thirteen_available_and_six_in_development_entries():
-    # 10 original + 3 Raw Imagery (Wave: raw-imagery browsing).
+def test_catalog_has_exactly_twenty_three_available_and_six_in_development_entries():
+    # 20 original (10 + NDWI/GNDVI/NDBI + NDMI/LSWI/BSI/ARVI + NDDI/CMRI +
+    # PSRI) + 3 Raw Imagery (Wave: raw-imagery browsing).
     available = [e for e in CATALOG if e["status"] == "available"]
     in_development = [e for e in CATALOG if e["status"] == "in-development"]
-    assert len(available) == 13
+    assert len(available) == 23
     assert len(in_development) == 6
-    assert len(CATALOG) == 19
+    assert len(CATALOG) == 29
 
 
 def test_only_the_three_raw_imagery_entries_are_year_selectable():
@@ -51,10 +52,15 @@ def test_every_available_entry_declares_a_valid_execution_mode():
         assert entry.get("execution") in ("sync", "async"), entry["id"]
 
 
-def test_the_five_vegetation_indices_are_available_and_async():
-    veg_indices = {"ndvi", "evi", "savi", "mndwi", "nbr"}
+_VEG_INDEX_IDS = (
+    "ndvi", "evi", "savi", "mndwi", "nbr", "ndwi", "gndvi", "ndbi",
+    "ndmi", "lswi", "bsi", "arvi", "nddi", "cmri", "psri",
+)
+
+
+def test_the_fifteen_vegetation_indices_are_available_and_async():
     by_id = {e["id"]: e for e in CATALOG}
-    for analysis_id in veg_indices:
+    for analysis_id in _VEG_INDEX_IDS:
         entry = by_id[analysis_id]
         assert entry["status"] == "available"
         assert entry["execution"] == "async"
@@ -64,16 +70,16 @@ def test_the_five_vegetation_indices_are_available_and_async():
 # ---------------------------------------------- Wave: analysis config and methodology
 
 
-def test_exactly_the_seven_expected_ids_declare_a_config():
+def test_exactly_the_seventeen_expected_ids_declare_a_config():
     configured_ids = {e["id"] for e in CATALOG if "config" in e}
-    assert configured_ids == {"io_lulc", "modis_lulc", "ndvi", "evi", "savi", "mndwi", "nbr"}
+    assert configured_ids == {"io_lulc", "modis_lulc", *_VEG_INDEX_IDS}
 
 
 def test_every_config_declaring_entry_is_status_available_and_execution_matches():
     by_id = {e["id"]: e for e in CATALOG}
     assert by_id["io_lulc"]["execution"] == "sync"
     assert by_id["modis_lulc"]["execution"] == "sync"
-    for analysis_id in ("ndvi", "evi", "savi", "mndwi", "nbr"):
+    for analysis_id in _VEG_INDEX_IDS:
         assert by_id[analysis_id]["status"] == "available"
         assert by_id[analysis_id]["execution"] == "async"
 
@@ -88,10 +94,9 @@ def test_land_cover_configs_have_a_static_year_max_not_live():
     }
 
 
-def test_all_five_indices_share_the_identical_config_spec():
+def test_all_fifteen_indices_share_the_identical_config_spec():
     by_id = {e["id"]: e for e in CATALOG}
-    index_ids = ("ndvi", "evi", "savi", "mndwi", "nbr")
-    specs = [by_id[i]["config"] for i in index_ids]
+    specs = [by_id[i]["config"] for i in _VEG_INDEX_IDS]
     assert all(spec == specs[0] for spec in specs)
     assert specs[0]["year_max"] is None  # ask current_veg_index_years() live, not static
     assert specs[0]["supported_combos"] == [("sentinel2", "cloud_score_plus")]

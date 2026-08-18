@@ -77,7 +77,7 @@ def current_veg_index_years(today: date | None = None) -> range:
 
 # ------------------------------------------------------- configurable inputs
 #
-# Wave: analysis config and methodology. Only 7 of the 13 real analysis ids
+# Wave: analysis config and methodology. Only 17 of the 23 real analysis ids
 # have anything configurable at all - the other 6 (hansen_gfc, dynamic_world,
 # esa_worldcover, and the 3 raw-imagery browse ids) either already return a
 # full time series in one call, use a rolling non-calendar window, or are a
@@ -119,7 +119,10 @@ _MASKING_LABELS = {
     "cloud_score_plus": "Cloud Score+", "qa_pixel": "QA_PIXEL", "none": "no cloud masking",
 }
 
-_INDEX_IDS = frozenset({"ndvi", "evi", "savi", "mndwi", "nbr"})
+_INDEX_IDS = frozenset({
+    "ndvi", "evi", "savi", "mndwi", "nbr", "ndwi", "gndvi", "ndbi",
+    "ndmi", "lswi", "bsi", "arvi", "nddi", "cmri", "psri",
+})
 _ANNUAL_LAND_COVER_IDS = frozenset({"io_lulc", "modis_lulc"})
 
 # The ids whose analysis_result DB row must be scoped by resolved params

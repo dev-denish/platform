@@ -493,11 +493,17 @@ def test_refresh_ndvi_with_a_supported_combo_reaches_compute_with_resolved_param
     ]
 
 
-@pytest.mark.parametrize("analysis_id", ["ndvi", "evi", "savi", "mndwi", "nbr"])
+@pytest.mark.parametrize(
+    "analysis_id",
+    [
+        "ndvi", "evi", "savi", "mndwi", "nbr", "ndwi", "gndvi", "ndbi",
+        "ndmi", "lswi", "bsi", "arvi", "nddi", "cmri", "psri",
+    ],
+)
 def test_refresh_rejects_an_async_execution_analysis(db, analysis_service, fake_compute, analysis_id):
     """refresh() is the "sync"-execution path only (see its own docstring's
     routing-invariant assert) - the route (app/api/v1/analyses.py) sends every
-    vegetation index through enqueue_refresh() instead, since all five share
+    vegetation index through enqueue_refresh() instead, since all fifteen share
     NDVI's "async" execution mode. This proves that invariant holds for the
     boundary/permission-validated request path, not just NDVI, so a future
     catalog edit that flips one back to "sync" without updating its query
