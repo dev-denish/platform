@@ -1,7 +1,9 @@
 import { memo, useMemo, useState } from "react";
-import { AlertTriangle, ChevronDown, Info, Settings2, Trash2, X } from "lucide-react";
+import { AlertTriangle, ChevronDown, GripVertical, Info, Settings2, Trash2, X } from "lucide-react";
 import { useCollapse } from "../lib/useCollapse.js";
+import { sortByLayerOrder } from "../lib/layerOrder.js";
 import SymbologyPanel from "./SymbologyPanel.jsx";
+import VectorStylePanel from "./VectorStylePanel.jsx";
 import ClassLegendEditor from "./ClassLegendEditor.jsx";
 import AddAdhocLayerDialog from "./AddAdhocLayerDialog.jsx";
 import ConfirmDialog from "./ConfirmDialog.jsx";
@@ -159,10 +161,14 @@ function LayersPanel({
   layers,
   layerState,
   symbologyState,
+  vectorStyleState,
   vectorData,
+  layerOrder,
+  onReorder,
   onToggleVisibility,
   onOpacityChange,
   onSymbologyChange,
+  onVectorStyleChange,
   onRefreshLayers,
   onLegendChanged,
   projectId,
@@ -232,9 +238,27 @@ function LayersPanel({
     }
   }
 
+  // Wave: Map Toolbar Enhancement v2, Tier 4 (drag-to-reorder) - byDate first
+  // establishes each group's default order (unchanged from before this
+  // feature), then sortByLayerOrder applies whatever the user has actually
+  // dragged on top of that, leaving any layer they haven't touched exactly
+  // where byDate put it (see that function's own "unranked keeps its place"
+  // behavior).
   const groupedLayers = useMemo(() => {
-    return GROUPS.map((g) => ({ ...g, layers: layers.filter(g.match).sort(byDate) }));
-  }, [layers]);
+    return GROUPS.map((g) => ({ ...g, layers: sortByLayerOrder(layers.filter(g.match).sort(byDate), layerOrder) }));
+  }, [layers, layerOrder]);
+
+  // The FULL sequence actually on screen right now (every group's own
+  // byDate-then-sortByLayerOrder result, flattened) - passed to onReorder
+  // below instead of the parent's own possibly-sparse layerOrder, so
+  // dropping onto a layer that's never been dragged before (not yet present
+  // in that sparse list) still finds it at its real, currently-visible
+  // position rather than silently missing and appending to the end. See
+  // ProjectMap.jsx's reorderLayers for the other half of this.
+  const flatVisualOrder = useMemo(
+    () => groupedLayers.flatMap((g) => g.layers.map((l) => l.layer_id)),
+    [groupedLayers]
+  );
 
   if (!layers || layers.length === 0) return null;
 
@@ -245,6 +269,17 @@ function LayersPanel({
   function openPopoverFor(layerId, kind) {
     setOpenPopover((prev) => (prev?.layerId === layerId && prev?.kind === kind ? null : { layerId, kind }));
   }
+
+  // Wave: Map Toolbar Enhancement v2, Tier 4 (drag-to-reorder). Native HTML5
+  // drag-and-drop (no new dependency, matching this app's existing "no new
+  // dependencies" convention) - `draggedId` is the ONLY piece of state this
+  // needs; onDragOver's `preventDefault()` is what tells the browser this
+  // element is a valid drop target at all (without it, `onDrop` never
+  // fires). `onReorder` (ProjectMap's reorderLayers) takes the raw
+  // dragged/target ids and handles the actual list-splice + persistence -
+  // this component only tracks which row is mid-drag for its own `:active`
+  // styling.
+  const [draggedId, setDraggedId] = useState(null);
 
   const openLayer = layers.find((l) => l.layer_id === openPopover?.layerId) ?? null;
 
@@ -308,11 +343,39 @@ function LayersPanel({
                     </button>
                     <div className="collapsible-body" data-open={groupOpen} inert={groupOpen ? undefined : ""}>
                       <div className="collapsible-body-inner">
-                        <ul className="layers-panel-list">
+                        <ul
+                          className="layers-panel-list"
+                          onDragOver={(e) => e.preventDefault()}
+                          onDrop={(e) => {
+                            // Only the list background itself, not a bubbled
+                            // drop from one of its own rows (each row's own
+                            // onDrop below calls stopPropagation precisely
+                            // to keep this one from double-handling it) -
+                            // dropping past the last row moves the dragged
+                            // layer to the end of this group.
+                            e.preventDefault();
+                            if (draggedId) onReorder(flatVisualOrder, draggedId, null);
+                          }}
+                        >
                           {g.layers.map((l) => {
                             const featureCount = featureCountFor(l, vectorData);
                             return (
-                              <li className="layer-row" key={l.layer_id}>
+                              <li
+                                className={`layer-row${draggedId === l.layer_id ? " layer-row-dragging" : ""}`}
+                                key={l.layer_id}
+                                draggable
+                                onDragStart={() => setDraggedId(l.layer_id)}
+                                onDragEnd={() => setDraggedId(null)}
+                                onDragOver={(e) => e.preventDefault()}
+                                onDrop={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  if (draggedId && draggedId !== l.layer_id) onReorder(flatVisualOrder, draggedId, l.layer_id);
+                                }}
+                              >
+                                <span className="layer-row-drag-handle" aria-hidden="true" title="Drag to reorder">
+                                  <GripVertical size={14} strokeWidth={2} className="icon" />
+                                </span>
                                 <input
                                   type="checkbox"
                                   className="layer-row-checkbox"
@@ -342,11 +405,13 @@ function LayersPanel({
                                 >
                                   <Info size={16} strokeWidth={2} className="icon" />
                                 </button>
-                                {l.layer_kind === "raster" && l.tile_url_template ? (
+                                {(l.layer_kind === "raster" && l.tile_url_template) ||
+                                l.layer_kind === "vector" ||
+                                l.layer_kind === "external_wfs" ? (
                                   <button
                                     type="button"
                                     className="layer-row-gear"
-                                    aria-label="Visualization parameters"
+                                    aria-label={l.layer_kind === "raster" ? "Visualization parameters" : "Layer style"}
                                     onClick={() => openPopoverFor(l.layer_id, "gear")}
                                   >
                                     <Settings2 size={16} strokeWidth={2} className="icon" />
@@ -407,7 +472,9 @@ function LayersPanel({
               {openLayer.type}
               {openLayer.date_processed ? ` (${openLayer.date_processed})` : ""}
             </span>
-            <span className="symbology-popover-subtitle">visualization parameters</span>
+            <span className="symbology-popover-subtitle">
+              {openLayer.layer_kind === "raster" ? "visualization parameters" : "layer style"}
+            </span>
           </div>
 
           {/* Only the middle content scrolls (see .symbology-popover-scroll) -
@@ -416,12 +483,25 @@ function LayersPanel({
            * outside the wrapper so the layer name and Close/Apply are always
            * visible. */}
           <div className="symbology-popover-scroll">
-            <SymbologyPanel
-              layer={openLayer}
-              symbology={symbologyState[openLayer.layer_id]}
-              onChange={onSymbologyChange}
-              hideTitle
-            />
+            {openLayer.layer_kind === "raster" ? (
+              <SymbologyPanel
+                layer={openLayer}
+                symbology={symbologyState[openLayer.layer_id]}
+                onChange={onSymbologyChange}
+                hideTitle
+              />
+            ) : (
+              // Wave: Map Toolbar Enhancement v2, Tier 4 - vector/external_wfs
+              // layers (the only other kinds this gear button now opens for)
+              // get stroke color/weight/fill-opacity controls instead of
+              // SymbologyPanel's raster-only band/stretch/classified UI.
+              <VectorStylePanel
+                layer={openLayer}
+                style={vectorStyleState[openLayer.layer_id]}
+                onChange={onVectorStyleChange}
+                hideTitle
+              />
+            )}
 
             {openLayer.layer_kind === "raster" && openLayer.class_legend && user && canUpload(user.role) ? (
               <ClassLegendEditor layer={openLayer} onSaved={onLegendChanged} />
