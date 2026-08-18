@@ -18,8 +18,18 @@ _NOW = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
 def _section(analysis_id: str, name: str, **overrides) -> ReportSection:
     defaults = dict(
         analysis_id=analysis_id, name=name, category="Test Category", computed_at=_NOW,
-        coverage_pct=95.0, description=f"{name} description.", summary=None, note=None,
+        coverage_pct=95.0, description=f"{name} description.", note=None,
         disclaimer="Descriptive only - not a forest-definition, eligibility or carbon determination.",
+        narrative={
+            "executive_summary": "Executive summary text.",
+            "spatial_distribution": "Spatial distribution text.",
+            "key_findings": "Finding one.\nFinding two.",
+        },
+        methodology_text="Methodology text.",
+        data_processing_text="Data & processing text.",
+        data_quality_text="Data quality text.",
+        carbon_project_relevance="Carbon project relevance text.",
+        limitations_text="Limitations text.",
     )
     defaults.update(overrides)
     return ReportSection(**defaults)
@@ -69,7 +79,6 @@ def test_multi_year_index_report_includes_the_trend_chart_image():
     series = {"2023": 0.4, "2024": 0.45, "2025": 0.5, "2026": 0.55}
     section = _section(
         "ndvi", "NDVI",
-        summary="2026: NDVI averages 0.55 across the boundary - moderate.",
         stats_grid=[StatRow("Mean", 0.55), StatRow("Variability", 0.1), StatRow("Min", -0.1), StatRow("Max", 0.9)],
         stats_grid_year="2026",
         series=series,
@@ -120,3 +129,104 @@ def test_missing_map_image_does_not_fail_the_whole_report():
     )
     assert len(pdf_bytes) > 0
     assert "Global Forest Change (Hansen)" in _extract_all_text(pdf_bytes)
+
+
+# --------------------------------------------------------------------------
+# Wave: 11-section report restructure.
+# --------------------------------------------------------------------------
+
+
+def test_all_11_section_headings_appear_in_order_when_every_narrative_key_is_present():
+    section = _section(
+        "hansen_gfc", "Global Forest Change (Hansen)",
+        class_breakdown=[ClassRow("Baseline forest area", 10.0, None)],
+        narrative={
+            "executive_summary": "Executive summary text.",
+            "spatial_distribution": "Spatial distribution text.",
+            "temporal_analysis": "Temporal analysis text.",
+            "change_analysis": "Change analysis text.",
+            "key_findings": "Finding one.\nFinding two.",
+        },
+    )
+    pdf_bytes = build_report_pdf(
+        project_name="Full Sections Project", project_id="p6", generated_at=_NOW,
+        sections=[section], map_images={}, chart_images={},
+    )
+    text = _extract_all_text(pdf_bytes)
+    headings = [
+        "1. Executive Summary", "2. Methodology", "3. Data & Processing", "4. Statistics",
+        "5. Spatial Distribution", "6. Temporal Analysis", "7. Change Analysis",
+        "8. Key Findings", "9. Carbon Project Relevance", "10. Data Quality", "11. Limitations",
+    ]
+    positions = [text.index(h) for h in headings]
+    assert positions == sorted(positions)  # every heading present, in this exact order
+
+
+def test_temporal_and_change_analysis_headings_omitted_when_not_applicable():
+    """esa_worldcover-shaped section: no temporal or change data - those two
+    headings must not appear at all, not just render empty."""
+    section = _section(
+        "esa_worldcover", "ESA WorldCover",
+        class_breakdown=[ClassRow("Tree cover", 10.0, "#006400")],
+        narrative={
+            "executive_summary": "Executive summary text.",
+            "spatial_distribution": "Spatial distribution text.",
+            "key_findings": "Finding one.\nFinding two.",
+        },
+    )
+    pdf_bytes = build_report_pdf(
+        project_name="Snapshot Project", project_id="p7", generated_at=_NOW,
+        sections=[section], map_images={}, chart_images={},
+    )
+    text = _extract_all_text(pdf_bytes)
+    assert "6. Temporal Analysis" not in text
+    assert "7. Change Analysis" not in text
+    assert "5. Spatial Distribution" in text
+    assert "9. Carbon Project Relevance" in text
+
+
+def test_the_6_deterministic_sections_always_render_even_with_no_narrative_at_all():
+    section = _section(
+        "dynamic_world", "Dynamic World", narrative={},
+        class_breakdown=[ClassRow("Tree cover", 10.0, "#006400")],
+    )
+    pdf_bytes = build_report_pdf(
+        project_name="Bare Project", project_id="p8", generated_at=_NOW,
+        sections=[section], map_images={}, chart_images={},
+    )
+    text = _extract_all_text(pdf_bytes)
+    for heading in (
+        "2. Methodology", "3. Data & Processing", "4. Statistics",
+        "9. Carbon Project Relevance", "10. Data Quality", "11. Limitations",
+    ):
+        assert heading in text
+    for heading in ("1. Executive Summary", "5. Spatial Distribution", "8. Key Findings"):
+        assert heading not in text
+
+
+def test_a_character_outside_helvetica_does_not_crash_pdf_assembly():
+    """Real dmrv-qa failure (hansen_gfc, 2026-08-12): a real Gemini narrative
+    used "≥" (U+2265) - fpdf2's core Helvetica font only supports latin-1
+    (ISO-8859-1, NOT cp1252 - see `_pdf_safe_text`'s own docstring) and raises
+    on that character, which would otherwise dead-letter the whole report
+    over one symbol in one field. Covers a known ASCII fallback (≥), a
+    common typographic character outside latin-1 that also needs one (an em
+    dash), and a genuinely unanticipated one (an emoji, degrading to "?"
+    rather than crashing)."""
+    section = _section(
+        "hansen_gfc", "Global Forest Change (Hansen)",
+        narrative={
+            "executive_summary": "Baseline forest with canopy cover ≥15% — a good sign 🌳.",
+            "spatial_distribution": "Spatial distribution text.",
+            "key_findings": "Finding one.\nFinding two.",
+        },
+    )
+    pdf_bytes = build_report_pdf(
+        project_name="Unicode Project", project_id="p9", generated_at=_NOW,
+        sections=[section], map_images={}, chart_images={},
+    )
+    text = _extract_all_text(pdf_bytes)
+    assert "canopy cover >=15% - a good sign ?." in text
+    assert "≥" not in text
+    assert "—" not in text
+    assert "🌳" not in text

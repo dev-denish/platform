@@ -140,6 +140,14 @@ class Settings(BaseSettings):
     # container (see deploy/docker-compose.yml), never an env var.
     gee_project_id: str = ""
 
+    # --- AI report narrative (Wave: ai-report-narrative) ---
+    # Gemini is the only narrative backend (decision 2026-08-12) - there is no
+    # model-selection setting here; see app/services/ai_narrative.py's
+    # `GEMINI_MODEL` constant. `GEMINI_API_KEY` (the actual credential) is
+    # deliberately NOT a field on this class - it's a personal API credential
+    # read directly from the environment by ai_narrative.py, not app config;
+    # see that module's `_resolve_gemini_api_key` docstring for why.
+
     @field_validator("cors_allow_origins", mode="before")
     @classmethod
     def _split_csv(cls, v: object) -> object:

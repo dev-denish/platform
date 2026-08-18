@@ -18,7 +18,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.domain.enums import DatasetType, LayerKind, ProjectStatus, Role
+from app.domain.enums import DatasetType, LayerKind, ProjectStatus, ReportType, Role
 
 # ---------------------------------------------------------------- auth
 
@@ -722,10 +722,21 @@ class ReportOptions(BaseModel):
     project_id: UUID
     project_name: str
     analyses: list[ReportAnalysisOption]
+    # Wave: ai-report-narrative, Phase 4. The EXACT same disclosure paragraph
+    # report_pdf.build_report_pdf renders onto an AI report's cover page
+    # (AI_NARRATIVE_DISCLOSURE_TEMPLATE.format(model=...)), pre-formatted with
+    # the live server-side model here too - so the frontend's pre-generate "AI
+    # option" box can show it verbatim without a second hardcoded copy that
+    # could drift from the PDF's own wording.
+    ai_narrative_disclosure: str
 
 
 class GenerateReportRequest(BaseModel):
     analysis_ids: list[str] = Field(min_length=1, max_length=13)
+    # Wave: ai-report-narrative, Phase 3. "system" (default) keeps today's
+    # behaviour unchanged; "ai" sources every section's narrative from Gemini
+    # instead (see report_service.generate_report_pdf_bytes).
+    report_type: ReportType = ReportType.SYSTEM
 
 
 # ---------------------------------------------------------------- health

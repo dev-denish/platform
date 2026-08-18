@@ -1,7 +1,19 @@
 """The `generate_report` job lifecycle (Wave: PDF report). Same generic-retry
 shape as workers/gee_analysis_jobs.py's `run_gee_analysis_job` - a failure
 here (GEE quota/network, a boundary too large) is presumed transient, so
-every exception gets the same retry-or-dead-letter treatment."""
+every exception gets the same retry-or-dead-letter treatment.
+
+Wave: ai-report-narrative, Phase 3 - ONE deliberate carve-out from that rule:
+`AiNarrativeError` (report_type="ai" only) is dead-lettered immediately,
+never retried. Reasoning: `generate_section_summary` calls Gemini with
+`temperature=0`, so a numeric-grounding rejection is reproducible, not
+transient - retrying it burns up to `job_max_retries` more attempts at up to
+`ai_narrative.TOTAL_BUDGET_S` (600s) each for a result that will not change.
+A genuine Gemini-unreachable/timeout failure already got its own generous
+per-call and total-batch budget inside `generate_ai_summaries` before ever
+raising here, unlike a single GEE tile request. Either way the end state is
+the same as any other dead-letter: a clear job-failure surfaced via
+GET /jobs/{id}, never a silently-substituted system-only report."""
 from __future__ import annotations
 
 import os
@@ -18,6 +30,7 @@ from app.core.metrics import job_duration_seconds, jobs_completed_total
 from app.domain.enums import AuditAction
 from app.repositories.audit import AuditRepository
 from app.repositories.jobs import JobRepository
+from app.services.ai_narrative import AiNarrativeError
 from app.services.ingestion.storage import Storage
 from app.services.report_service import generate_report_pdf_bytes
 
@@ -40,6 +53,7 @@ async def run_generate_report_job(
     analysis_ids: list[str],
     boundary_geojson: dict[str, Any],
     actor: dict[str, Any],
+    report_type: str = "system",
 ) -> None:
     db: Database = ctx["db"]
     storage: Storage = ctx["storage"]
@@ -54,8 +68,17 @@ async def run_generate_report_job(
     start = time.perf_counter()
     try:
         pdf_bytes = generate_report_pdf_bytes(
-            db, project_id, project_name, analysis_ids, boundary_geojson
+            db, project_id, project_name, analysis_ids, boundary_geojson, report_type=report_type
         )
+    except AiNarrativeError as e:
+        # Deliberately NOT retried - see this module's own docstring.
+        error = {"code": "ai_narrative_error", "message": str(e)}
+        with db.transaction() as cur:
+            JobRepository(cur).mark_dead_letter(job_id, error)
+        jobs_completed_total.labels(kind=_KIND, status="dead_letter").inc()
+        job_duration_seconds.labels(kind=_KIND).observe(time.perf_counter() - start)
+        log.error("job.dead_letter", error=str(e), reason="ai_narrative_error_not_retried")
+        return
     except Exception as e:  # noqa: BLE001 - presumed transient (GEE quota/network); classified below
         error = {"code": "job_error", "message": str(e)}
         max_tries = settings.job_max_retries

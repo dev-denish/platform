@@ -99,6 +99,9 @@ services:
       # anyone running this on a different machine; every other spec in this
       # suite works fine with this unset/absent.
       DMRV_GEE_PROJECT_ID: ${DMRV_GEE_PROJECT_ID:-ee-kdenish4}
+      # AI report narrative. Gemini is the only backend (decision 2026-08-12) -
+      # see the note on test-worker below for why both services carry this.
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
     volumes:
       # Named (not per-service tmpfs) so test-worker below reads the exact
       # same staged file test-backend just wrote - required for the ingest
@@ -149,6 +152,11 @@ services:
       # Wave: vegetation indices - async GEE analysis jobs run in THIS
       # container, same reasoning as test-backend's own GEE wiring above.
       DMRV_GEE_PROJECT_ID: ${DMRV_GEE_PROJECT_ID:-ee-kdenish4}
+      # Wave: AI report narrative - run_generate_report_job runs in THIS
+      # container, so GEMINI_API_KEY belongs here; also on test-backend because
+      # DMRV_TASK_RUNNER_BACKEND=threadpool would run the same job body
+      # in-process there instead.
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
     volumes:
       - test_raster_data:/var/lib/dmrv/data
       - test_upload_staging:/var/lib/dmrv/staging

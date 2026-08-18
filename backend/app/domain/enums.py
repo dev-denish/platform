@@ -115,6 +115,19 @@ class ProjectStatus(StrEnum):
     UNDER_REVIEW = "Under Review"
 
 
+class ReportType(StrEnum):
+    """Wave: ai-report-narrative, Phase 3. `SYSTEM` sources every section's
+    summary from `stats["summary"]` (index_summary.py, deterministic, 5/13
+    analysis types only) same as before this wave; `AI` sources it instead
+    from `ai_narrative.generate_ai_summaries` for every section, plus a fixed
+    disclosure line on the cover page (see
+    report_pdf.AI_NARRATIVE_DISCLOSURE_TEMPLATE). Maps/charts/stats/note/
+    description/disclaimer are identical either way."""
+
+    SYSTEM = "system"
+    AI = "ai"
+
+
 class AuditAction(StrEnum):
     LOGIN = "login"
     INGEST_DATASET = "ingest_dataset"

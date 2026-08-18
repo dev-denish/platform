@@ -15,13 +15,20 @@ const TERMINAL_STATUSES = ["succeeded", "failed", "dead_letter"];
  * gets an honest empty state, never fake data" rule) - selecting some and
  * generating always goes through the async job/poll pattern UploadPage.jsx
  * already established, since every section needs its own fresh GEE map-tile
- * fetch on top of chart/PDF rendering (see backend's report_service.py). */
+ * fetch on top of chart/PDF rendering (see backend's report_service.py).
+ *
+ * Wave: ai-report-narrative, Phase 4. Adds the system-vs-AI report_type
+ * choice. `reportType` starts at `null` (neither radio checked) on purpose -
+ * a pre-selected default would read as this app steering the user toward
+ * one option, which the product requirement for this feature explicitly
+ * forbids. Generate stays disabled until the user makes an explicit pick. */
 export default function ReportGenerator({ projectId }) {
   const [options, setOptions] = useState(null);
   const [error, setError] = useState(null);
   const [selected, setSelected] = useState(() => new Set());
+  const [reportType, setReportType] = useState(null); // null | "system" | "ai" - no default
   const [submitting, setSubmitting] = useState(false);
-  const [job, setJob] = useState(null); // {job_id, status, result, error}
+  const [job, setJob] = useState(null); // {job_id, status, report_type, result, error}
 
   useEffect(() => {
     let cancelled = false;
@@ -68,14 +75,15 @@ export default function ReportGenerator({ projectId }) {
   }
 
   async function handleGenerate() {
+    if (!reportType) return; // belt-and-suspenders; the button is already disabled
     setSubmitting(true);
     setError(null);
     try {
       const accepted = await apiFetch(`/projects/${projectId}/report`, {
         method: "POST",
-        body: JSON.stringify({ analysis_ids: [...selected] }),
+        body: JSON.stringify({ analysis_ids: [...selected], report_type: reportType }),
       });
-      setJob({ job_id: accepted.job_id, status: "queued" });
+      setJob({ job_id: accepted.job_id, status: "queued", report_type: reportType });
     } catch (err) {
       setError(err.message ?? "Failed to start report generation.");
     } finally {
@@ -150,12 +158,87 @@ export default function ReportGenerator({ projectId }) {
             ))}
           </div>
 
+          <p className="field-hint">Choose how your report should be written:</p>
+          <fieldset className="report-type-picker">
+            <legend className="field-label">Report type</legend>
+
+            <label className={`report-type-option${reportType === "system" ? " selected" : ""}`}>
+              <input
+                type="radio"
+                name="report_type"
+                value="system"
+                checked={reportType === "system"}
+                onChange={() => setReportType("system")}
+                disabled={!!job && !TERMINAL_STATUSES.includes(job.status)}
+              />
+              <span className="report-type-option-body">
+                <span className="report-type-option-head">
+                  <span className="report-type-option-name">System-generated</span>
+                  <span className="report-type-tag">TEMPLATE TEXT</span>
+                </span>
+                <span className="report-type-option-desc">
+                  Fixed wording built directly from the computed figures — the same summary text
+                  every time for the same data.
+                </span>
+                <span className="report-type-option-meta">
+                  <span className="report-type-meta-chip">Same wording every time</span>
+                  <span className="report-type-meta-chip">Instant generation</span>
+                </span>
+              </span>
+            </label>
+
+            <label className={`report-type-option${reportType === "ai" ? " selected" : ""}`}>
+              <input
+                type="radio"
+                name="report_type"
+                value="ai"
+                checked={reportType === "ai"}
+                onChange={() => setReportType("ai")}
+                disabled={!!job && !TERMINAL_STATUSES.includes(job.status)}
+              />
+              <span className="report-type-option-body">
+                <span className="report-type-option-head">
+                  <span className="report-type-option-name">AI-generated</span>
+                  <span className="report-type-tag report-type-tag-ai">AI NARRATIVE</span>
+                </span>
+                <span className="report-type-option-desc">
+                  A plain-language narrative summarising the same computed figures, written by an
+                  AI model instead of a fixed template.
+                </span>
+                <span className="report-type-option-meta">
+                  <span className="report-type-meta-chip">Plain-language narrative</span>
+                  <span className="report-type-meta-chip">~30–60 sec to generate</span>
+                </span>
+                {reportType === "ai" ? (
+                  <span className="report-type-disclosure" role="note">
+                    {options.ai_narrative_disclosure}
+                  </span>
+                ) : null}
+              </span>
+            </label>
+          </fieldset>
+
+          {selected.size > 0 ? (
+            <div className="report-sections-toggle">
+              <span className="field-label">Included sections</span>
+              <div className="report-sections-chips">
+                {options.analyses
+                  .filter((a) => selected.has(a.analysis_id))
+                  .map((a) => (
+                    <span key={a.analysis_id} className="report-section-chip">
+                      {a.name}
+                    </span>
+                  ))}
+              </div>
+            </div>
+          ) : null}
+
           {!job ? (
             <div className="form-actions">
               <button
                 type="button"
                 className="primary-button"
-                disabled={selected.size === 0 || submitting}
+                disabled={selected.size === 0 || !reportType || submitting}
                 onClick={handleGenerate}
               >
                 <FileText size={14} strokeWidth={2} className="icon" aria-hidden="true" />
@@ -187,7 +270,9 @@ export default function ReportGenerator({ projectId }) {
             <Spinner
               label={
                 job.status === "running"
-                  ? "Generating report… this can take about a minute."
+                  ? job.report_type === "ai"
+                    ? "Generating AI narrative… usually 30–60 seconds, sometimes longer."
+                    : "Generating report… this can take about a minute."
                   : "Queued for generation…"
               }
             />

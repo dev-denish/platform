@@ -20,6 +20,7 @@ gee_analysis_service.py's own module docstring). Measured end-to-end timing
 recorded in this wave's test/verification notes, not assumed."""
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -31,15 +32,17 @@ from app.domain import analysis_config
 from app.domain.analysis_catalog import CATALOG, get_catalog_entry
 from app.domain.authz import require_project_view
 from app.domain.dtos import CurrentUser, GenerateReportRequest, ReportAnalysisOption, ReportOptions
+from app.domain.enums import ReportType
 from app.repositories.analysis_results import AnalysisResultRepository
 from app.repositories.forest_definition import ForestDefinitionRepository
 from app.repositories.projects import ProjectRepository
+from app.services.ai_narrative import GEMINI_MODEL, generate_ai_summaries
 from app.services.gee_analysis_service import _compute_cached
 from app.services.jobs_service import JobService
 from app.services.report_charts import render_trend_chart_png
 from app.services.report_content import build_section_content, is_multi_year_index
 from app.services.report_map_image import render_boundary_map_png
-from app.services.report_pdf import build_report_pdf
+from app.services.report_pdf import AI_NARRATIVE_DISCLOSURE_TEMPLATE, build_report_pdf
 from app.workers.queue import TaskRunner
 
 log = get_logger("dmrv.report")
@@ -64,7 +67,10 @@ class ReportService:
             for entry in CATALOG
             if computed_at_by_id.get(entry["id"]) is not None
         ]
-        return ReportOptions(project_id=project_id, project_name=project["name"], analyses=analyses)
+        return ReportOptions(
+            project_id=project_id, project_name=project["name"], analyses=analyses,
+            ai_narrative_disclosure=AI_NARRATIVE_DISCLOSURE_TEMPLATE.format(model=GEMINI_MODEL),
+        )
 
     def _prepare_generate(
         self, project_id: UUID, body: GenerateReportRequest, user: CurrentUser
@@ -116,7 +122,7 @@ class ReportService:
                     run_generate_report_job,
                     job_id=str(job_id), project_id=str(project_id), project_name=project_name,
                     analysis_ids=list(body.analysis_ids), boundary_geojson=boundary_geojson,
-                    actor=user.model_dump(mode="json"),
+                    report_type=body.report_type.value, actor=user.model_dump(mode="json"),
                 )
             except Exception as e:
                 jobs.mark_enqueue_failed(job_id, str(e))
@@ -132,6 +138,7 @@ def generate_report_pdf_bytes(
     project_name: str,
     analysis_ids: list[str],
     boundary_geojson: dict[str, Any],
+    report_type: str = ReportType.SYSTEM,
 ) -> bytes:
     """The one function that does the actual slow work - called only from
     the `generate_report` job body (app/workers/report_jobs.py), never from
@@ -152,7 +159,21 @@ def generate_report_pdf_bytes(
     `legacy_full_range` row (pre-this-wave, migrated in place) decodes to
     `None`; its map tile falls back to the new default variant rather than
     the old full range - an accepted, honest degradation for old data, not
-    a crash (legacy rows are transient and get superseded by fresh runs)."""
+    a crash (legacy rows are transient and get superseded by fresh runs).
+
+    `report_type="ai"` (Wave: ai-report-narrative, Phase 3; narrative fields
+    extended to 5 keys per section in the 11-section report restructure):
+    maps/charts/stats/methodology/carbon-relevance/data-quality/limitations
+    are built EXACTLY as above, identical to `report_type="system"` - the
+    only difference is that each section's `narrative` dict is overwritten
+    (via `dataclasses.replace`, merged over the deterministic wording
+    `build_section_content` already put there - `build_section_content`
+    itself is never told about `report_type`) from a SINGLE batched
+    `generate_ai_summaries` call across every section. `AiNarrativeError` from
+    that call is NOT caught here; it propagates to `run_generate_report_job`,
+    which dead-letters the job immediately rather than substituting a
+    partial/system report for it (see that module's own comment for why this
+    is not retried)."""
     with db.connection() as conn, conn.cursor() as cur:
         canopy_cover_pct = float(ForestDefinitionRepository(cur).get()["canopy_cover_pct"])
         rows = {
@@ -160,6 +181,7 @@ def generate_report_pdf_bytes(
         }
 
     sections = []
+    ai_inputs: list[tuple[str, str, str, dict[str, Any]]] = []
     map_images: dict[str, bytes] = {}
     chart_images: dict[str, bytes] = {}
     for analysis_id in analysis_ids:
@@ -172,6 +194,7 @@ def generate_report_pdf_bytes(
             entry, analysis_id, row["computed_at"], row["stats"], row["legend"]
         )
         sections.append(section)
+        ai_inputs.append((analysis_id, entry["name"], entry["category"], row["stats"]))
 
         if section.series:
             chart_images[analysis_id] = render_trend_chart_png(section.name, section.series)
@@ -191,7 +214,23 @@ def generate_report_pdf_bytes(
                 error=str(e),
             )
 
+    ai_model: str | None = None
+    if report_type == ReportType.AI:
+        # One batched call for the whole report (never per-section) - see
+        # ai_narrative.generate_ai_summaries' own FAILURE SEMANTICS: raises
+        # AiNarrativeError rather than returning a partial dict, and that
+        # exception is deliberately left to propagate out of this function.
+        ai_summaries = generate_ai_summaries(ai_inputs, project_name=project_name)
+        sections = [
+            replace(s, narrative={**s.narrative, **ai_summaries[s.analysis_id]}) for s in sections
+        ]
+        # R2: the disclosure names the model that actually ran. A fixed
+        # constant here, never from ai_summaries/section content, so nothing
+        # in the narrative path can spoof it.
+        ai_model = GEMINI_MODEL
+
     return build_report_pdf(
         project_name=project_name, project_id=project_id, generated_at=datetime.now(UTC),
         sections=sections, map_images=map_images, chart_images=chart_images,
+        report_type=report_type, ai_model=ai_model,
     )

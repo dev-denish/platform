@@ -27,9 +27,13 @@ RUN python -m venv "$VIRTUAL_ENV"
 WORKDIR /build
 COPY pyproject.toml ./
 # Install runtime dependencies (resolved from pyproject) plus the production server.
+# pydantic/pydantic-settings bumped from 2.10.4/2.7.0 for google-genai below
+# (needs pydantic>=2.12.5) - already proven compatible with this app: the
+# dev venv this codebase is tested against has run on pydantic 2.13.4 with
+# the full test suite green.
 RUN pip install \
       "fastapi==0.115.6" "uvicorn[standard]==0.34.0" "gunicorn==23.0.0" \
-      "pydantic==2.10.4" "pydantic-settings==2.7.0" \
+      "pydantic==2.13.4" "pydantic-settings==2.14.2" \
       "psycopg[binary,pool]==3.2.3" "bcrypt==4.2.1" "pyjwt==2.10.1" \
       "python-multipart==0.0.20" "numpy==2.2.1" "rasterio==1.4.3" "pillow==11.1.0" "scipy==1.18.0" \
       "alembic==1.14.0" "sqlalchemy==2.0.36" "structlog==24.4.0" "slowapi==0.1.9" \
@@ -38,7 +42,8 @@ RUN pip install \
       "boto3==1.35.90" \
       "httpx==0.28.1" "pyshp==2.3.1" "defusedxml==0.7.1" \
       "earthengine-api==1.7.38" \
-      "fpdf2==2.8.7" "matplotlib==3.10.0"
+      "fpdf2==2.8.7" "matplotlib==3.10.0" \
+      "google-genai==2.17.0"
 
 # ---------- runtime ----------
 FROM python:3.12-slim AS runtime

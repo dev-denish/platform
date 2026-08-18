@@ -6,8 +6,10 @@ requires-python = ">=3.12"
 dependencies = [
     "fastapi==0.115.6",
     "uvicorn[standard]==0.34.0",
-    "pydantic==2.10.4",
-    "pydantic-settings==2.7.0",
+    # Bumped from 2.10.4/2.7.0 for google-genai below (needs pydantic>=2.12.5) -
+    # see backend/Dockerfile's matching pin for why 2.13.4 is proven safe here.
+    "pydantic==2.13.4",
+    "pydantic-settings==2.14.2",
     "psycopg[binary,pool]==3.2.3",
     "bcrypt==4.2.1",
     "pyjwt==2.10.1",
@@ -41,6 +43,10 @@ dependencies = [
     # PDF - no charting library existed here before (Recharts is JS-only,
     # frontend-side). Agg backend (see report_charts.py) needs no display.
     "matplotlib==3.10.0",
+    # Wave: ai-report-narrative. Google's own SDK for the Gemini API
+    # (`from google import genai`) - the only AI report-narrative backend
+    # (decision 2026-08-12; see app/services/ai_narrative.py).
+    "google-genai==2.17.0",
 ]
 
 [project.optional-dependencies]
