@@ -597,6 +597,26 @@ def _compute(
         return _mndwi_query(boundary, request_params)
     if analysis_id == "nbr":
         return _nbr_query(boundary, request_params)
+    if analysis_id == "ndwi":
+        return _ndwi_query(boundary, request_params)
+    if analysis_id == "gndvi":
+        return _gndvi_query(boundary, request_params)
+    if analysis_id == "ndbi":
+        return _ndbi_query(boundary, request_params)
+    if analysis_id == "ndmi":
+        return _ndmi_query(boundary, request_params)
+    if analysis_id == "lswi":
+        return _lswi_query(boundary, request_params)
+    if analysis_id == "bsi":
+        return _bsi_query(boundary, request_params)
+    if analysis_id == "arvi":
+        return _arvi_query(boundary, request_params)
+    if analysis_id == "nddi":
+        return _nddi_query(boundary, request_params)
+    if analysis_id == "cmri":
+        return _cmri_query(boundary, request_params)
+    if analysis_id == "psri":
+        return _psri_query(boundary, request_params)
     if analysis_id == "s2_browse":
         return _s2_browse(boundary, (request_params or {}).get("year"))
     if analysis_id == "s1_browse":
@@ -1108,6 +1128,48 @@ _VEG_CLOUD_THRESHOLD = analysis_config._VEG_CLOUD_THRESHOLD
 # while also being a clean, memorable, easy-to-explain fixed width).
 _VEG_INDEX_HISTOGRAM_RANGE = (-1.0, 1.0)
 _VEG_INDEX_HISTOGRAM_BINS = 20
+
+# Wave: composite indices. CMRI = NDVI - NDWI is a plain DIFFERENCE (not a
+# ratio) of two [-1,1] indices, so its true range is [-2, 2] - verified live
+# against real GEE data: on an ordinary vegetated test boundary (no water at
+# all), NDVI-NDWI landed around 1.18, and masking it to the shared [-1, 1]
+# range excluded ~98% of pixels (10018 of ~10201), leaving a boundary mean
+# computed from a tiny, unrepresentative sliver. This is a genuinely wider
+# natural range for this ONE index, not a rare edge case the way EVI's
+# denominator blowups are - hence its own override here rather than widening
+# the shared range for all 14 indices (which would halve every other index's
+# histogram resolution for no reason).
+#
+# NDDI = (NDVI - NDMI) / (NDVI + NDMI) is a RATIO, unlike CMRI, but its
+# denominator can still shrink toward zero whenever NDVI and NDMI have
+# opposite signs with close magnitudes - common on ordinary land (positive
+# NDVI over vegetation, slightly negative NDMI under dry conditions), not a
+# rare artifact the way EVI's blowups are. Verified live: on the same test
+# boundary, the RAW (unmasked) NDDI distribution had ~97% of pixels (p2-p99)
+# clustered at a single value (~1.11, just outside the shared [-1, 1]) with
+# a genuine unbounded tail beyond that (observed range -77168 to 1330, no
+# clean fixed bound the way CMRI has). [-3, 3] was chosen empirically:
+# recovers most of the wrongly-excluded well-behaved bulk (79.6% -> 93.6%
+# in-range on the test boundary) while staying well short of where the real
+# outlier tail starts (observed 1st percentile already at -24.6) - a data-
+# informed choice, not a mathematically exact bound like CMRI's [-2, 2]. No
+# denominator-near-zero guard was added (a deliberate choice, not an
+# oversight) - genuine extreme outliers can still occasionally fall inside
+# [-3, 3] on a different boundary; `out_of_range_pixel_count` remains the
+# disclosure mechanism for whatever this fixed range doesn't catch.
+#
+# Every other index keeps the shared [-1, 1] default (looked up via
+# `_valid_range_for`, not listed individually).
+_INDEX_VALID_RANGE: dict[str, tuple[float, float]] = {
+    "cmri": (-2.0, 2.0),
+    "nddi": (-3.0, 3.0),
+}
+
+
+def _valid_range_for(index_id: str) -> tuple[float, float]:
+    return _INDEX_VALID_RANGE.get(index_id, _VEG_INDEX_HISTOGRAM_RANGE)
+
+
 # Diverging red-yellow-green - low (sparse/no vegetation) to high (dense vegetation).
 # Same ramp for all 5 indices: they all range roughly -1..1 with "more vegetation/
 # water/burn signal" at the high end, and reusing one palette keeps every index's
@@ -1162,7 +1224,9 @@ def _s2_reflectance_composite(
     return composite.divide(10000)
 
 
-def _index_stats_reducer() -> ee.Reducer:
+def _index_stats_reducer(
+    histogram_range: tuple[float, float] = _VEG_INDEX_HISTOGRAM_RANGE,
+) -> ee.Reducer:
     """One combined reducer -> one reduceRegion call per year, still one
     .getInfo() round trip for the whole series (see _annual_index_series):
     mean (unchanged - stats["series"] reads this), stdDev, min/max, and a
@@ -1177,15 +1241,24 @@ def _index_stats_reducer() -> ee.Reducer:
     (no "index_" prefix appears even though the reduceRegion input image has
     2 bands - see _index_stats_reducer_with_raw_count's own docstring for
     the count() sub-reducer, which is bare "count" for the same reason).
-    _annual_index_series unpacks these bare keys below."""
+    _annual_index_series unpacks these bare keys below.
+
+    `histogram_range` (Wave: composite indices) defaults to the shared
+    [-1, 1] every index but CMRI uses - see `_INDEX_VALID_RANGE`'s own
+    comment for why CMRI alone gets a wider [-2, 2]. Bin COUNT
+    (`_VEG_INDEX_HISTOGRAM_BINS`) stays fixed at 20 regardless, so a wider
+    range means a proportionally wider bin (0.2 instead of 0.1 for CMRI) -
+    `index_summary.py`'s clause generators derive bin width from the actual
+    returned bin_edges, not the module constant, so this is not a silent
+    mismatch there (see that module's own docstring)."""
     return (
         ee.Reducer.mean()
         .combine(ee.Reducer.stdDev(), sharedInputs=True)
         .combine(ee.Reducer.minMax(), sharedInputs=True)
         .combine(
             ee.Reducer.fixedHistogram(
-                _VEG_INDEX_HISTOGRAM_RANGE[0],
-                _VEG_INDEX_HISTOGRAM_RANGE[1],
+                histogram_range[0],
+                histogram_range[1],
                 _VEG_INDEX_HISTOGRAM_BINS,
             ),
             sharedInputs=True,
@@ -1193,7 +1266,9 @@ def _index_stats_reducer() -> ee.Reducer:
     )
 
 
-def _index_stats_reducer_with_raw_count() -> ee.Reducer:
+def _index_stats_reducer_with_raw_count(
+    histogram_range: tuple[float, float] = _VEG_INDEX_HISTOGRAM_RANGE,
+) -> ee.Reducer:
     """`_index_stats_reducer()` plus an UNSHARED `ee.Reducer.count()` that
     consumes a SECOND input band, still in the same single reduceRegion call
     (no extra round trip). Exists to recover, per year, how many pixels this
@@ -1224,7 +1299,7 @@ def _index_stats_reducer_with_raw_count() -> ee.Reducer:
     (test_index_histogram_shaping.py::test_index_stats_reducer_is_one_
     combine_tree_of_mean_stddev_minmax_histogram) keeps asserting on exactly
     the tree it already knows about, undisturbed by this addition."""
-    return _index_stats_reducer().combine(ee.Reducer.count(), sharedInputs=False)
+    return _index_stats_reducer(histogram_range).combine(ee.Reducer.count(), sharedInputs=False)
 
 
 def _shape_index_histogram(rows: list[list[float]] | None) -> dict[str, list[Any]]:
@@ -1275,6 +1350,7 @@ def _veg_index_methodology(
     season_end_md: str,
     years: list[int],
     formula_desc: str,
+    valid_range: tuple[float, float] = _VEG_INDEX_HISTOGRAM_RANGE,
 ) -> dict[str, Any]:
     """Pure - no `ee` involved, unlike _annual_index_series itself - see
     _land_cover_methodology's own docstring for why that separation matters
@@ -1282,7 +1358,10 @@ def _veg_index_methodology(
     in words only for the one real implemented pair (sentinel2/
     cloud_score_plus); any other value (there is currently no other value
     that reaches here - resolve_and_validate rejects it first) is passed
-    through as-is rather than mislabeled."""
+    through as-is rather than mislabeled.
+
+    `valid_range` (Wave: composite indices) defaults to the shared [-1, 1]
+    every index but CMRI uses - see `_INDEX_VALID_RANGE`'s own comment."""
     return {
         "imagery_source": (
             "Sentinel-2 (COPERNICUS/S2_SR_HARMONIZED)"
@@ -1297,7 +1376,7 @@ def _veg_index_methodology(
         "season_window": f"{season_start_md} to {season_end_md}",
         "years_computed": years,
         "formula": formula_desc,
-        "valid_range": list(_VEG_INDEX_HISTOGRAM_RANGE),
+        "valid_range": list(valid_range),
     }
 
 
@@ -1383,7 +1462,8 @@ def _annual_index_series(
     per_year_stats = {}
     latest_year = max(years)
     latest_image = None
-    range_lo, range_hi = _VEG_INDEX_HISTOGRAM_RANGE
+    histogram_range = _valid_range_for(index_id)
+    range_lo, range_hi = histogram_range
     for year in years:
         refl = _s2_reflectance_composite(boundary, year, season_start_md, season_end_md)
         # cloud-masked only, natural range not yet enforced (see docstring above)
@@ -1393,8 +1473,8 @@ def _annual_index_series(
             latest_image = idx
         stack = idx.addBands(idx_raw.rename("index_raw"))
         per_year_stats[str(year)] = stack.reduceRegion(
-            reducer=_index_stats_reducer_with_raw_count(), geometry=boundary, scale=10,
-            crs=AOI_CRS, maxPixels=1e10, bestEffort=True,
+            reducer=_index_stats_reducer_with_raw_count(histogram_range), geometry=boundary,
+            scale=10, crs=AOI_CRS, maxPixels=1e10, bestEffort=True,
         )
     # Wave: partial coverage. Nested (not flattened alongside the year keys -
     # the loop below iterates every top-level key as a year) - still ONE
@@ -1460,13 +1540,15 @@ def _annual_index_series(
             "Cloud Score+ equivalent) and risks a false 'trend break' at the sensor "
             "handoff year, so isn't included in this batch. Each year's pixels are "
             "masked to the natural "
-            f"[{_VEG_INDEX_HISTOGRAM_RANGE[0]:g}, {_VEG_INDEX_HISTOGRAM_RANGE[1]:g}] "
+            f"[{range_lo:g}, {range_hi:g}] "
             "index range BEFORE mean/std_dev/min/max/histogram are computed (EVI's "
             "denominator can cross zero under thin haze/cloud edges, sending it far "
-            "outside that range) - `distribution[year][\"out_of_range_pixel_count\"]` "
+            "outside that range; CMRI's own range is wider than every other index's "
+            "here - see this module's `_INDEX_VALID_RANGE` - since it is a plain "
+            "difference, not a ratio) - `distribution[year][\"out_of_range_pixel_count\"]` "
             "records how many pixels that excluded, per year. `distribution` adds "
             "per-year std dev/min/max and a pixel-value histogram fixed to the "
-            f"[{_VEG_INDEX_HISTOGRAM_RANGE[0]:g}, {_VEG_INDEX_HISTOGRAM_RANGE[1]:g}] "
+            f"[{range_lo:g}, {range_hi:g}] "
             f"range in {_VEG_INDEX_HISTOGRAM_BINS} bins (same edges every year, so "
             "bars are directly comparable across years) alongside the existing "
             "boundary-mean `series`. `summary` is a deterministic plain-language "
@@ -1482,10 +1564,13 @@ def _annual_index_series(
         # `note`'s own prose, just structured for the UI panel to render
         # field-by-field instead of parsing free text.
         "methodology": _veg_index_methodology(
-            imagery_source, cloud_masking, season_start_md, season_end_md, years, formula_desc
+            imagery_source, cloud_masking, season_start_md, season_end_md, years, formula_desc,
+            histogram_range,
         ),
     }
-    map_id = latest_image.visualize(min=-1, max=1, palette=_VEG_INDEX_PALETTE).getMapId()
+    map_id = latest_image.visualize(
+        min=range_lo, max=range_hi, palette=_VEG_INDEX_PALETTE
+    ).getMapId()
     return stats, None, map_id["tile_fetcher"].url_format
 
 
@@ -1526,6 +1611,100 @@ _INDEX_FORMULAS: dict[str, tuple[Any, str]] = {
         lambda refl: refl.normalizedDifference(["B8", "B12"]),
         "NBR = (NIR - SWIR2) / (NIR + SWIR2). Sentinel-2: NIR=B8, SWIR2=B12.",
     ),
+    "ndwi": (
+        lambda refl: refl.normalizedDifference(["B3", "B8"]),
+        "NDWI = (Green - NIR) / (Green + NIR). Sentinel-2: Green=B3, NIR=B8. "
+        "McFeeters (1996) - distinct from MNDWI, which substitutes SWIR1 for NIR.",
+    ),
+    "gndvi": (
+        lambda refl: refl.normalizedDifference(["B8", "B3"]),
+        "GNDVI = (NIR - Green) / (NIR + Green). Sentinel-2: NIR=B8, Green=B3.",
+    ),
+    "ndbi": (
+        lambda refl: refl.normalizedDifference(["B11", "B8"]),
+        "NDBI = (SWIR1 - NIR) / (SWIR1 + NIR). Sentinel-2: SWIR1=B11, NIR=B8.",
+    ),
+    "ndmi": (
+        lambda refl: refl.normalizedDifference(["B8", "B11"]),
+        "NDMI = (NIR - SWIR1) / (NIR + SWIR1). Sentinel-2: NIR=B8, SWIR1=B11. "
+        "Wilson & Sader (2002) - same formula/band pair as NDII (Hardisky et al. 1983), "
+        "kept as one index rather than shipped twice under two names.",
+    ),
+    "lswi": (
+        lambda refl: refl.normalizedDifference(["B8", "B11"]),
+        "LSWI = (NIR - SWIR1) / (NIR + SWIR1). Sentinel-2: NIR=B8, SWIR1=B11. Xiao et al. "
+        "- mathematically identical band math to NDMI, shipped as its own index for the "
+        "flood/wetland-monitoring naming convention (see index_summary.py).",
+    ),
+    "bsi": (
+        lambda refl: refl.expression(
+            "((SWIR1 + RED) - (NIR + BLUE)) / ((SWIR1 + RED) + (NIR + BLUE))",
+            {
+                "SWIR1": refl.select("B11"), "RED": refl.select("B4"),
+                "NIR": refl.select("B8"), "BLUE": refl.select("B2"),
+            },
+        ),
+        "BSI = ((SWIR1+Red)-(NIR+Blue)) / ((SWIR1+Red)+(NIR+Blue)). "
+        "Sentinel-2: SWIR1=B11, Red=B4, NIR=B8, Blue=B2.",
+    ),
+    "arvi": (
+        lambda refl: refl.expression(
+            "(NIR - (2 * RED - BLUE)) / (NIR + (2 * RED - BLUE))",
+            {"NIR": refl.select("B8"), "RED": refl.select("B4"), "BLUE": refl.select("B2")},
+        ),
+        "ARVI = (NIR - (2*Red - Blue)) / (NIR + (2*Red - Blue)), the gamma=1 form of "
+        "Kaufman & Tanre (1992). Sentinel-2: NIR=B8, Red=B4, Blue=B2.",
+    ),
+    "nddi": (
+        lambda refl: refl.expression(
+            "(NDVI - NDMI) / (NDVI + NDMI)",
+            {
+                "NDVI": refl.normalizedDifference(["B8", "B4"]),
+                "NDMI": refl.normalizedDifference(["B8", "B11"]),
+            },
+        ),
+        "NDDI = (NDVI - NDMI) / (NDVI + NDMI), Gu et al. (2007). NDMI here is Gao "
+        "(1996)'s NIR-SWIR1 NDWI, Gu et al.'s own original input (mathematically "
+        "identical to this platform's NDMI). The ratio's denominator can approach zero "
+        "whenever NDVI and NDMI have opposite signs with close magnitudes - computed and "
+        "masked on its own [-3,3] range rather than the shared [-1,1] (see "
+        "_INDEX_VALID_RANGE), a data-informed choice, not an exact bound. Sentinel-2: "
+        "NDVI=(B8-B4)/(B8+B4), NDMI=(B8-B11)/(B8+B11).",
+    ),
+    "cmri": (
+        lambda refl: refl.expression(
+            "NDVI - NDWI",
+            {
+                "NDVI": refl.normalizedDifference(["B8", "B4"]),
+                "NDWI": refl.normalizedDifference(["B3", "B8"]),
+            },
+        ),
+        "CMRI = NDVI - NDWI, Gupta et al. (2018), Combined Mangrove Recognition Index. "
+        "NDWI here is McFeeters (1996)'s Green-NIR variant, matching the primary source. "
+        "A plain difference (not a ratio) of two [-1,1] indices, so its true range is "
+        "[-2,2] - wider than the [-1,1] every other index here shares, so CMRI is "
+        "computed and masked on its own [-2,2] range (see _INDEX_VALID_RANGE), not the "
+        "shared one. Sentinel-2: NDVI=(B8-B4)/(B8+B4), NDWI=(B3-B8)/(B3+B8).",
+    ),
+    "psri": (
+        lambda refl: refl.expression(
+            "(RED - BLUE) / REDEDGE",
+            {"RED": refl.select("B4"), "BLUE": refl.select("B2"), "REDEDGE": refl.select("B6")},
+        ),
+        "PSRI = (Red - Blue) / RedEdge, Merzlyak et al. (1999). Sentinel-2: Red=B4, "
+        "Blue=B2, RedEdge=B6 (740nm, closest S2 band to the formula's ~750nm reference - "
+        "NOT the standard NIR band B8/B8A every other index here uses). Verified live on "
+        "two real boundaries: a vegetated boundary (range roughly -0.23 to 0.46, 100% "
+        "in-range) and a real lake (Bellandur, Bengaluru - mixed open water/shoreline, "
+        "range roughly -0.49 to 0.66, still 100% in-range; RedEdge reflectance over open "
+        "water never dropped below ~0.03, nowhere near the true zero that would blow up "
+        "the ratio). Not an exhaustive proof against every land-cover/turbidity/shadow "
+        "combination - PSRI uses the shared [-1,1] default range (not its own override, "
+        "unlike NDDI/CMRI) because both tested boundaries stayed fully in-range, not "
+        "because the denominator is mathematically guaranteed never to approach zero; "
+        "the generic `describe_out_of_range` disclosure (index_summary.py) remains the "
+        "safety net for any untested scenario where it does.",
+    ),
 }
 
 
@@ -1557,6 +1736,66 @@ def _nbr_query(
     boundary: ee.Geometry, resolved: dict[str, Any] | None = None
 ) -> tuple[dict[str, Any], None, str]:
     return _annual_index_series(boundary, "nbr", resolved)
+
+
+def _ndwi_query(
+    boundary: ee.Geometry, resolved: dict[str, Any] | None = None
+) -> tuple[dict[str, Any], None, str]:
+    return _annual_index_series(boundary, "ndwi", resolved)
+
+
+def _gndvi_query(
+    boundary: ee.Geometry, resolved: dict[str, Any] | None = None
+) -> tuple[dict[str, Any], None, str]:
+    return _annual_index_series(boundary, "gndvi", resolved)
+
+
+def _ndbi_query(
+    boundary: ee.Geometry, resolved: dict[str, Any] | None = None
+) -> tuple[dict[str, Any], None, str]:
+    return _annual_index_series(boundary, "ndbi", resolved)
+
+
+def _ndmi_query(
+    boundary: ee.Geometry, resolved: dict[str, Any] | None = None
+) -> tuple[dict[str, Any], None, str]:
+    return _annual_index_series(boundary, "ndmi", resolved)
+
+
+def _lswi_query(
+    boundary: ee.Geometry, resolved: dict[str, Any] | None = None
+) -> tuple[dict[str, Any], None, str]:
+    return _annual_index_series(boundary, "lswi", resolved)
+
+
+def _bsi_query(
+    boundary: ee.Geometry, resolved: dict[str, Any] | None = None
+) -> tuple[dict[str, Any], None, str]:
+    return _annual_index_series(boundary, "bsi", resolved)
+
+
+def _arvi_query(
+    boundary: ee.Geometry, resolved: dict[str, Any] | None = None
+) -> tuple[dict[str, Any], None, str]:
+    return _annual_index_series(boundary, "arvi", resolved)
+
+
+def _nddi_query(
+    boundary: ee.Geometry, resolved: dict[str, Any] | None = None
+) -> tuple[dict[str, Any], None, str]:
+    return _annual_index_series(boundary, "nddi", resolved)
+
+
+def _cmri_query(
+    boundary: ee.Geometry, resolved: dict[str, Any] | None = None
+) -> tuple[dict[str, Any], None, str]:
+    return _annual_index_series(boundary, "cmri", resolved)
+
+
+def _psri_query(
+    boundary: ee.Geometry, resolved: dict[str, Any] | None = None
+) -> tuple[dict[str, Any], None, str]:
+    return _annual_index_series(boundary, "psri", resolved)
 
 
 def _index_point_value(boundary: ee.Geometry, point: ee.Geometry, analysis_id: str) -> float | None:
