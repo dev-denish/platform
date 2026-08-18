@@ -96,6 +96,64 @@ CARBON_RELEVANCE: dict[str, str] = {
         "persistently cloudy seasons. " + _DESCRIPTIVE_ONLY
     ),
     "landsat_browse": _BROWSE_RELEVANCE,
+    "ndwi": (
+        "NDWI can support monitoring of surface water bodies and boundary hydrology "
+        "within the project boundary, providing spatial evidence that may assist with "
+        "screening areas for further review. It is not a vegetation or carbon "
+        "indicator. " + _DESCRIPTIVE_ONLY
+    ),
+    "gndvi": (
+        "GNDVI can support vegetation monitoring within the project boundary, using "
+        "the green band's chlorophyll sensitivity to provide spatial evidence of "
+        "vegetation conditions that may assist with screening areas for further "
+        "review. " + _DESCRIPTIVE_ONLY
+    ),
+    "ndbi": (
+        "NDBI can support screening for built-up or impervious surface within the "
+        "project boundary, providing spatial evidence that may assist with detecting "
+        "encroachment or land-use change worth further review. It is not a vegetation "
+        "or carbon indicator. " + _DESCRIPTIVE_ONLY
+    ),
+    "ndmi": (
+        "NDMI can support monitoring of canopy and soil moisture within the project "
+        "boundary, providing spatial evidence of moisture-stress conditions that may "
+        "assist with screening areas for further review. " + _DESCRIPTIVE_ONLY
+    ),
+    "lswi": (
+        "LSWI can support monitoring of flooding and wetland conditions within the "
+        "project boundary, providing spatial evidence that may assist with screening "
+        "areas for further review. It is not a vegetation or carbon "
+        "indicator. " + _DESCRIPTIVE_ONLY
+    ),
+    "bsi": (
+        "BSI can support screening for bare or exposed soil within the project "
+        "boundary, providing spatial evidence that may assist with detecting clearing "
+        "or degradation worth further review. It is not a carbon "
+        "indicator. " + _DESCRIPTIVE_ONLY
+    ),
+    "arvi": (
+        "ARVI can support vegetation monitoring within the project boundary with "
+        "reduced sensitivity to atmospheric haze and aerosols compared to NDVI, "
+        "providing spatial evidence that may assist with screening areas for further "
+        "review. " + _DESCRIPTIVE_ONLY
+    ),
+    "nddi": (
+        "NDDI can support drought screening within the project boundary by combining "
+        "vegetation and moisture signal into a single index, providing spatial "
+        "evidence that may assist with screening areas for further review. It does "
+        "not itself quantify drought severity or impact. " + _DESCRIPTIVE_ONLY
+    ),
+    "cmri": (
+        "CMRI can support screening for mangrove-consistent vegetation within the "
+        "project boundary, providing spatial evidence that may assist with screening "
+        "areas for further review. It does not itself confirm mangrove presence or "
+        "extent. " + _DESCRIPTIVE_ONLY
+    ),
+    "psri": (
+        "PSRI can support screening for plant senescence or stress within the project "
+        "boundary, providing spatial evidence that may assist with screening areas for "
+        "further review. " + _DESCRIPTIVE_ONLY
+    ),
 }
 
 
@@ -157,6 +215,71 @@ _AUTHORED_LIMITATIONS: dict[str, str] = {
         "free coverage in the season window produce no result for that year. Published "
         "burn-severity classes are defined on a pre/post-fire difference (dNBR), not on "
         "the single-date value shown here."
+    ),
+    "ndwi": (
+        "Sentinel-2-only implementation, restricted to the configured season window "
+        "within each requested year; index values outside the valid [-1, 1] range are "
+        "masked and excluded from the boundary statistics, and years with no cloud-"
+        "free coverage in the season window produce no result for that year."
+    ),
+    "gndvi": (
+        "Sentinel-2-only implementation, restricted to the configured season window "
+        "within each requested year; index values outside the valid [-1, 1] range are "
+        "masked and excluded from the boundary statistics, and years with no cloud-"
+        "free coverage in the season window produce no result for that year."
+    ),
+    "ndbi": (
+        "Sentinel-2-only implementation, restricted to the configured season window "
+        "within each requested year; index values outside the valid [-1, 1] range are "
+        "masked and excluded from the boundary statistics, and years with no cloud-"
+        "free coverage in the season window produce no result for that year."
+    ),
+    "ndmi": (
+        "Sentinel-2-only implementation, restricted to the configured season window "
+        "within each requested year; index values outside the valid [-1, 1] range are "
+        "masked and excluded from the boundary statistics, and years with no cloud-"
+        "free coverage in the season window produce no result for that year."
+    ),
+    "lswi": (
+        "Sentinel-2-only implementation, restricted to the configured season window "
+        "within each requested year; index values outside the valid [-1, 1] range are "
+        "masked and excluded from the boundary statistics, and years with no cloud-"
+        "free coverage in the season window produce no result for that year. Uses the "
+        "same NIR/SWIR1 band math as NDMI, so the two indices are never independent "
+        "evidence of different things in the same report."
+    ),
+    "bsi": (
+        "Sentinel-2-only implementation, restricted to the configured season window "
+        "within each requested year; index values outside the valid [-1, 1] range are "
+        "masked and excluded from the boundary statistics, and years with no cloud-"
+        "free coverage in the season window produce no result for that year."
+    ),
+    "arvi": (
+        "Sentinel-2-only implementation, restricted to the configured season window "
+        "within each requested year; index values outside the valid [-1, 1] range are "
+        "masked and excluded from the boundary statistics, and years with no cloud-"
+        "free coverage in the season window produce no result for that year."
+    ),
+    "nddi": (
+        "Sentinel-2-only implementation, restricted to the configured season window "
+        "within each requested year; computed and masked on its own [-3, 3] range "
+        "(wider than the other indices here, since its NDVI/NDMI ratio can approach a "
+        "zero denominator on ordinary land) and years with no cloud-free coverage in "
+        "the season window produce no result for that year."
+    ),
+    "cmri": (
+        "Sentinel-2-only implementation, restricted to the configured season window "
+        "within each requested year; computed and masked on its own [-2, 2] range "
+        "(wider than the other indices here) and years with no cloud-free coverage in "
+        "the season window produce no result for that year."
+    ),
+    "psri": (
+        "Sentinel-2-only implementation, restricted to the configured season window "
+        "within each requested year; index values outside the valid [-1, 1] range are "
+        "masked and excluded from the boundary statistics, and years with no cloud-"
+        "free coverage in the season window produce no result for that year. Uses the "
+        "red-edge band (B6) as its denominator rather than the standard NIR band every "
+        "other index here uses."
     ),
 }
 
