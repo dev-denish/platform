@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import {
   MapContainer,
   TileLayer,
@@ -37,6 +36,8 @@ import CompassIndicator from "./CompassIndicator.jsx";
 import BasemapPanel from "./BasemapPanel.jsx";
 import MapContextMenu from "./MapContextMenu.jsx";
 import AttributeTableDialog from "./AttributeTableDialog.jsx";
+import AttributionInfo from "./AttributionInfo.jsx";
+import MapStatusBar from "./MapStatusBar.jsx";
 import ErrorBanner from "./ErrorBanner.jsx";
 
 /**
@@ -175,92 +176,6 @@ function ScaleControl() {
     return () => control.remove();
   }, [map]);
   return null;
-}
-
-/**
- * Live Lat/Lon/Zoom/Scale readout (Wave: floating map controls) - relocated
- * out of the (now floating, collapsed-by-default) toolbar into its own small
- * badge in the map's bottom-right corner, sharing that corner with Leaflet's
- * own scale bar above (ScaleControl). A plain sibling React overlay at a
- * hand-picked bottom/right offset would have to guess the scale bar's own
- * height to avoid overlapping it, and that guess breaks the moment either
- * badge's content changes size. Adding this as a genuine `L.control` at the
- * same "bottomright" position instead lets Leaflet's own corner-stacking
- * (same mechanism that already places the scale bar) lay the two badges out
- * for free, in DOM order - "two small badges sharing that corner" with no
- * manual math.
- *
- * The control's DOM node is created once (onAdd) and handed to a React
- * portal rather than built with string/innerHTML updates, so click-to-copy
- * (carried over from the old toolbar readout) stays real React state/JSX -
- * same "keep the actual rendering inside React's model" reasoning this
- * file's other hand-rolled Leaflet integrations (SwipeClip, etc.) already
- * follow.
- */
-function CoordinateBadge({ lat, lon, zoom, scaleLabel }) {
-  const map = useMap();
-  const [container, setContainer] = useState(null);
-  const [copied, setCopied] = useState(false);
-  const copyTimerRef = useRef(null);
-
-  useEffect(() => {
-    const control = L.control({ position: "bottomright" });
-    control.onAdd = () => {
-      const div = L.DomUtil.create("div", "map-coord-badge");
-      // Without this, a click on the copy button also reaches the map
-      // underneath (pixel-inspect / measure-point), same as any other
-      // interactive control content sitting over the map canvas.
-      L.DomEvent.disableClickPropagation(div);
-      return div;
-    };
-    control.addTo(map);
-    setContainer(control.getContainer());
-    return () => {
-      control.remove();
-      setContainer(null);
-    };
-  }, [map]);
-
-  useEffect(() => () => clearTimeout(copyTimerRef.current), []);
-
-  async function copyCoords() {
-    if (lat == null || lon == null) return;
-    try {
-      await navigator.clipboard.writeText(`${lat.toFixed(5)}, ${lon.toFixed(5)}`);
-      setCopied(true);
-      // Restart rather than stack, so a second click doesn't have the first
-      // click's timer cut its own confirmation short.
-      clearTimeout(copyTimerRef.current);
-      copyTimerRef.current = setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // Clipboard permission denied / insecure context - nothing useful to say
-      // in a one-line readout, and the coordinates are still visible to select.
-    }
-  }
-
-  if (!container) return null;
-
-  return createPortal(
-    <button
-      type="button"
-      className="map-toolbar-copy"
-      onClick={copyCoords}
-      disabled={lat == null || lon == null}
-      title="Copy these coordinates"
-    >
-      {lat != null && lon != null ? (
-        <>
-          Lat: {lat.toFixed(5)}° Lon: {lon.toFixed(5)}°
-        </>
-      ) : (
-        "Lat: — Lon: —"
-      )}
-      {copied ? <span className="map-toolbar-copied"> Copied!</span> : null}
-      {" | "}Zoom: {zoom ?? "—"}
-      {" | "}Scale: {scaleLabel ?? "—"}
-    </button>,
-    container
-  );
 }
 
 /**
@@ -1535,6 +1450,12 @@ export default function ProjectMap({
               boundsOptions={{ padding: [24, 24] }}
               scrollWheelZoom={false}
               zoomControl={false}
+              // Wave: Map Toolbar Enhancement v2 fix - Leaflet's own default
+              // attribution control is turned off in favor of
+              // AttributionInfo (rendered below, outside MapContainer),
+              // which shows the exact same text plus a real interactive "i"
+              // toggle Leaflet's own control has no equivalent for.
+              attributionControl={false}
               maxZoom={22}
               className="map-root"
             >
@@ -1542,12 +1463,6 @@ export default function ProjectMap({
               <FullscreenInvalidate />
               <MapViewSync onReady={setMapRef} onChange={setMapView} />
               <ScaleControl />
-              <CoordinateBadge
-                lat={(mapView.pos ?? mapView.center)?.lat}
-                lon={(mapView.pos ?? mapView.center)?.lng}
-                zoom={mapView.zoom}
-                scaleLabel={mapView.zoom != null ? scaleRatioLabel(mapView.zoom, (mapView.pos ?? mapView.center)?.lat ?? 0) : null}
-              />
               <MapClickRouter
                 mode={measureMode}
                 drawMode={drawMode}
@@ -1688,7 +1603,22 @@ export default function ProjectMap({
                 onClose={closeContextMenu}
               />
             ) : null}
+            <AttributionInfo attributionHtml={basemapCrossfade.current.attribution} source={basemapCrossfade.current.source} />
         </div>
+        {/* Wave: Map Toolbar Enhancement v2 fix - a real footer strip
+          * attached to the map card's own bottom edge, OUTSIDE
+          * .map-canvas-wrap entirely (a sibling, not an overlay inside it)
+          * so it can never sit on top of the imagery the way the old
+          * bottomright CoordinateBadge control did. Fed from the exact same
+          * `mapView` state that control used to read via useMap() - this
+          * one just needs it passed down as plain props, no Leaflet context
+          * required. */}
+        <MapStatusBar
+          lat={(mapView.pos ?? mapView.center)?.lat}
+          lon={(mapView.pos ?? mapView.center)?.lng}
+          zoom={mapView.zoom}
+          scaleLabel={mapView.zoom != null ? scaleRatioLabel(mapView.zoom, (mapView.pos ?? mapView.center)?.lat ?? 0) : null}
+        />
       </div>
       <AttributeTableDialog
         data={attributeTable}

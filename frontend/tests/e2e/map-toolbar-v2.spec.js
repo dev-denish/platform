@@ -248,4 +248,51 @@ test.describe("Map Toolbar Enhancement v2", () => {
     await panel.locator('input[type="range"]').nth(1).fill("0.8");
     await expect(vectorPath).toHaveAttribute("fill-opacity", "0.8");
   });
+
+  test("Fix: attribution info toggle expands/collapses and closes on click-away/Escape", async ({ page }) => {
+    const map = await gotoProjectWithMap(page);
+    const attribution = page.locator(".attribution-info");
+    await expect(attribution).toBeVisible();
+    await expect(attribution.locator(".attribution-info-text")).not.toBeEmpty();
+
+    const panel = page.locator(".attribution-info-panel");
+    await expect(panel).toBeHidden();
+
+    await attribution.locator(".attribution-info-toggle").click();
+    await expect(panel).toBeVisible();
+    await expect(panel).toContainText("Terms of use");
+    await expect(panel).toContainText("Report a map error");
+    await expect(panel).toContainText("Keyboard shortcuts");
+
+    // Toggle again closes it.
+    await attribution.locator(".attribution-info-toggle").click();
+    await expect(panel).toBeHidden();
+
+    // Click-away on the map closes it.
+    await attribution.locator(".attribution-info-toggle").click();
+    await expect(panel).toBeVisible();
+    const box = await map.boundingBox();
+    await map.click({ position: { x: box.width * 0.7, y: box.height * 0.2 } });
+    await expect(panel).toBeHidden();
+
+    // Escape closes it.
+    await attribution.locator(".attribution-info-toggle").click();
+    await expect(panel).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(panel).toBeHidden();
+  });
+
+  test("Fix: Lat/Lon/Zoom/Scale status bar sits below the map, not overlaying it", async ({ page }) => {
+    const map = await gotoProjectWithMap(page);
+    const statusBar = page.locator(".map-coord-badge");
+    await expect(statusBar).toBeVisible();
+
+    const mapBox = await map.boundingBox();
+    const statusBox = await statusBar.boundingBox();
+    expect(statusBox.y).toBeGreaterThanOrEqual(mapBox.y + mapBox.height - 1);
+
+    // Still the same click-to-copy control it always was.
+    await statusBar.click();
+    await expect(statusBar).toContainText("Copied!");
+  });
 });

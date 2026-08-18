@@ -1478,7 +1478,13 @@ label.checkbox-field {
 
 .map-frame {
   position: relative;
-  height: 460px;
+  /* 460px imagery viewport (unchanged from before) + ~30px for
+   * .map-status-bar's own footer strip (Wave: Map Toolbar Enhancement v2
+   * fix) - a flex column, so that strip's fixed height and .map-canvas-wrap's
+   * flex:1 share this total; bumping the total here (rather than leaving it
+   * at 460px and letting the map shrink to make room) keeps the actual
+   * imagery area the same size it always was. */
+  height: 490px;
   display: flex;
   flex-direction: column;
   border-radius: var(--radius-md);
@@ -1872,24 +1878,132 @@ label.checkbox-field {
   box-shadow: var(--shadow-card);
 }
 
-/* CoordinateBadge (ProjectMap.jsx) - a genuine Leaflet "bottomright" control
- * sharing the scale bar's own corner (see that component's docstring for
- * why), so it gets the exact same visual treatment as
- * .leaflet-control-scale-line above: same wash background, hairline border,
- * mono numerals, one shared corner. `L.Control.addTo` adds the standard
- * `leaflet-control` class automatically (confirmed in leaflet-src.js), which
- * already supplies this corner's float/clear/margin stacking - no extra
- * spacing rule needed here for that. */
+/* MapStatusBar (ProjectMap.jsx) - Wave: Map Toolbar Enhancement v2 fix. Used
+ * to be CoordinateBadge, a genuine Leaflet "bottomright" control floating
+ * over the imagery in the map's own corner; now a plain footer strip
+ * attached to the map card's bottom edge (a flex row spanning
+ * .map-frame's full width, sibling of .map-canvas-wrap, not a child of
+ * it) - the class name is unchanged (only the layout) specifically so the
+ * existing e2e suite's `.map-coord-badge` locator keeps working. */
 .map-coord-badge {
-  background: var(--chrome-wash);
-  border: 1px solid var(--border-strong);
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 30px;
+  flex: none;
+  background: var(--surface);
+  border: none;
+  border-top: 1px solid var(--border);
   color: var(--text);
   font-family: var(--font-mono);
   font-size: 11px;
   white-space: nowrap;
-  padding: 2px 6px;
-  border-radius: var(--radius-sm);
+  padding: 0 12px;
+  border-radius: 0;
+  text-align: left;
+}
+
+/* AttributionInfo (ProjectMap.jsx) - Wave: Map Toolbar Enhancement v2 fix.
+ * Replaces Leaflet's own default attribution control (turned off via
+ * attributionControl={false}) - a plain overlay sibling inside
+ * .map-canvas-wrap (like .compass-indicator), bottom-left so it never
+ * collides with ScaleControl/the old CoordinateBadge's shared bottomright
+ * corner (now MapStatusBar, which isn't in this corner-stacking system at
+ * all any more - see its own docstring). */
+.attribution-info {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  z-index: var(--z-map-chrome);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--chrome-wash);
+  border-radius: 14px;
+  padding: 3px 6px 3px 10px;
+  font-size: 11px;
+  color: var(--text-muted);
   box-shadow: var(--shadow-card);
+}
+
+.attribution-info-text a {
+  color: inherit;
+}
+
+.attribution-info-toggle {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: none;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 700;
+  font-style: italic;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.attribution-info-toggle:hover {
+  background: var(--accent-strong);
+}
+
+/* The expanded panel - anchored above the pill (this corner is at the
+ * bottom of the map, so there's no room to grow downward) with a short
+ * fade + slight-rise entrance, same ~180ms treatment as the Layers/Basemap
+ * panels elsewhere in this file (this control's own smoothness bar isn't
+ * "no delay" the way the right-click context menu's is - it's a click-to-
+ * open info panel, not something that needs to track a cursor). */
+.attribution-info-panel {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  z-index: var(--z-map-overlay);
+  width: 220px;
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lift);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12.5px;
+  animation: panelIn 0.18s ease-out;
+}
+
+.attribution-info-panel a {
+  padding: 6px 8px;
+  border-radius: 6px;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.attribution-info-panel a:hover {
+  background: var(--surface-hover);
+  color: var(--accent-strong);
+}
+
+.attribution-info-shortcuts {
+  margin-top: 4px;
+  padding: 8px 8px 2px;
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.attribution-info-shortcuts-title {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin-bottom: 2px;
 }
 
 .icon-button {

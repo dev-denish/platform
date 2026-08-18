@@ -178,12 +178,45 @@ export const BASEMAPS = [
 /** Display order + labels for the Basemap panel's source tabs (Wave: Basemap
  * panel). Google first - it's the one source this pass actually built,
  * mirroring the mockup's Google-first tab order. */
+// `termsUrl`/`reportUrl` (Wave: Map Toolbar Enhancement v2 - attribution info
+// toggle) - each source's own REAL terms-of-use and map-error-reporting
+// pages, not placeholders. OSM's own /fixthemap is its actual official
+// "report a map problem" page; Esri/Google/Carto don't publish an
+// imagery-specific equivalent, so those two point at each provider's general
+// support/feedback channel instead.
 export const BASEMAP_SOURCES = [
-  { key: "google", label: "Google" },
-  { key: "esri", label: "Esri" },
-  { key: "carto", label: "Carto" },
-  { key: "osm", label: "OpenStreetMap" },
+  {
+    key: "google",
+    label: "Google",
+    termsUrl: "https://www.google.com/help/terms_maps/",
+    reportUrl: "https://support.google.com/maps/answer/3094088",
+  },
+  {
+    key: "esri",
+    label: "Esri",
+    termsUrl: "https://www.esri.com/en-us/legal/terms/full-master-agreement",
+    reportUrl: "https://support.esri.com/",
+  },
+  {
+    key: "carto",
+    label: "Carto",
+    termsUrl: "https://carto.com/attributions",
+    reportUrl: "https://carto.com/contact/",
+  },
+  {
+    key: "osm",
+    label: "OpenStreetMap",
+    termsUrl: "https://www.openstreetmap.org/copyright",
+    reportUrl: "https://www.openstreetmap.org/fixthemap",
+  },
 ];
+
+/** Falls back to the `google` entry (arbitrary but always present) so an
+ * unknown/stale basemap source never leaves the attribution info panel with
+ * dead links. */
+export function basemapSourceInfo(sourceKey) {
+  return BASEMAP_SOURCES.find((s) => s.key === sourceKey) ?? BASEMAP_SOURCES[0];
+}
 
 /** Falls back to the first entry so an unknown/stale stored mode still renders
  * a basemap rather than nothing. */
