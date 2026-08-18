@@ -191,6 +191,13 @@ _AUTHORED_LIMITATIONS: dict[str, str] = {
         "masked and excluded from the boundary statistics, and years with no cloud-"
         "free coverage in the season window produce no result for that year."
     ),
+    # FOLLOW-UP (not urgent, carbon-mrv-vm0047 review, 2026-08-18): like arvi/psri
+    # below, "[-1, 1]" here is an applied clamp, not a mathematical bound - EVI's
+    # denominator (NIR + 6*Red - 7.5*Blue + 1) can approach zero, so out-of-range
+    # pixels are possible the same way they are for arvi/psri. This entry predates
+    # the arvi/psri fix and was deliberately left unchanged then; when picked up,
+    # apply the same "applied default rather than a mathematical bound ... check the
+    # out-of-range pixel count before reading the mean" wording those two use.
     "evi": (
         "Sentinel-2-only implementation, restricted to the configured season window "
         "within each requested year; index values outside the valid [-1, 1] range are "
