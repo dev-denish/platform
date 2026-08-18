@@ -27,6 +27,10 @@ test.describe("PDF report generation", () => {
     const hansenRow = panel.locator("label", { hasText: "Global Forest Change (Hansen)" });
     await expect(hansenRow).toBeVisible({ timeout: 15_000 });
     await hansenRow.locator('input[type="checkbox"]').check();
+    // No report type is pre-selected (Wave: ai-report-narrative, Phase 4) -
+    // this test isn't exercising that choice itself, so it just picks the
+    // plain system-generated option to proceed.
+    await panel.locator('input[type="radio"][value="system"]').check();
 
     await panel.getByRole("button", { name: /generate report/i }).click();
 
@@ -49,6 +53,94 @@ test.describe("PDF report generation", () => {
     // A real report with a map image + methodology text is comfortably
     // larger than a trivial/empty PDF stub.
     expect(bytes.length).toBeGreaterThan(5_000);
+  });
+
+  test("report type: neither option pre-selected, disclosure and sections wire to real data, correct report_type sent", async ({ page }) => {
+    await login(page, ADMIN);
+    await page.goto("/projects");
+    await page.getByRole("link", { name: QA_PROJECT_NAME }).click();
+    await expect(page).toHaveURL(/\/projects\/[\w-]+/);
+    const projectId = page.url().match(/\/projects\/([\w-]+)/)[1];
+    const token = await page.evaluate(() => sessionStorage.getItem("dmrv.access_token"));
+
+    const refreshRes = await page.request.post(
+      `${API_BASE}/projects/${projectId}/analyses/hansen_gfc/refresh`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    expect(refreshRes.ok()).toBe(true);
+
+    // The real disclosure string this run's backend actually serves -
+    // asserted against verbatim below, never a hardcoded copy that could
+    // silently drift from AI_NARRATIVE_DISCLOSURE_TEMPLATE.
+    const optionsRes = await page.request.get(`${API_BASE}/projects/${projectId}/report/options`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(optionsRes.ok()).toBe(true);
+    const { ai_narrative_disclosure: disclosure } = await optionsRes.json();
+    expect(disclosure.length).toBeGreaterThan(20);
+
+    await page.getByRole("button", { name: "Dashboard" }).click();
+    const panel = page.locator("section.panel", { hasText: "PDF report" });
+    const hansenRow = panel.locator("label", { hasText: "Global Forest Change (Hansen)" });
+    await expect(hansenRow).toBeVisible({ timeout: 15_000 });
+
+    const systemRadio = panel.locator('input[type="radio"][value="system"]');
+    const aiRadio = panel.locator('input[type="radio"][value="ai"]');
+    const generateBtn = panel.getByRole("button", { name: /generate report/i });
+
+    // Neither radio pre-checked on first render - the deliberate deviation
+    // from the mockup (no default that implies consent to either report type).
+    await expect(systemRadio).not.toBeChecked();
+    await expect(aiRadio).not.toBeChecked();
+    // No disclosure box before the AI option is even reachable/selected.
+    await expect(panel.getByText(disclosure)).toHaveCount(0);
+    // No "Included sections" chips yet - nothing selected in the checklist.
+    await expect(panel.getByText("Included sections")).toHaveCount(0);
+
+    // Selecting an analysis alone must not enable Generate - a report_type
+    // pick is required too.
+    await hansenRow.locator('input[type="checkbox"]').check();
+    await expect(generateBtn).toBeDisabled();
+    await expect(panel.getByText("Included sections")).toBeVisible();
+    await expect(panel.locator(".report-section-chip", { hasText: "Global Forest Change (Hansen)" })).toBeVisible();
+
+    // Selecting AI reveals the disclosure box, rendered verbatim.
+    await aiRadio.check();
+    await expect(panel.locator(".report-type-disclosure")).toHaveText(disclosure);
+    await expect(generateBtn).toBeEnabled();
+
+    // Switching back to system hides the disclosure again.
+    await systemRadio.check();
+    await expect(panel.locator(".report-type-disclosure")).toHaveCount(0);
+    await expect(generateBtn).toBeEnabled();
+
+    // Assert the exact POST body for the "system" choice.
+    const systemPost = page.waitForRequest(
+      (req) => req.url().endsWith(`/projects/${projectId}/report`) && req.method() === "POST"
+    );
+    await generateBtn.click();
+    const systemReq = await systemPost;
+    expect(systemReq.postDataJSON()).toEqual({
+      analysis_ids: expect.arrayContaining(["hansen_gfc"]),
+      report_type: "system",
+    });
+
+    // Reset and re-run picking AI this time, to assert its POST body too.
+    await expect(panel.getByRole("button", { name: /download report|try again/i })).toBeVisible({
+      timeout: 90_000,
+    });
+    const resetBtn = panel.getByRole("button", { name: /generate another|try again/i });
+    await resetBtn.click();
+    await aiRadio.check();
+    const aiPost = page.waitForRequest(
+      (req) => req.url().endsWith(`/projects/${projectId}/report`) && req.method() === "POST"
+    );
+    await generateBtn.click();
+    const aiReq = await aiPost;
+    expect(aiReq.postDataJSON()).toEqual({
+      analysis_ids: expect.arrayContaining(["hansen_gfc"]),
+      report_type: "ai",
+    });
   });
 
   test("a project with no computed analyses shows an honest empty state, never a fake option", async ({ page }) => {

@@ -7,12 +7,16 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from app.domain.analysis_catalog import CATALOG, get_catalog_entry
+import pytest
+
+from app.domain.analysis_catalog import CATALOG, REAL_ANALYSIS_IDS, get_catalog_entry
 from app.services.index_summary import DESCRIPTIVE_ONLY_TRAILER
 from app.services.report_content import (
     MULTI_YEAR_INDEX_IDS,
     ClassRow,
     build_section_content,
+    has_change_data,
+    has_temporal_data,
     is_multi_year_index,
 )
 
@@ -43,21 +47,40 @@ def test_description_is_the_exact_catalog_string_not_reworded():
     assert section.description is entry["description"]
 
 
-def test_note_and_summary_are_the_exact_stats_strings_not_reworded():
+def test_note_is_the_exact_stats_string_not_reworded():
     entry = get_catalog_entry("ndvi")
     note_text = "Boundary-mean of a cloud-masked, pre-monsoon (Feb-May) Sentinel-2 composite per year."
-    summary_text = "2026: NDVI averages 0.55 across the boundary - moderate. " + DESCRIPTIVE_ONLY_TRAILER
     stats = {
         "series": {"2025": 0.5, "2026": 0.55},
         "distribution": {
             "2026": {"mean": 0.55, "std_dev": 0.1, "min": -0.1, "max": 0.9,
                       "histogram": {"bin_edges": [], "counts": []}, "out_of_range_pixel_count": 0},
         },
-        "summary": summary_text, "coverage_pct": 98.0, "note": note_text,
+        "coverage_pct": 98.0, "note": note_text,
     }
     section = build_section_content(entry, "ndvi", _NOW, stats, None)
     assert section.note is note_text
-    assert section.summary is summary_text
+
+
+def test_narrative_executive_summary_is_built_from_the_real_numbers_not_a_stored_string():
+    """Wave: 11-section report restructure. Unlike the old `summary` field
+    (a verbatim passthrough of `stats["summary"]`), `narrative["executive_summary"]`
+    is RECOMPUTED here from the same underlying mean/coverage figures via
+    `report_deterministic_narrative.build_system_narrative` - it must reflect
+    the real mean (0.55), not whatever unrelated string `stats["summary"]`
+    happens to hold."""
+    entry = get_catalog_entry("ndvi")
+    stats = {
+        "series": {"2025": 0.5, "2026": 0.55},
+        "distribution": {
+            "2026": {"mean": 0.55, "std_dev": 0.1, "min": -0.1, "max": 0.9,
+                      "histogram": {"bin_edges": [], "counts": []}, "out_of_range_pixel_count": 0},
+        },
+        "coverage_pct": 98.0,
+    }
+    section = build_section_content(entry, "ndvi", _NOW, stats, None)
+    assert "0.55" in section.narrative["executive_summary"]
+    assert section.narrative["executive_summary"] != "unrelated stored string"
 
 
 def test_disclaimer_is_the_same_constant_every_analysis_type_gets():
@@ -159,3 +182,98 @@ def test_coverage_pct_passes_through_unmodified():
     stats = {"class_area_ha": {}, "coverage_pct": 87.3}
     section = build_section_content(entry, "dynamic_world", _NOW, stats, None)
     assert section.coverage_pct == 87.3
+
+
+# --------------------------------------------------------------------------
+# Wave: 11-section report restructure - has_temporal_data/has_change_data,
+# and the 6 always-populated deterministic sections.
+# --------------------------------------------------------------------------
+
+
+def test_has_temporal_data_requires_at_least_two_real_data_points():
+    assert has_temporal_data({"series": {"2025": 0.4, "2026": 0.5}})
+    assert not has_temporal_data({"series": {"2026": 0.5}})
+    assert not has_temporal_data({"series": {"2025": None, "2026": 0.5}})
+    assert has_temporal_data({"class_area_ha_by_year": {"2020": {}, "2023": {}}})
+    assert not has_temporal_data({"class_area_ha_by_year": {"2023": {}}})
+    assert not has_temporal_data({"class_area_ha": {}})
+
+
+def test_has_change_data_is_true_only_for_a_real_non_empty_loss_by_year():
+    assert has_change_data({"loss_area_ha_by_year": {"2010": 2.0}})
+    assert not has_change_data({"loss_area_ha_by_year": {}})
+    assert not has_change_data({})
+
+
+def test_temporal_analysis_omitted_for_a_single_year_io_lulc_row_present_for_two_years():
+    """The same catalog id (io_lulc) must produce a `temporal_analysis` key
+    when its stored row actually has >=2 years, and omit it when the row is
+    single-year - this is a per-ROW capability, not a per-id one (see
+    `has_temporal_data`'s own docstring)."""
+    entry = get_catalog_entry("io_lulc")
+    single_year_stats = {
+        "class_area_ha_by_year": {"2023": {"Trees": 12.0}}, "coverage_pct": 100.0,
+    }
+    multi_year_stats = {
+        "class_area_ha_by_year": {"2020": {"Trees": 10.0}, "2023": {"Trees": 12.0}},
+        "coverage_pct": 100.0,
+    }
+    single = build_section_content(entry, "io_lulc", _NOW, single_year_stats, None)
+    multi = build_section_content(entry, "io_lulc", _NOW, multi_year_stats, None)
+    assert "temporal_analysis" not in single.narrative
+    assert "temporal_analysis" in multi.narrative
+
+
+def test_change_analysis_present_only_for_hansen():
+    hansen_entry = get_catalog_entry("hansen_gfc")
+    hansen_stats = {
+        "canopy_cover_threshold_pct": 15.0, "baseline_forest_area_ha": 100.0,
+        "gain_area_ha_2000_2012": 5.0, "loss_area_ha_by_year": {"2010": 2.0},
+        "coverage_pct": 100.0,
+    }
+    hansen_section = build_section_content(hansen_entry, "hansen_gfc", _NOW, hansen_stats, None)
+    assert "change_analysis" in hansen_section.narrative
+    assert "temporal_analysis" not in hansen_section.narrative
+
+    esa_entry = get_catalog_entry("esa_worldcover")
+    esa_stats = {"class_area_ha": {"Tree cover": 42.0}, "coverage_pct": 100.0}
+    esa_section = build_section_content(esa_entry, "esa_worldcover", _NOW, esa_stats, None)
+    assert "change_analysis" not in esa_section.narrative
+    assert "temporal_analysis" not in esa_section.narrative
+
+
+@pytest.mark.parametrize("analysis_id", sorted(REAL_ANALYSIS_IDS))
+def test_the_6_deterministic_sections_are_always_populated_for_every_real_analysis_type(
+    analysis_id,
+):
+    """Carbon Project Relevance/Methodology/Data & Processing/Data Quality/
+    Limitations must never be empty for any of the 13 real catalog ids -
+    these are never AI-eligible and must always render something."""
+    entry = get_catalog_entry(analysis_id)
+    minimal_stats_by_shape = {
+        "canopy_cover_threshold_pct": 15.0, "baseline_forest_area_ha": 1.0,
+        "gain_area_ha_2000_2012": 0.0, "loss_area_ha_by_year": {}, "coverage_pct": 90.0,
+    } if analysis_id == "hansen_gfc" else (
+        {"class_area_ha_by_year": {"2023": {"Trees": 1.0}}, "coverage_pct": 90.0}
+        if analysis_id in ("io_lulc", "modis_lulc") else (
+            {"series": {"2026": 0.4}, "distribution": {
+                "2026": {"mean": 0.4, "std_dev": 0.1, "min": 0.1, "max": 0.7,
+                         "histogram": {"bin_edges": [-1, 1], "counts": [1]},
+                         "out_of_range_pixel_count": 0},
+            }, "coverage_pct": 90.0}
+            if entry["category"] == "Vegetation Indices" else (
+                {"scene_date": "2026-01-01", "coverage_pct": 90.0}
+                if entry["category"] == "Raw Imagery" else
+                {"class_area_ha": {"Tree cover": 1.0}, "coverage_pct": 90.0}
+            )
+        )
+    )
+    section = build_section_content(entry, analysis_id, _NOW, minimal_stats_by_shape, None)
+    assert section.methodology_text.strip()
+    assert section.data_processing_text.strip()
+    assert section.data_quality_text.strip()
+    assert section.carbon_project_relevance.strip()
+    assert section.limitations_text.strip()
+    assert section.narrative["executive_summary"].strip()
+    assert section.narrative["spatial_distribution"].strip()
+    assert section.narrative["key_findings"].strip()

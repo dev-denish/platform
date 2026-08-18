@@ -9,11 +9,17 @@ fields the frontend already renders unconditionally and inline - `description`
 (app/domain/analysis_catalog.py, the imagery-source citation) and
 `stats["note"]` (gee_analysis_service.py, the methodology/dataset-caveat text,
 generated once at compute time and stored in the DB row) - never re-derived or
-re-worded. `stats["summary"]` (vegetation indices only) is the same
-deterministic clause-generator paragraph from app/services/index_summary.py.
-DESCRIPTIVE_ONLY_TRAILER is that same module's fixed disclaimer, appended to
-every section regardless of analysis type (not just the ones whose summary
-happens to already end with it)."""
+re-worded. DESCRIPTIVE_ONLY_TRAILER is index_summary.py's fixed disclaimer,
+appended to every section regardless of analysis type.
+
+Wave: 11-section report restructure. `narrative` (the 5 AI-eligible fields) is
+built here by `report_deterministic_narrative.build_system_narrative` for
+every analysis type - not just the 5 vegetation indices `index_summary.py`
+covers - and is the SYSTEM-report wording by default; `report_service.py`
+overwrites it wholesale with AI wording for `report_type=ai`. The other 6
+sections (methodology/data-processing/statistics/carbon-relevance/data-
+quality/limitations, sourced from `report_fixed_text.py`) are identical
+between both report types and never AI-eligible."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -21,6 +27,13 @@ from datetime import datetime
 from typing import Any
 
 from app.services.index_summary import DESCRIPTIVE_ONLY_TRAILER
+from app.services.report_fixed_text import (
+    carbon_project_relevance,
+    data_processing_text,
+    data_quality_text,
+    limitations_text,
+    methodology_text,
+)
 
 # The 15 catalog ids whose stats carry a `series`/`distribution` year-series -
 # see gee_analysis_service.py's `_annual_index_series`, the one function that
@@ -36,6 +49,25 @@ MULTI_YEAR_INDEX_IDS = frozenset({
 
 def is_multi_year_index(analysis_id: str) -> bool:
     return analysis_id in MULTI_YEAR_INDEX_IDS
+
+
+def has_temporal_data(stats: dict[str, Any]) -> bool:
+    """A real multi-point time series exists in THIS stored result - not a
+    per-analysis-id lookup. io_lulc/modis_lulc are multi-year CAPABLE but
+    usually stored single-year (the catalog's own `year_mode_default`), so
+    only the stats dict actually in hand knows which one this row is; a
+    static table could only ever be wrong for one side of that."""
+    if "series" in stats:
+        return sum(v is not None for v in stats["series"].values()) >= 2
+    if "class_area_ha_by_year" in stats:
+        return len(stats["class_area_ha_by_year"]) >= 2
+    return False
+
+
+def has_change_data(stats: dict[str, Any]) -> bool:
+    """Real annual before/after change data - only hansen_gfc's
+    `loss_area_ha_by_year` today."""
+    return bool(stats.get("loss_area_ha_by_year"))
 
 
 @dataclass(frozen=True)
@@ -62,9 +94,24 @@ class ReportSection:
     computed_at: datetime
     coverage_pct: float | None
     description: str
-    summary: str | None  # verbatim stats["summary"] - vegetation indices only
-    note: str | None  # verbatim stats["note"]
+    note: str | None  # verbatim stats["note"] - consumed internally by limitations_text()
     disclaimer: str
+    # The 5 AI-eligible sections (Wave: 11-section report restructure). Keys:
+    # executive_summary/spatial_distribution/key_findings always present,
+    # temporal_analysis/change_analysis only when has_temporal_data/
+    # has_change_data say so - report_pdf.py omits that heading entirely when
+    # its key is absent, same truthy-check idiom as every other optional
+    # block here. System-report wording by default (report_content.py builds
+    # it below); report_service.py overwrites this dict wholesale with the AI
+    # wording for report_type=ai.
+    narrative: dict[str, str] = field(default_factory=dict)
+    # The remaining 6 sections - always populated, never AI-eligible, always
+    # identical between system and AI reports.
+    methodology_text: str = ""
+    data_processing_text: str = ""
+    data_quality_text: str = ""
+    carbon_project_relevance: str = ""
+    limitations_text: str = ""
     # Latest-year Mean/Variability/Min/Max, same 4 labels/values
     # IndexDistribution renders (AnalysisPanel.jsx) - vegetation indices only.
     stats_grid: list[StatRow] = field(default_factory=list)
@@ -155,6 +202,20 @@ def build_section_content(
             StatRow("Max", year_stats.get("max")),
         ]
 
+    # Deferred import: report_deterministic_narrative.py imports
+    # has_temporal_data/has_change_data FROM this module, so a top-level
+    # import here would be circular - same reasoning as
+    # report_service.py's own deferred import of report_jobs.
+    from app.services.report_deterministic_narrative import build_system_narrative
+
+    note = stats.get("note")
+    methodology = stats.get("methodology")
+    out_of_range = None
+    if stats_grid_year and "distribution" in stats:
+        out_of_range = (stats["distribution"].get(stats_grid_year) or {}).get(
+            "out_of_range_pixel_count"
+        )
+
     return ReportSection(
         analysis_id=analysis_id,
         name=catalog_entry["name"],
@@ -162,9 +223,20 @@ def build_section_content(
         computed_at=computed_at,
         coverage_pct=stats.get("coverage_pct"),
         description=catalog_entry["description"],
-        summary=stats.get("summary"),
-        note=stats.get("note"),
+        note=note,
         disclaimer=DESCRIPTIVE_ONLY_TRAILER,
+        narrative=build_system_narrative(
+            analysis_id, catalog_entry["name"], catalog_entry["category"], stats
+        ),
+        methodology_text=methodology_text(analysis_id, catalog_entry["description"], methodology),
+        data_processing_text=data_processing_text(analysis_id, methodology),
+        data_quality_text=data_quality_text(
+            stats.get("coverage_pct"),
+            out_of_range_pixel_count=out_of_range,
+            has_cloud_masking="cloud_masking" in (methodology or {}),
+        ),
+        carbon_project_relevance=carbon_project_relevance(analysis_id),
+        limitations_text=limitations_text(analysis_id, note),
         stats_grid=stats_grid,
         stats_grid_year=stats_grid_year,
         series=series,
