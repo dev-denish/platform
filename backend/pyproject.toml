@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "dmrv-platform-backend"
 version = "1.0.0"
@@ -68,6 +72,15 @@ dev = [
     "pypdf==5.1.0",
 ]
 s3 = ["boto3==1.35.90"]
+
+# Repo root is a flat layout with several non-package top-level dirs
+# (migrations/, scripts/, tests/) alongside the actual "app" package -
+# without this, setuptools' auto-discovery aborts with "Multiple top-level
+# packages discovered in a flat-layout: ['app', 'migrations']" on any
+# `pip install -e .`/`pip install -e ".[dev]"` (confirmed by reproducing
+# that exact error against this file before adding this section).
+[tool.setuptools.packages.find]
+include = ["app*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

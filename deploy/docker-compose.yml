@@ -35,6 +35,7 @@ services:
   migrate:
     build:
       context: ../backend
+      target: runtime
     command: ["sh", "-c", "alembic upgrade head"]
     environment:
       DMRV_ENVIRONMENT: ${DMRV_ENVIRONMENT:-dev}
@@ -51,6 +52,7 @@ services:
   backend:
     build:
       context: ../backend
+      target: runtime
     environment:
       DMRV_ENVIRONMENT: ${DMRV_ENVIRONMENT:-dev}
       DMRV_DB_HOST: db
@@ -116,6 +118,7 @@ services:
   worker:
     build:
       context: ../backend
+      target: runtime
     command: ["sh", "-c", "arq app.workers.arq_worker.WorkerSettings"]
     # The image's Dockerfile HEALTHCHECK probes /livez over HTTP - meaningful for
     # the `backend` service, meaningless here (arq has no HTTP server), and would
