@@ -41,15 +41,27 @@ _ANNUAL_LULC_RELEVANCE = (
 # The 12 vnv_* band-math indices (Wave: VNV band indices) share this same
 # closing frame regardless of which formula each one's own opening sentence
 # describes - computed by the self-hosted VNV Pipeline directly from
-# Sentinel-2 band math (see app/services/vnv_band_indices.py), a DIFFERENT
-# compute path from the equivalent bare-id Earth-Engine index above, not a
-# duplicate of it. `vnv_ndfi` (spectral unmixing, a confirmed masking
-# failure mode) is deliberately NOT built from this suffix - see its own
-# bespoke entry below.
+# Sentinel-2 band math (see app/services/vnv_band_indices.py). `vnv_ndfi`
+# (spectral unmixing, a confirmed masking failure mode) is deliberately NOT
+# built from this suffix - see its own bespoke entry below.
+#
+# carbon-mrv-vm0047 review (2026-08-19) corrected this from an earlier
+# "the equivalent Earth Engine-based index above" phrasing: "above" is
+# positional and false (report sections render in caller-supplied order,
+# report_service.py, not this dict's order - a VNV-only report has no GEE
+# section to point at), and "equivalent" overstates - the two paths differ
+# in compositing (this one: a 90-day trailing, least-cloud-first, up-to-4-
+# scene mosaic), cloud masking (SCL classes, not Cloud Score+), and offset
+# handling, so even the best-agreeing pair (vnv_ndvi vs ndvi, 5% apart on a
+# real identical AOI/date test) isn't the same computation. vnv_psri's own
+# entry goes further still - see its own note on why it isn't comparable to
+# GEE psri at all, not just numerically different.
 _VNV_BAND_INDEX_RELEVANCE_SUFFIX = (
-    " Computed by the self-hosted VNV Pipeline directly from Sentinel-2 band math (no "
-    "spectral unmixing), a different compute path from the equivalent Earth "
-    "Engine-based index above. Experimental - pending domain review. " + _DESCRIPTIVE_ONLY
+    " Computed by a separately implemented, self-hosted VNV Pipeline directly from "
+    "Sentinel-2 band math (no spectral unmixing) - not the same computation as the "
+    "similarly named Earth Engine index elsewhere in this catalog; absolute values "
+    "from the two are not interchangeable and should not be combined into a single "
+    "time series. Experimental - pending domain review. " + _DESCRIPTIVE_ONLY
 )
 
 CARBON_RELEVANCE: dict[str, str] = {
@@ -193,8 +205,9 @@ CARBON_RELEVANCE: dict[str, str] = {
     ) + _VNV_BAND_INDEX_RELEVANCE_SUFFIX,
     "vnv_ndwi": (
         "NDWI can support monitoring of surface water bodies and boundary hydrology "
-        "within the project boundary. Over vegetated land its signal is the inverse "
-        "of vnv_gndvi's."
+        "within the project boundary. It is not a carbon indicator, and its band "
+        "pair is the exact negation of vnv_gndvi's, not just an inverse over "
+        "vegetated land."
     ) + _VNV_BAND_INDEX_RELEVANCE_SUFFIX,
     "vnv_mndwi": (
         "MNDWI can support monitoring of standing water and boundary hydrology "
@@ -202,7 +215,9 @@ CARBON_RELEVANCE: dict[str, str] = {
     ) + _VNV_BAND_INDEX_RELEVANCE_SUFFIX,
     "vnv_ndmi": (
         "NDMI can support monitoring of vegetation canopy water content within the "
-        "project boundary, providing spatial evidence of moisture-stress conditions."
+        "project boundary, providing spatial evidence of moisture-stress conditions. "
+        "It uses the same NIR/SWIR1 bands as vnv_ndbi, negated, so the two are one "
+        "measurement reported two ways, not independent evidence."
     ) + _VNV_BAND_INDEX_RELEVANCE_SUFFIX,
     "vnv_nbr": (
         "NBR can support monitoring of fire and disturbance within the project "
@@ -217,15 +232,18 @@ CARBON_RELEVANCE: dict[str, str] = {
     ) + _VNV_BAND_INDEX_RELEVANCE_SUFFIX,
     "vnv_ndbi": (
         "NDBI can support screening for built-up or impervious surface within the "
-        "project boundary. It uses the same NIR/SWIR1 bands as vnv_ndmi, negated, so "
-        "the two are one measurement reported two ways, not independent evidence."
+        "project boundary, providing spatial evidence that may assist with detecting "
+        "encroachment worth further review. It does not itself determine land-use "
+        "change for accounting purposes, and it is not a vegetation or carbon "
+        "indicator. It uses the same NIR/SWIR1 bands as vnv_ndmi, negated, so the two "
+        "are one measurement reported two ways, not independent evidence."
     ) + _VNV_BAND_INDEX_RELEVANCE_SUFFIX,
     "vnv_arvi": (
         "ARVI can support vegetation monitoring with reduced sensitivity to "
         "atmospheric haze and aerosols compared to NDVI. Real-data testing found "
-        "this formula's own denominator can legitimately go negative on ordinary "
-        "land, so its values can exceed the usual [-1, 1] range more often than "
-        "NDVI's - see this analysis's own Limitations section."
+        "this formula's `2 x Red - Blue` term can legitimately go negative on "
+        "ordinary land, which pushes values above the usual [-1, 1] range more "
+        "often than NDVI's - see this analysis's own Limitations section."
     ) + _VNV_BAND_INDEX_RELEVANCE_SUFFIX,
     "vnv_gndvi": (
         "GNDVI can support vegetation monitoring using the green band's chlorophyll "
@@ -263,13 +281,34 @@ _REUSE_NOTE_AS_LIMITATIONS: frozenset[str] = frozenset({
 # Shared base for the 12 vnv_* band-math indices (Wave: VNV band indices) -
 # same "not GEE, fixed 90-day window" framing regardless of formula; each
 # entry above prepends its own real, index-specific caveat (if any) to this.
+#
+# carbon-mrv-vm0047 review (2026-08-19) added two corrections here:
+# (1) unlike every GEE vegetation index, this compute path applies NO
+#     value-range mask at all (see EXPECTED_RANGES's own docstring in
+#     vnv_band_indices.py: "not enforced or clamped anywhere") - the worker
+#     (vnv_analysis_jobs.py) reports flat min/max/mean over every finite
+#     pixel, so an out-of-range value (see vnv_evi/vnv_arvi's own entries)
+#     IS included in the reported mean, unlike the GEE indices' masked one.
+# (2) the BOA_ADD_OFFSET correction is a HARDCODED constant (-1000 raw DN),
+#     not read per-scene from each scene's own STAC metadata - it was
+#     verified against real CDSE STAC raster:scale/raster:offset fields for
+#     the scenes actually tested, and is only valid for Sentinel-2
+#     Processing Baseline >=04.00 (true for this pipeline's fixed 90-day
+#     trailing window, which can never reach further back than that
+#     baseline's 2022-01-25 cutover - see vnv_band_indices.py's own
+#     `_BOA_ADD_OFFSET_REFLECTANCE` comment). The original wording here
+#     ("verified against real CDSE STAC asset metadata") could be misread
+#     as a live, per-scene lookup; it is not.
 _VNV_BAND_INDEX_LIMITATIONS = (
     "Computed from a 90-day trailing Sentinel-2 composite (least-cloud-first mosaic "
     "of up to 4 scenes) via the self-hosted VNV Pipeline, not a caller-choosable "
-    "season/year window like the Earth Engine version of this index. Reflectance is "
-    "corrected for the Sentinel-2 L2A BOA_ADD_OFFSET (verified against real CDSE "
-    "STAC asset metadata) before this formula is applied. Experimental, pending "
-    "domain review - not for compliance reporting."
+    "season/year window like the Earth Engine version of this index. No value-range "
+    "mask is applied on this path - out-of-range pixels (if any for this index) are "
+    "retained in the reported min/max/mean, unlike the Earth Engine version, which "
+    "masks and excludes them. Reflectance is corrected using the fixed Sentinel-2 "
+    "L2A Processing Baseline >=04.00 BOA_ADD_OFFSET (-1000 digital numbers), verified "
+    "against real CDSE STAC asset metadata for the scenes tested, before this formula "
+    "is applied. Experimental, pending domain review - not for compliance reporting."
 )
 
 _AUTHORED_LIMITATIONS: dict[str, str] = {
@@ -367,6 +406,16 @@ _AUTHORED_LIMITATIONS: dict[str, str] = {
         "masked and excluded from the boundary statistics, and years with no cloud-"
         "free coverage in the season window produce no result for that year."
     ),
+    # FOLLOW-UP (not urgent, carbon-mrv-vm0047 review, 2026-08-19): "its
+    # denominator can go negative and cross zero" below describes the wrong
+    # mechanism - with denominator NIR+(2*Red-Blue), a NEGATIVE (2*Red-Blue)
+    # term makes the numerator EXCEED a still-positive denominator, pushing
+    # the ratio above +1 without the denominator ever crossing zero (worked
+    # against the VNV sibling's own real numbers: NIR~0.30, term~-0.08 ->
+    # 0.38/0.22 = 1.73, denominator never near zero). See vnv_arvi's own,
+    # corrected entry for the right mechanism and wording. Left unchanged
+    # here rather than silently edited, same convention the evi follow-up
+    # above already uses.
     "arvi": (
         "Sentinel-2-only implementation, restricted to the configured season window "
         "within each requested year; years with no cloud-free coverage in the season "
@@ -416,12 +465,19 @@ _AUTHORED_LIMITATIONS: dict[str, str] = {
     ),
     "vnv_ndvi": _VNV_BAND_INDEX_LIMITATIONS,
     "vnv_evi": (
-        "A near-zero-denominator guard masks the most unstable pixels, but a "
+        "A near-zero-denominator guard converts the most unstable pixels to no-data "
+        "(masking ~0.1% of a real test AOI, 205/241194 pixels) rather than reporting "
+        "them, which shows up here as a slightly lower coverage percentage, not as a "
+        "separate count - this analysis has no distribution/histogram breakdown. A "
         "smaller residual excursion beyond the documented [-1, 1] range can still "
-        "occur (observed max ~3.0 on a real test AOI) - see the out-of-range pixel "
-        "count before reading the mean. " + _VNV_BAND_INDEX_LIMITATIONS
+        "occur even after the guard (observed max ~3.0 on that same test AOI). "
+        + _VNV_BAND_INDEX_LIMITATIONS
     ),
-    "vnv_savi": _VNV_BAND_INDEX_LIMITATIONS,
+    "vnv_savi": (
+        "Its x1.5 soil-brightness factor gives it a mathematical range of [-1.5, "
+        "1.5], wider than the shared [-1, 1] most other indices here use - not an "
+        "error, just this formula's own exact range. " + _VNV_BAND_INDEX_LIMITATIONS
+    ),
     "vnv_ndwi": (
         "Its band pair is the exact negation of vnv_gndvi's (Green/NIR), so the two "
         "carry the same information with the sign reversed, not two independent "
@@ -433,7 +489,13 @@ _AUTHORED_LIMITATIONS: dict[str, str] = {
         "measurement reported two ways, not independent evidence. "
         + _VNV_BAND_INDEX_LIMITATIONS
     ),
-    "vnv_nbr": _VNV_BAND_INDEX_LIMITATIONS,
+    "vnv_nbr": (
+        "Published burn-severity classes are defined on a pre/post-fire difference "
+        "(dNBR), not on the single-date value shown here - and unlike the Earth "
+        "Engine version, this compute path has no caller-choosable year, so it "
+        "cannot construct a pre/post-fire pairing at all on its own. "
+        + _VNV_BAND_INDEX_LIMITATIONS
+    ),
     "vnv_bsi": _VNV_BAND_INDEX_LIMITATIONS,
     "vnv_ndbi": (
         "Uses the same NIR/SWIR1 bands as vnv_ndmi, negated, so the two are one "
@@ -442,11 +504,14 @@ _AUTHORED_LIMITATIONS: dict[str, str] = {
     ),
     "vnv_arvi": (
         "Can exceed the documented [-1, 1] range on real scenes (observed max 1.74 "
-        "on a real test AOI) - a genuine characteristic of this formula (its "
-        "denominator's sign can flip on ordinary land), not a divide-by-near-zero "
-        "bug. Testing confirmed no masking threshold both bounds it and preserves "
-        "coverage, so it is left unguarded and reported as-is. "
-        + _VNV_BAND_INDEX_LIMITATIONS
+        "on a real test AOI) - a genuine characteristic of this formula, not a "
+        "divide-by-near-zero bug: the denominator itself stays comfortably positive "
+        "(observed 0.09-0.89 on that same AOI), but its `2 x Red - Blue` term can go "
+        "negative on ordinary land, which makes the numerator exceed the denominator "
+        "and pushes the ratio above +1. Nothing is masked here (see this analysis's "
+        "own note on why no epsilon threshold both bounds it and preserves coverage), "
+        "so the reported max already reflects the full excursion - there is no "
+        "separate out-of-range count to check. " + _VNV_BAND_INDEX_LIMITATIONS
     ),
     "vnv_gndvi": (
         "Its band pair is the exact negation of vnv_ndwi's, so the two carry the "
@@ -454,9 +519,15 @@ _AUTHORED_LIMITATIONS: dict[str, str] = {
         "evidence. " + _VNV_BAND_INDEX_LIMITATIONS
     ),
     "vnv_psri": (
-        "Uses the standard NIR band as its denominator, not the red-edge band - the "
+        "Uses the standard NIR band as its denominator - this is the reference "
+        "document's own specified formula for this pipeline, not a fallback; the "
         "6-band Sentinel-2 raster this pipeline fetches has no red-edge band "
-        "available. " + _VNV_BAND_INDEX_LIMITATIONS
+        "available regardless. The Earth Engine version of PSRI uses the red-edge "
+        "band (B6) instead, a genuinely different denominator - the two are "
+        "different formulas, not the same index on a different compute path, and "
+        "their values are not comparable in any sense. It is a plain, unguarded "
+        "ratio (see vnv_band_indices.py's psri()) whose denominator can approach "
+        "zero over dark targets. " + _VNV_BAND_INDEX_LIMITATIONS
     ),
 }
 
@@ -471,11 +542,24 @@ def limitations_text(analysis_id: str, note: str | None) -> str:
 
 # ------------------------------------------------- Methodology fallback (sections 2 & 3)
 
-# For the 6 ids with no real `stats["methodology"]` dict (hansen_gfc,
+# For the ids with no real `stats["methodology"]` dict (hansen_gfc,
 # dynamic_world, esa_worldcover, the 3 browse types) - same field names the
 # real dict uses (`_land_cover_methodology`/`_veg_index_methodology` in
 # gee_analysis_service.py), so `methodology_text`/`data_processing_text` below
 # treat both sources uniformly.
+#
+# carbon-mrv-vm0047 review (2026-08-19): the VNV Pipeline's own real job
+# stats (run_vnv_band_index_analysis, vnv_analysis_jobs.py) carry no
+# `methodology` dict either, and had NO fallback entry here - so
+# `data_processing_text` fell through to its own generic "Processed
+# directly from the source dataset with no additional compositing" line,
+# which is flatly false for a 90-day, up-to-4-scene composite (contradicts
+# the Limitations text in the SAME report). Deliberately no
+# `valid_range` key on any of these 13 - `methodology_text` hardcodes
+# "values outside this range are masked" for that key, which is true for
+# every GEE entry but false here (see `_VNV_BAND_INDEX_LIMITATIONS`'s own
+# "no value-range mask is applied" correction) - adding one would
+# reintroduce the exact bug this fallback is fixing.
 METHODOLOGY_FALLBACK: dict[str, dict[str, Any]] = {
     "hansen_gfc": {
         "dataset": "UMD/Google/USGS/NASA Global Forest Change v1.11",
@@ -506,6 +590,24 @@ METHODOLOGY_FALLBACK: dict[str, dict[str, Any]] = {
         "dataset": "Landsat 8/9 Collection 2 Level 2",
         "resolution_m": 30,
         "years_available": "2013-present",
+    },
+    "vnv_ndfi": {
+        "dataset": "Sentinel-2 L2A (via CDSE, not Earth Engine) -> ForesToolboxRS spectral unmixing",
+        "resolution_m": 10,
+        "imagery_source": "Sentinel-2 (self-hosted VNV Pipeline, via CDSE)",
+        "season_window": "90-day trailing composite, no caller-choosable window",
+    },
+    **{
+        f"vnv_{name}": {
+            "dataset": "Sentinel-2 L2A (via CDSE, not Earth Engine)",
+            "resolution_m": 10,
+            "imagery_source": "Sentinel-2 (self-hosted VNV Pipeline, via CDSE)",
+            "season_window": "90-day trailing composite, no caller-choosable window",
+        }
+        for name in (
+            "ndvi", "evi", "savi", "ndwi", "mndwi", "ndmi",
+            "nbr", "bsi", "ndbi", "arvi", "gndvi", "psri",
+        )
     },
 }
 
