@@ -231,7 +231,15 @@ def _section_page(
             for class_row in section.class_breakdown:
                 _line(pdf, 5.5, f"  {class_row.name}: {_format_area(class_row.area_ha)}")
         if section.stats_grid:
-            _line(pdf, 5.5, f"Distribution statistics ({section.stats_grid_year})")
+            # `stats_grid_year` is None for a VNV band-index result (one
+            # rolling 90-day window, no year axis - see report_content.py's
+            # own `"index" in stats` branch) - same None-safe pattern
+            # `class_breakdown`'s own label above already uses, so this never
+            # literally prints "Distribution statistics (None)".
+            stats_label = "Distribution statistics" if section.stats_grid_year is None else (
+                f"Distribution statistics ({section.stats_grid_year})"
+            )
+            _line(pdf, 5.5, stats_label)
             for stat_row in section.stats_grid:
                 value = f"{stat_row.value:.3f}" if stat_row.value is not None else "no data"
                 _line(pdf, 5.5, f"  {stat_row.label}: {value}")

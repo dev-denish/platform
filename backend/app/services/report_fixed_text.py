@@ -560,6 +560,39 @@ def limitations_text(analysis_id: str, note: str | None) -> str:
 # every GEE entry but false here (see `_VNV_BAND_INDEX_LIMITATIONS`'s own
 # "no value-range mask is applied" correction) - adding one would
 # reintroduce the exact bug this fallback is fixing.
+#
+# carbon-mrv-vm0047 review, report-generation fix pass: every VNV entry below
+# was ALSO missing a `cloud_masking` key, even though `cdse_ingestion.py`'s
+# `_process_s2_scene` genuinely applies real SCL-based masking before this
+# path ever sees a pixel (`_INVALID_SCL_CLASSES = {0, 1, 3, 8, 9, 10}` - see
+# that module's own comment for exactly which classes and why) - so
+# `data_quality_text`'s "Cloud-affected pixels were masked before computing
+# statistics." sentence never appeared for any VNV analysis, silently
+# under-disclosing real masking that did happen.
+#
+# carbon-mrv-vm0047 review (M2): the first version of this text named only
+# the excluded classes plus 2 retained ones (dark-area, snow), which read as
+# though everything else was excluded - not true, and with no numeric SCL
+# ids an auditor had no way to verify exactly which classes were meant (SCL
+# class names/definitions have shifted across ESA product baselines). Now
+# names every excluded AND every retained class by its numeric SCL id
+# (matching `_INVALID_SCL_CLASSES` in cdse_ingestion.py exactly), and states
+# the real consequence of retaining class 7 (unclassified - cloud-adjacent in
+# some ESA SCL baseline docs, previously undisclosed) rather than only the
+# two classes retained for a stated reason.
+_VNV_CLOUD_MASKING = (
+    "Sentinel-2 Scene Classification Layer (SCL)-based per-pixel masking, applied to "
+    "each scene before compositing. Excluded: SCL 0 (no data), 1 (saturated or "
+    "defective), 3 (cloud shadow), 8 (cloud medium probability), 9 (cloud high "
+    "probability), 10 (thin cirrus). Retained: SCL 2 (dark area), 4 (vegetation), "
+    "5 (bare soil), 6 (water), 7 (unclassified), 11 (snow/ice) - classes 2 and 11 are "
+    "retained deliberately, since genuinely dark or snow-covered ground is real observed "
+    "data and discarding it would bias a vegetation time series toward clear, sunlit "
+    "conditions only; the consequence is that shadow or low-confidence cloud the SCL did "
+    "not label as class 3 or class 8/9 can remain in the composite and depress index "
+    "values locally."
+)
+
 METHODOLOGY_FALLBACK: dict[str, dict[str, Any]] = {
     "hansen_gfc": {
         "dataset": "UMD/Google/USGS/NASA Global Forest Change v1.11",
@@ -596,6 +629,7 @@ METHODOLOGY_FALLBACK: dict[str, dict[str, Any]] = {
         "resolution_m": 10,
         "imagery_source": "Sentinel-2 (self-hosted VNV Pipeline, via CDSE)",
         "season_window": "90-day trailing composite, no caller-choosable window",
+        "cloud_masking": _VNV_CLOUD_MASKING,
     },
     **{
         f"vnv_{name}": {
@@ -603,6 +637,7 @@ METHODOLOGY_FALLBACK: dict[str, dict[str, Any]] = {
             "resolution_m": 10,
             "imagery_source": "Sentinel-2 (self-hosted VNV Pipeline, via CDSE)",
             "season_window": "90-day trailing composite, no caller-choosable window",
+            "cloud_masking": _VNV_CLOUD_MASKING,
         }
         for name in (
             "ndvi", "evi", "savi", "ndwi", "mndwi", "ndmi",
@@ -612,14 +647,21 @@ METHODOLOGY_FALLBACK: dict[str, dict[str, Any]] = {
 }
 
 
-def _methodology_dict(analysis_id: str, methodology: dict[str, Any] | None) -> dict[str, Any]:
+def methodology_dict(analysis_id: str, methodology: dict[str, Any] | None) -> dict[str, Any]:
     """Falls back to `{}` (not a `KeyError`) for an id with neither a real
     `stats["methodology"]` dict nor a fallback entry - e.g. a legacy stored
     result from before the methodology dict existed, or a test fixture that
     only cares about a different field. `methodology_text`/
     `data_processing_text` below both already treat "field absent" as "say
     nothing about it", so an empty dict degrades gracefully rather than
-    crashing the whole report."""
+    crashing the whole report.
+
+    Public (not `_`-prefixed): `report_content.py`'s `has_cloud_masking` flag
+    must resolve through this SAME fallback, not just re-read the raw
+    `stats.get("methodology")` - see that call site's own comment for the
+    bug this fixes (VNV's real stats never carry a `methodology` key, so the
+    raw check silently never fired even once `METHODOLOGY_FALLBACK` gained a
+    `cloud_masking` entry for VNV)."""
     if methodology is not None:
         return methodology
     return METHODOLOGY_FALLBACK.get(analysis_id, {})
@@ -631,7 +673,7 @@ def methodology_text(
     """'What is being measured' - the catalog description plus whichever of
     formula/valid_range (vegetation indices) or dataset identity/resolution
     (everything else) the source dict carries."""
-    m = _methodology_dict(analysis_id, methodology)
+    m = methodology_dict(analysis_id, methodology)
     parts = [description]
     if "formula" in m:
         parts.append(f"Formula: {m['formula']}.")
@@ -650,7 +692,7 @@ def data_processing_text(analysis_id: str, methodology: dict[str, Any] | None) -
     season window/computed years (vegetation indices), or years computed vs
     available (annual land cover), or years available alone (the 6 fallback
     types, which have no per-request processing to describe)."""
-    m = _methodology_dict(analysis_id, methodology)
+    m = methodology_dict(analysis_id, methodology)
     parts = []
     if "imagery_source" in m:
         parts.append(f"Imagery source: {m['imagery_source']}.")
@@ -679,10 +721,22 @@ def data_quality_text(
     has_cloud_masking: bool = False,
 ) -> str:
     """Deterministic, never AI-decided - built only from fields already on the
-    stored result (coverage, masking presence, out-of-range pixel count)."""
+    stored result (coverage, masking presence, out-of-range pixel count).
+
+    carbon-mrv-vm0047 review (M1): the cloud-masking sentence must NOT be
+    gated behind `coverage_pct is not None` - `vnv_ndfi`'s real stats dict
+    (built from the R sidecar's own payload, see vnv_analysis_jobs.py) has no
+    `coverage_pct` key at all, so the old early-return on `coverage_pct is
+    None` silently dropped the masking disclosure for it even after
+    `has_cloud_masking` started correctly resolving True via
+    `METHODOLOGY_FALLBACK["vnv_ndfi"]["cloud_masking"]`. Coverage and masking
+    are two independent facts about the same result; one being unknown must
+    not suppress the other."""
+    parts: list[str] = []
     if coverage_pct is None:
-        return "Coverage could not be determined for this analysis."
-    parts = [f"Coverage: {coverage_pct:.1f}% of the project boundary."]
+        parts.append("Coverage of the project boundary was not recorded for this analysis.")
+    else:
+        parts.append(f"Coverage: {coverage_pct:.1f}% of the project boundary area produced a valid value.")
     if has_cloud_masking:
         parts.append("Cloud-affected pixels were masked before computing statistics.")
     if out_of_range_pixel_count is not None:
