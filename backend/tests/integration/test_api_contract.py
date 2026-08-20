@@ -12,6 +12,7 @@ from prometheus_client.parser import text_string_to_metric_families
 from app.api import deps
 from app.core.errors import NotFoundError
 from app.core.security import create_tile_token
+from app.domain.analysis_catalog import CATALOG
 from app.domain.dtos import AnalysisResultOut, ProjectAnalysisCatalog
 from tests.conftest import _ADMIN_ID, _LAYER_ID, _PROJECT_ID, FakeTileService
 
@@ -616,7 +617,9 @@ class FakeGEEAnalysisService:
             raise NotFoundError("Project not found.")
         return ProjectAnalysisCatalog(project_id=project_id, analyses=[])
 
-    def get_result(self, project_id: UUID, analysis_id: str, user) -> AnalysisResultOut:
+    def get_result(
+        self, project_id: UUID, analysis_id: str, user, config_params=None
+    ) -> AnalysisResultOut:
         raise NotFoundError("This analysis has not been computed for this project yet.")
 
     def refresh(self, project_id: UUID, analysis_id: str, actor, request_params=None) -> AnalysisResultOut:
@@ -631,13 +634,12 @@ def test_analysis_catalog_requires_auth(client):
     assert client.get("/api/v1/analysis-catalog").status_code == 401
 
 
-def test_analysis_catalog_lists_all_nineteen_entries(client):
-    # 16 original + 3 Raw Imagery (Wave: raw-imagery browsing).
+def test_analysis_catalog_lists_all_entries(client):
     client.app.dependency_overrides[deps.get_gee_analysis_service] = lambda: FakeGEEAnalysisService()
     r = client.get("/api/v1/analysis-catalog", headers=AUTH)
     assert r.status_code == 200
     body = r.json()
-    assert len(body) == 19
+    assert len(body) == len(CATALOG)
     assert any(e["id"] == "hansen_gfc" and e["status"] == "available" for e in body)
 
 
