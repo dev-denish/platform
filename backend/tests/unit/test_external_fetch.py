@@ -268,6 +268,57 @@ def test_safe_fetch_uses_a_separate_shorter_connect_timeout(local_server, guard_
     assert body == b"x" * 12
 
 
+# --------------------------------------------------------------- proxy env vars must be ignored
+#
+# httpx defaults to trust_env=True, which would honor HTTP_PROXY/HTTPS_PROXY
+# and route the request through whatever proxy those env vars name - a
+# DIFFERENT TCP destination than the host/IP just validated above, silently
+# defeating the allow-list/DNS-pin checks. `safe_fetch`'s client is built with
+# trust_env=False specifically to close this; the tests below prove that by
+# setting the proxy env vars to an address nothing listens on (so if they
+# were consulted, the request would fail/hang trying to reach it) and
+# confirming behavior is identical to the no-proxy-env-vars case.
+
+
+def test_safe_fetch_ignores_http_proxy_env_var_and_still_reaches_the_real_target(
+    local_server, guard_lifted, monkeypatch
+):
+    """If `trust_env` were left at httpx's default (True), this request would
+    be routed through http://127.0.0.1:1 - a port nothing listens on - and
+    fail. It succeeds instead, proving the proxy env vars were never
+    consulted and the connection went straight to the validated target."""
+    server, handler_cls = local_server
+    port = server.server_address[1]
+    handler_cls.body = b'{"ok": true}'
+    handler_cls.content_type = "application/json"
+
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:1")
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:1")
+
+    body, content_type = EF.safe_fetch(
+        f"http://127.0.0.1:{port}/data.json", allowed_domains={"127.0.0.1"},
+        timeout_s=2.0, max_bytes=1024,
+    )
+
+    assert body == b'{"ok": true}'
+    assert content_type == "application/json"
+    assert handler_cls.hits == 1
+
+
+def test_safe_fetch_still_blocks_a_private_ip_even_with_proxy_env_vars_set(monkeypatch):
+    """The block must not depend on the proxy env vars being absent either -
+    an attacker who could set them should get no "rescue" path around the
+    private-IP block by hoping a proxy would reach it instead."""
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:1")
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:1")
+
+    with pytest.raises(EF.ExternalFetchError, match="blocked"):
+        EF.safe_fetch(
+            "http://169.254.169.254/latest/meta-data/",
+            allowed_domains={"169.254.169.254"}, timeout_s=2.0, max_bytes=1024,
+        )
+
+
 # --------------------------------------------------------------- real DNS rebinding, end-to-end
 
 

@@ -349,7 +349,19 @@ def safe_fetch(
     try:
         with (
             _pin_dns(host, safe_ip),
-            httpx.Client(timeout=timeout, follow_redirects=False) as client,
+            # trust_env=False: httpx defaults to trust_env=True, which honors
+            # ambient HTTP_PROXY/HTTPS_PROXY/NO_PROXY env vars and routes the
+            # request through whatever proxy they name. Everything above this
+            # line (allow-list check, DNS resolution, private-IP block,
+            # DNS pinning) validates `host`/`safe_ip` - but a proxy is a
+            # DIFFERENT TCP destination than the validated IP, so honoring one
+            # would let an environment variable silently redirect the actual
+            # connection to anywhere, making all of that validation
+            # meaningless. Flagged during the IDNA/DNS-pin fix's appsec
+            # review; this repo sets no proxy env vars anywhere and has no
+            # legitimate use for one on this path, so there is no
+            # functionality lost by disabling it outright.
+            httpx.Client(timeout=timeout, follow_redirects=False, trust_env=False) as client,
             client.stream("GET", url) as resp,
         ):
             if 300 <= resp.status_code < 400:
