@@ -23,6 +23,7 @@ import { DATASET_TYPE_COLORS } from "../lib/colors.js";
 import { basemapFor } from "../lib/basemap.js";
 import { initSymbologyState, buildTileUrl, legendEntryLabel, legendEntryColor } from "../lib/symbology.js";
 import { initVectorStyleState, defaultVectorStyle } from "../lib/vectorStyle.js";
+import { toApiFetchPath } from "../lib/apiUrl.js";
 import { readLayerOrder, writeLayerOrder, sortByLayerOrder, moveBefore } from "../lib/layerOrder.js";
 import { lineDistanceMeters, polygonAreaHectares, scaleRatioLabel } from "../lib/measure.js";
 import { formatNumber } from "../lib/format.js";
@@ -585,26 +586,13 @@ export default function ProjectMap({
     (async () => {
       for (const l of toFetch) {
         try {
-          // `features_url` (LayerRepository._features_url) already carries the
-          // full `/api/v1/...` path, same as tile_url_template - but unlike
-          // that one (used raw as a Leaflet tile URL), this goes through
-          // apiFetch, which itself prepends API_BASE. Strip it first or every
-          // vector/WFS layer 404s on a doubled `/api/v1/api/v1/...` path.
-          //
-          // Bugfix: `.replace(API_BASE, "")` only ever matched when API_BASE
-          // was the relative default ("/api/v1") - the backend always
-          // returns features_url as that same relative path, never with a
-          // host. The moment API_BASE is set to an ABSOLUTE url (exactly
-          // what VITE_API_BASE is in this repo's own e2e config,
-          // playwright.config.js), the literal string API_BASE never occurs
-          // inside a relative features_url, the replace is a silent no-op,
-          // and apiFetch prepends API_BASE a second time - the doubled path
-          // this comment already warned about, just from a different cause
-          // than a missing strip. Stripping only API_BASE's PATHNAME (always
-          // "/api/v1" regardless of whether a host is configured) matches
-          // what's actually embedded in features_url either way.
-          const apiBasePath = API_BASE.startsWith("http") ? new URL(API_BASE).pathname : API_BASE;
-          const data = await apiFetch(l.features_url.replace(apiBasePath, ""));
+          // features_url already carries the full `/api/v1/...` path;
+          // apiFetch prepends API_BASE again, so strip API_BASE's path
+          // first or every vector/WFS layer doubles to `/api/v1/api/v1/...`
+          // (see lib/apiUrl.js for why this has to be path-only, not a raw
+          // API_BASE string match - that broke for an absolute API_BASE,
+          // exactly what this repo's own playwright.config.js sets).
+          const data = await apiFetch(toApiFetchPath(l.features_url, API_BASE));
           if (!cancelled) setVectorData((prev) => ({ ...prev, [l.layer_id]: data }));
         } catch {
           if (!cancelled) setVectorData((prev) => ({ ...prev, [l.layer_id]: null }));
