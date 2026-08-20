@@ -118,7 +118,12 @@ def render_boundary_map_png(
     canvas_h = (tile_y1 - tile_y0 + 1) * _TILE_SIZE
     canvas = Image.new("RGBA", (canvas_w, canvas_h), (240, 240, 240, 255))
 
-    with httpx.Client() as client:
+    # trust_env=False: this client only ever fetches Google-issued GEE tile
+    # URLs (no allow-list being bypassed here, unlike external_fetch.py), but
+    # disabling ambient HTTP_PROXY/HTTPS_PROXY honoring is zero-cost
+    # defense-in-depth - there is no legitimate reason for this request to
+    # ever go through an environment-controlled proxy.
+    with httpx.Client(trust_env=False) as client:
         for tx in range(tile_x0, tile_x1 + 1):
             for ty in range(tile_y0, tile_y1 + 1):
                 tile = _fetch_tile(client, tile_url_template, zoom, tx % n_tiles, ty)

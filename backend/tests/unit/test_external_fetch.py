@@ -19,6 +19,7 @@ never touch this patch).
 from __future__ import annotations
 
 import http.server
+import ipaddress
 import socket
 import threading
 import time
@@ -165,6 +166,15 @@ def guard_lifted(monkeypatch):
 
 
 def test_safe_fetch_succeeds_against_a_real_local_server(local_server, guard_lifted):
+    """Uses the `127.0.0.1` literal (not the `localhost` hostname) like the
+    other HTTP-mechanics tests below, deliberately: `local_server` only
+    binds to `127.0.0.1`, but a resolver that returns `::1` before
+    `127.0.0.1` for `localhost` (real in some containers/CI images) would
+    make `safe_fetch` correctly pin to the IPv6 result and then genuinely
+    fail to connect - an environment quirk, not a regression in the guard
+    itself, which `test_safe_fetch_blocks_a_real_hostname_that_resolves_to_
+    loopback` above already separately proves works through a real
+    hostname."""
     server, handler_cls = local_server
     port = server.server_address[1]
     handler_cls.body = b'{"ok": true}'
@@ -267,6 +277,57 @@ def test_safe_fetch_uses_a_separate_shorter_connect_timeout(local_server, guard_
     assert body == b"x" * 12
 
 
+# --------------------------------------------------------------- proxy env vars must be ignored
+#
+# httpx defaults to trust_env=True, which would honor HTTP_PROXY/HTTPS_PROXY
+# and route the request through whatever proxy those env vars name - a
+# DIFFERENT TCP destination than the host/IP just validated above, silently
+# defeating the allow-list/DNS-pin checks. `safe_fetch`'s client is built with
+# trust_env=False specifically to close this; the tests below prove that by
+# setting the proxy env vars to an address nothing listens on (so if they
+# were consulted, the request would fail/hang trying to reach it) and
+# confirming behavior is identical to the no-proxy-env-vars case.
+
+
+def test_safe_fetch_ignores_http_proxy_env_var_and_still_reaches_the_real_target(
+    local_server, guard_lifted, monkeypatch
+):
+    """If `trust_env` were left at httpx's default (True), this request would
+    be routed through http://127.0.0.1:1 - a port nothing listens on - and
+    fail. It succeeds instead, proving the proxy env vars were never
+    consulted and the connection went straight to the validated target."""
+    server, handler_cls = local_server
+    port = server.server_address[1]
+    handler_cls.body = b'{"ok": true}'
+    handler_cls.content_type = "application/json"
+
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:1")
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:1")
+
+    body, content_type = EF.safe_fetch(
+        f"http://127.0.0.1:{port}/data.json", allowed_domains={"127.0.0.1"},
+        timeout_s=2.0, max_bytes=1024,
+    )
+
+    assert body == b'{"ok": true}'
+    assert content_type == "application/json"
+    assert handler_cls.hits == 1
+
+
+def test_safe_fetch_still_blocks_a_private_ip_even_with_proxy_env_vars_set(monkeypatch):
+    """The block must not depend on the proxy env vars being absent either -
+    an attacker who could set them should get no "rescue" path around the
+    private-IP block by hoping a proxy would reach it instead."""
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:1")
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:1")
+
+    with pytest.raises(EF.ExternalFetchError, match="blocked"):
+        EF.safe_fetch(
+            "http://169.254.169.254/latest/meta-data/",
+            allowed_domains={"169.254.169.254"}, timeout_s=2.0, max_bytes=1024,
+        )
+
+
 # --------------------------------------------------------------- real DNS rebinding, end-to-end
 
 
@@ -333,3 +394,159 @@ def test_dns_pinning_survives_a_real_mid_flight_rebind(guard_lifted, monkeypatch
         rebind_server.shutdown()
         safe_thread.join(timeout=2)
         rebind_thread.join(timeout=2)
+
+
+# --------------------------------------------------------------- IDNA/punycode pin bypass (fix)
+
+
+def test_pinned_getaddrinfo_fails_closed_on_idna_pin_mismatch(monkeypatch):
+    """Direct regression test for the actual bug: `urlparse(url).hostname`
+    does NOT IDNA-encode a Unicode hostname, but httpx's own
+    `request.url.raw_host` (what httpx really uses to connect) does -
+    `httpx.URL("http://中国.icom.museum").raw_host == b"xn--fiqs8s.icom.museum"`,
+    not the raw string. Before the fix, `_pinned_getaddrinfo` treated a
+    pinned host string that didn't match byte-for-byte as "unrelated" and
+    silently fell through to a live, unvalidated `_real_getaddrinfo` call -
+    even when the mismatch was just the raw-Unicode vs. punycode form of the
+    exact SAME hostname, silently defeating the DNS-rebinding pin for every
+    non-ASCII hostname.
+
+    `safe_fetch` itself no longer produces this mismatch at all (both
+    sides are normalized through the same `_normalize_host` before pinning
+    - see the end-to-end test below), so this talks to `_pin_dns`/
+    `_pinned_getaddrinfo` directly to prove the fail-closed behavior fires
+    even if some future regression reintroduces a normalization mismatch.
+    """
+    raw_unicode_host = "中国.icom.museum"
+    punycode_host = "xn--fiqs8s.icom.museum"
+    # Sanity: these really are two spellings of the same host, and really do
+    # differ as raw strings - otherwise this test would prove nothing.
+    assert raw_unicode_host != punycode_host
+    assert EF._normalize_host(raw_unicode_host) == punycode_host
+
+    live_lookup_calls: list[str] = []
+
+    def suspicious_real_getaddrinfo(h, p, *a, **kw):
+        live_lookup_calls.append(h)
+        return [(2, 1, 6, "", ("203.0.113.99", p or 0))]
+
+    monkeypatch.setattr(EF, "_real_getaddrinfo", suspicious_real_getaddrinfo)
+
+    with (
+        EF._pin_dns(raw_unicode_host, "198.51.100.1"),
+        pytest.raises(EF.ExternalFetchError, match="DNS pin mismatch"),
+    ):
+        socket.getaddrinfo(punycode_host, 80)
+
+    assert live_lookup_calls == [], (
+        "the raw-Unicode/punycode mismatch must be refused outright - a live, "
+        "unvalidated DNS lookup for the mismatched host must never happen, "
+        f"but got: {live_lookup_calls}"
+    )
+
+    # No pin active at all (the common, everyday case) must still behave
+    # exactly as before - a plain, unpinned lookup goes straight through.
+    assert socket.getaddrinfo(punycode_host, 80) == [(2, 1, 6, "", ("203.0.113.99", 80))]
+    assert live_lookup_calls == [punycode_host]
+
+
+def test_safe_fetch_normalizes_idna_hosts_before_pinning_no_bypass(
+    local_server, guard_lifted, monkeypatch
+):
+    """End-to-end version of the test above: given a URL with a raw-Unicode
+    hostname, `safe_fetch` validates, resolves, pins and connects using the
+    SAME IDNA/punycode string httpx itself uses to actually open the
+    connection - the previously-mismatched pair from the test above - so no
+    live, unvalidated DNS lookup ever happens for a real fetch through this
+    hostname, and the fetch is either correctly blocked or correctly pinned
+    to a single, consistently-validated address (never silently re-resolved
+    for the real connection).
+
+    DNS is fully mocked (a real "中国.icom.museum" domain has no stable
+    real-world answer to assert a test against) - `_real_getaddrinfo` only
+    answers for the punycode form (exactly what a real resolver is ever
+    asked to resolve; nothing in this codebase, the OS, or httpx itself ever
+    resolves the raw Unicode form), and records every host string it is
+    ever asked to resolve so the test can assert the raw Unicode form is
+    never looked up and the punycode form is looked up exactly once."""
+    server, handler_cls = local_server
+    port = server.server_address[1]
+    handler_cls.body = b"SAFE-IDNA-HOST"
+
+    unicode_host = "中国.icom.museum"
+    punycode_host = "xn--fiqs8s.icom.museum"
+
+    lookups: list[str] = []
+    original_real_getaddrinfo = EF._real_getaddrinfo
+
+    def fake_getaddrinfo(h, p, *a, **kw):
+        lookups.append(h)
+        if h == punycode_host:
+            return [(2, 1, 6, "", ("127.0.0.1", p or 0))]
+        return original_real_getaddrinfo(h, p, *a, **kw)
+
+    monkeypatch.setattr(EF, "_real_getaddrinfo", fake_getaddrinfo)
+
+    # The allow-list entry is stored as raw Unicode (e.g. an Administrator
+    # typed the domain in as-is) - `assert_domain_allowed` must still match
+    # it against the IDNA-encoded incoming host.
+    body, _content_type = EF.safe_fetch(
+        f"http://{unicode_host}:{port}/", allowed_domains={unicode_host},
+        timeout_s=2.0, max_bytes=1024,
+    )
+
+    assert body == b"SAFE-IDNA-HOST"
+    assert handler_cls.hits == 1
+    assert unicode_host not in lookups, (
+        "safe_fetch queried DNS using the raw Unicode hostname - this is "
+        "exactly the pre-fix bypass path; only the IDNA-encoded form httpx "
+        "itself uses to connect may ever be looked up."
+    )
+    assert lookups.count(punycode_host) == 1, (
+        "expected exactly one validated lookup for the punycode host, with "
+        f"every subsequent connection pinned to it; got: {lookups}"
+    )
+
+
+# --------------------------------------------------------------- NAT64-wrapped metadata endpoint
+
+
+def test_is_blocked_ip_catches_nat64_wrapped_metadata_endpoint():
+    """RFC 6052 NAT64 (64:ff9b::/96) embeds an IPv4 address in the low 32
+    bits - `64:ff9b::a9fe:a9fe` decodes to 169.254.169.254, the cloud
+    metadata endpoint - and must be blocked because of that embedded
+    address specifically (see `_is_blocked_ip`'s NAT64 branch)."""
+    nat64_metadata_endpoint = ipaddress.ip_address("64:ff9b::a9fe:a9fe")
+    assert EF._is_blocked_ip(nat64_metadata_endpoint)
+
+
+# --------------------------------------------------------------- malformed allow-list entries
+
+
+def test_assert_domain_allowed_rejects_userinfo_truncated_allowlist_entry():
+    """`httpx.URL("http://good.example.com@evil.com")` parses down to a host
+    of just `evil.com` (the part before `@` is userinfo, not part of the
+    host). Before `_normalize_host` explicitly rejected this, a malformed
+    allow-list entry like `"good.example.com@evil.com"` would silently widen
+    the allow-list to also approve `evil.com` - a domain nobody actually
+    approved. It must instead be treated as malformed and skipped (fail
+    closed), so checking `evil.com` against an allow-list containing ONLY
+    that one malformed entry must still be rejected."""
+    with pytest.raises(EF.ExternalFetchError, match="allow-list"):
+        EF.assert_domain_allowed("evil.com", {"good.example.com@evil.com"})
+
+
+def test_is_blocked_ip_does_not_over_block_a_nat64_public_address():
+    """The NAT64 unwrap must check the EMBEDDED address, not blanket-block
+    the whole `64:ff9b::/96` prefix - proven by an address in that same
+    prefix that embeds a public IP (8.8.8.8), which must NOT be blocked.
+
+    This is also what makes the metadata-endpoint test above meaningful
+    rather than coincidental: Python's `ipaddress.IPv6Address.is_reserved`
+    happens to flag EVERY address in `64:ff9b::/96` regardless of what it
+    embeds, so a naive "just check `is_reserved`, don't unwrap NAT64 at
+    all" implementation would also block the metadata-endpoint test above -
+    but it would (wrongly) block this public address too. Only a real
+    unwrap-and-recheck-the-embedded-address implementation passes both."""
+    nat64_public_address = ipaddress.ip_address("64:ff9b::0808:0808")
+    assert not EF._is_blocked_ip(nat64_public_address)
