@@ -52,6 +52,7 @@ services:
   test-migrate:
     build:
       context: ../backend
+      target: test
     command: ["sh", "-c", "alembic upgrade head"]
     environment:
       DMRV_ENVIRONMENT: test
@@ -67,6 +68,7 @@ services:
   test-backend:
     build:
       context: ../backend
+      target: test
     environment:
       # Explicit and FIXED, deliberately not left to Settings' per-process
       # auto-generate fallback (config.py's `secret_is_weak and not
@@ -135,6 +137,7 @@ services:
   test-worker:
     build:
       context: ../backend
+      target: test
     command: ["sh", "-c", "arq app.workers.arq_worker.WorkerSettings"]
     healthcheck:
       disable: true

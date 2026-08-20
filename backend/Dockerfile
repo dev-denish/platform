@@ -81,3 +81,31 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
 
 # 2 workers by default; tune via WEB_CONCURRENCY. Graceful shutdown drains on SIGTERM.
 CMD ["sh", "-c", "gunicorn app.asgi:app -k uvicorn.workers.UvicornWorker -w ${WEB_CONCURRENCY:-2} -b 0.0.0.0:8001 --graceful-timeout 30 --timeout 120 --access-logfile - --error-logfile -"]
+
+# ---------- test ----------
+# Extends `runtime` with pytest + the rest of pyproject.toml's `dev` extra and
+# the test suite itself. Kept as its own final stage - NOT folded into
+# `runtime` - so the default `docker build` (no --target, what
+# deploy/docker-compose.yml's backend/migrate/worker use) stays exactly the
+# lean production image it always was: no dev tooling, no tests/ directory.
+# deploy/docker-compose.yml pins `target: runtime` explicitly so it keeps
+# building that stage even though `test` is now the last one in this file
+# (Docker's default target is otherwise "last stage defined").
+#
+# Root cause this addresses: the old builder stage's pip install (see
+# "builder" above) was a hardcoded runtime-only package list that never
+# referenced pyproject.toml's dev extra at all - pytest was never installed
+# anywhere, in any image, regardless of the (separately real, now also
+# fixed) missing [build-system] table. This stage installs the actual
+# package in editable mode so `[project.optional-dependencies].dev` is the
+# single source of truth for versions - no separate, driftable pip list.
+FROM runtime AS test
+
+USER root
+
+COPY --chown=dmrv:dmrv pyproject.toml ./
+COPY --chown=dmrv:dmrv tests ./tests
+
+RUN pip install -e ".[dev]"
+
+USER dmrv
