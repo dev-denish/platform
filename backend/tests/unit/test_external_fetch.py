@@ -170,8 +170,17 @@ def test_safe_fetch_succeeds_against_a_real_local_server(local_server, guard_lif
     handler_cls.body = b'{"ok": true}'
     handler_cls.content_type = "application/json"
 
+    # IP literal, not "localhost": the `local_server` fixture binds
+    # IPv4-only (127.0.0.1), but "localhost" can resolve to the IPv6
+    # loopback (::1) first depending on the host's resolver order (it does
+    # inside this project's Docker test containers), which would pin
+    # `safe_fetch` to an address nothing is listening on. Hostname-based
+    # resolution through the guard is already covered by
+    # `test_safe_fetch_blocks_a_real_hostname_that_resolves_to_loopback`
+    # above; this test's job is the success-path HTTP mechanics, which its
+    # `127.0.0.1`-based siblings below (size cap, redirect, timeout) share.
     body, content_type = EF.safe_fetch(
-        f"http://localhost:{port}/data.json", allowed_domains={"localhost"},
+        f"http://127.0.0.1:{port}/data.json", allowed_domains={"127.0.0.1"},
         timeout_s=2.0, max_bytes=1024,
     )
 
