@@ -1,0 +1,61 @@
+<!--
+  One analysis' report page. Rendered once per entry in `section_views`
+  (see report_html.py::build_report_html) - `view` is this loop's current
+  item, included with the surrounding context (Jinja `include` defaults to
+  `with context`). Block order/gating mirrors report_pdf.py::_section_page
+  exactly - both iterate the same report_content.SECTION_PLAN - see
+  report_html.py::_build_section_blocks for where that gating actually
+  happens (never here: this template only branches on `block.kind`, it does
+  not decide which sections are present).
+-->
+<section class="report-section">
+  <h2 class="section-title">{{ view.section.name }}</h2>
+  <div class="section-meta">
+    {{ view.section.category }} - computed {{ view.section.computed_at.strftime('%Y-%m-%d %H:%M UTC') }}
+  </div>
+
+  {% if view.section.coverage_pct is not none %}
+  <div class="coverage">Coverage: {{ "%.1f"|format(view.section.coverage_pct) }}% of the project boundary</div>
+  {% endif %}
+
+  {% if view.map_png_b64 %}
+  <img class="report-img" src="data:image/png;base64,{{ view.map_png_b64 }}" alt="Map for {{ view.section.name }}">
+  {% endif %}
+
+  {% for block in view.blocks %}
+    {% if block.kind == "paragraph" %}
+      <h3 class="block-heading">{{ block.heading }}</h3>
+      <p class="block-text{% if block.small %} small{% endif %}">{{ block.text }}</p>
+    {% elif block.kind == "bulleted" %}
+      <h3 class="block-heading">{{ block.heading }}</h3>
+      <ul class="bullets">
+        {% for bullet in block.bullets %}
+        <li>{{ bullet }}</li>
+        {% endfor %}
+      </ul>
+    {% elif block.kind == "statistics" %}
+      <h3 class="block-heading">{{ block.heading }}</h3>
+      {% if block.class_label %}
+      <div class="stats-label">{{ block.class_label }}</div>
+      <ul class="class-rows">
+        {% for row in block.class_rows %}
+        <li>{{ row.name }}: {{ row.area_ha }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+      {% if block.stats_label %}
+      <div class="stats-label">{{ block.stats_label }}</div>
+      <ul class="stats-rows">
+        {% for row in block.stats_rows %}
+        <li>{{ row.label }}: {{ row.value }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    {% elif block.kind == "chart" %}
+      <h3 class="block-heading">{{ block.heading }}</h3>
+      <img class="chart-img" src="data:image/png;base64,{{ block.chart_png_b64 }}" alt="Year-series trend chart for {{ view.section.name }}">
+    {% endif %}
+  {% endfor %}
+
+  <div class="disclaimer">{{ view.section.disclaimer }}</div>
+</section>

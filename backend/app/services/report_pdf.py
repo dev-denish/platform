@@ -14,7 +14,7 @@ from fpdf import FPDF
 from fpdf.enums import XPos, YPos
 
 from app.domain.enums import ReportType
-from app.services.report_content import ReportSection
+from app.services.report_content import SECTION_PLAN, ReportSection
 
 _MARGIN_MM = 15
 
@@ -180,16 +180,32 @@ def _bulleted(pdf: FPDF, text: str) -> None:
     pdf.ln(2)
 
 
+# The "fixed" (always-render) sections' body text, keyed by SECTION_PLAN
+# number - deliberately kept HERE, not in report_content.SECTION_PLAN itself
+# (see that dataclass's own docstring on why it stays thin/renderer-agnostic).
+# report_html.py keeps its own identical-by-necessity copy of this mapping.
+_FIXED_SECTION_FIELD: dict[int, str] = {
+    2: "methodology_text",
+    3: "data_processing_text",
+    9: "carbon_project_relevance",
+    10: "data_quality_text",
+    11: "limitations_text",
+}
+
+
 def _section_page(
     pdf: FPDF, section: ReportSection, map_png: bytes | None, chart_png: bytes | None
 ) -> None:
-    """Wave: 11-section report restructure. Fixed 1-11 order for every
-    analysis type. Sections 2/3/4/9/10/11 are always populated (never gate on
-    truthiness); sections 6/7 (Temporal/Change Analysis) omit their heading
-    entirely when the capability check that gates them
-    (`report_content.has_temporal_data`/`has_change_data`) found nothing -
-    `section.narrative` simply has no key for them in that case, same
-    truthy-check idiom every optional block here has always used."""
+    """Wave: 11-section report restructure (refactored, Wave: HTML report
+    rendering, to iterate `report_content.SECTION_PLAN` - a pure refactor,
+    zero output/behavior change from the previous literal 1-11 sequence).
+    Fixed 1-11 order for every analysis type. Sections 2/3/4/9/10/11 are
+    always populated (never gate on truthiness); sections 6/7 (Temporal/
+    Change Analysis) omit their heading entirely when the capability check
+    that gates them (`report_content.has_temporal_data`/`has_change_data`)
+    found nothing - `section.narrative` simply has no key for them in that
+    case, same truthy-check idiom every optional block here has always
+    used."""
     pdf.add_page()
     pdf.set_font("Helvetica", "B", 16)
     _line(pdf, 10, section.name)
@@ -210,65 +226,57 @@ def _section_page(
         pdf.set_xy(pdf.l_margin, pdf.y)
         pdf.ln(2)
 
-    if section.narrative.get("executive_summary"):
-        _heading(pdf, "1. Executive Summary")
-        _body(pdf, section.narrative["executive_summary"])
+    for item in SECTION_PLAN:
+        if item.kind == "narrative":
+            text = section.narrative.get(item.narrative_key)
+            if not text:
+                continue
+            _heading(pdf, item.heading)
+            if item.narrative_key == "key_findings":
+                _bulleted(pdf, text)
+            else:
+                _body(pdf, text)
 
-    _heading(pdf, "2. Methodology")
-    _body(pdf, section.methodology_text)
+        elif item.kind == "statistics":
+            if section.class_breakdown or section.stats_grid:
+                _heading(pdf, item.heading)
+                pdf.set_font("Helvetica", "", 10)
+                if section.class_breakdown:
+                    label = "Class breakdown" if section.class_breakdown_year is None else (
+                        f"Class breakdown ({section.class_breakdown_year})"
+                    )
+                    _line(pdf, 5.5, label)
+                    for class_row in section.class_breakdown:
+                        _line(pdf, 5.5, f"  {class_row.name}: {_format_area(class_row.area_ha)}")
+                if section.stats_grid:
+                    # `stats_grid_year` is None for a VNV band-index result
+                    # (one rolling 90-day window, no year axis - see
+                    # report_content.py's own `"index" in stats` branch) -
+                    # same None-safe pattern `class_breakdown`'s own label
+                    # above already uses, so this never literally prints
+                    # "Distribution statistics (None)".
+                    stats_label = (
+                        "Distribution statistics" if section.stats_grid_year is None
+                        else f"Distribution statistics ({section.stats_grid_year})"
+                    )
+                    _line(pdf, 5.5, stats_label)
+                    for stat_row in section.stats_grid:
+                        value = f"{stat_row.value:.3f}" if stat_row.value is not None else "no data"
+                        _line(pdf, 5.5, f"  {stat_row.label}: {value}")
+                pdf.ln(2)
 
-    _heading(pdf, "3. Data & Processing")
-    _body(pdf, section.data_processing_text)
+            if chart_png:
+                pdf.set_font("Helvetica", "B", 11)
+                _line(pdf, 6, "Year-series trend")
+                pdf.image(BytesIO(chart_png), w=pdf.epw * 0.85, x=pdf.l_margin)
+                pdf.set_xy(pdf.l_margin, pdf.y)
+                pdf.ln(2)
 
-    if section.class_breakdown or section.stats_grid:
-        _heading(pdf, "4. Statistics")
-        pdf.set_font("Helvetica", "", 10)
-        if section.class_breakdown:
-            label = "Class breakdown" if section.class_breakdown_year is None else (
-                f"Class breakdown ({section.class_breakdown_year})"
-            )
-            _line(pdf, 5.5, label)
-            for class_row in section.class_breakdown:
-                _line(pdf, 5.5, f"  {class_row.name}: {_format_area(class_row.area_ha)}")
-        if section.stats_grid:
-            _line(pdf, 5.5, f"Distribution statistics ({section.stats_grid_year})")
-            for stat_row in section.stats_grid:
-                value = f"{stat_row.value:.3f}" if stat_row.value is not None else "no data"
-                _line(pdf, 5.5, f"  {stat_row.label}: {value}")
-        pdf.ln(2)
-
-    if chart_png:
-        pdf.set_font("Helvetica", "B", 11)
-        _line(pdf, 6, "Year-series trend")
-        pdf.image(BytesIO(chart_png), w=pdf.epw * 0.85, x=pdf.l_margin)
-        pdf.set_xy(pdf.l_margin, pdf.y)
-        pdf.ln(2)
-
-    if section.narrative.get("spatial_distribution"):
-        _heading(pdf, "5. Spatial Distribution")
-        _body(pdf, section.narrative["spatial_distribution"])
-
-    if section.narrative.get("temporal_analysis"):
-        _heading(pdf, "6. Temporal Analysis")
-        _body(pdf, section.narrative["temporal_analysis"])
-
-    if section.narrative.get("change_analysis"):
-        _heading(pdf, "7. Change Analysis")
-        _body(pdf, section.narrative["change_analysis"])
-
-    if section.narrative.get("key_findings"):
-        _heading(pdf, "8. Key Findings")
-        _bulleted(pdf, section.narrative["key_findings"])
-
-    _heading(pdf, "9. Carbon Project Relevance")
-    _body(pdf, section.carbon_project_relevance)
-
-    _heading(pdf, "10. Data Quality")
-    _body(pdf, section.data_quality_text)
-
-    _heading(pdf, "11. Limitations")
-    pdf.set_font("Helvetica", "", 9)
-    _body(pdf, section.limitations_text)
+        elif item.kind == "fixed":
+            _heading(pdf, item.heading)
+            if item.number == 11:
+                pdf.set_font("Helvetica", "", 9)
+            _body(pdf, getattr(section, _FIXED_SECTION_FIELD[item.number]))
 
     pdf.set_font("Helvetica", "BI", 9)
     _line(pdf, 5, section.disclaimer)

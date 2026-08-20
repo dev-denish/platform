@@ -25,14 +25,15 @@ from typing import Any
 from arq.worker import Retry
 
 from app.core.db import Database
+from app.core.http_headers import strip_header_injection_chars
 from app.core.logging import get_logger
 from app.core.metrics import job_duration_seconds, jobs_completed_total
-from app.domain.enums import AuditAction
+from app.domain.enums import AuditAction, ReportFormat
 from app.repositories.audit import AuditRepository
 from app.repositories.jobs import JobRepository
 from app.services.ai_narrative import AiNarrativeError
 from app.services.ingestion.storage import Storage
-from app.services.report_service import generate_report_pdf_bytes
+from app.services.report_service import generate_report_bytes
 
 _KIND = "generate_report"
 
@@ -54,6 +55,7 @@ async def run_generate_report_job(
     boundary_geojson: dict[str, Any],
     actor: dict[str, Any],
     report_type: str = "system",
+    output_format: str = "pdf",
 ) -> None:
     db: Database = ctx["db"]
     storage: Storage = ctx["storage"]
@@ -67,8 +69,9 @@ async def run_generate_report_job(
 
     start = time.perf_counter()
     try:
-        pdf_bytes = generate_report_pdf_bytes(
-            db, project_id, project_name, analysis_ids, boundary_geojson, report_type=report_type
+        report_bytes = generate_report_bytes(
+            db, project_id, project_name, analysis_ids, boundary_geojson,
+            report_type=report_type, output_format=output_format,
         )
     except AiNarrativeError as e:
         # Deliberately NOT retried - see this module's own docstring.
@@ -94,25 +97,42 @@ async def run_generate_report_job(
         log.warning("job.retry_scheduled", error=str(e), next_try=job_try + 1)
         raise Retry(defer=_backoff_seconds(job_try)) from e
 
-    fd, tmp_path = tempfile.mkstemp(suffix=".pdf", prefix="dmrv_report_")
+    # Wave: HTML report rendering. `ReportFormat` is a `StrEnum`, so this
+    # comparison also accepts the plain "pdf"/"html" strings this function's
+    # own `output_format` parameter is typed as (arq job args are plain
+    # JSON-serialisable values, never real enum instances) - see
+    # app.domain.enums.ReportFormat's own docstring.
+    ext = "pdf" if output_format == ReportFormat.PDF else "html"
+    fd, tmp_path = tempfile.mkstemp(suffix=f".{ext}", prefix="dmrv_report_")
     with os.fdopen(fd, "wb") as f:
-        f.write(pdf_bytes)
-    storage_key = f"reports/{project_id}/{job_id}.pdf"
+        f.write(report_bytes)
+    storage_key = f"reports/{project_id}/{job_id}.{ext}"
     storage.save(storage_key, tmp_path)
-    filename = f"{project_name}-report-{date.today().isoformat()}.pdf"
+    # Wave: security fix pass. `project_name` is user-entered (max_length=256,
+    # no charset constraint - see app.domain.dtos) and flows straight into a
+    # Content-Disposition header at download time; strip the characters that
+    # can break that header's own quoting/parsing (`"`, CR, LF, `;`) here, at
+    # the one place `filename` is constructed and persisted into
+    # `job.result`, rather than trusting every future reader of that column
+    # to re-sanitise it. `app.core.http_headers.content_disposition_attachment`
+    # still re-applies the same stripping defensively at response time (a
+    # legacy job row written before this fix could still hold an
+    # unsanitised filename), so this is belt-and-braces, not the only guard.
+    safe_project_name = strip_header_injection_chars(project_name)
+    filename = f"{safe_project_name}-report-{date.today().isoformat()}.{ext}"
 
     with db.transaction() as cur:
         AuditRepository(cur).record(
             actor_id=actor["user_id"], actor_name=actor["username"],
             action=AuditAction.GENERATE_REPORT, target=",".join(analysis_ids),
             detail=(
-                f"Generated a PDF report for project {project_id} "
+                f"Generated a {ext.upper()} report for project {project_id} "
                 f"({len(analysis_ids)} analyses, job {job_id})."
             ),
             project_id=project_id,
         )
         JobRepository(cur).mark_succeeded(
-            job_id, {"storage_key": storage_key, "filename": filename}
+            job_id, {"storage_key": storage_key, "filename": filename, "format": output_format}
         )
     jobs_completed_total.labels(kind=_KIND, status="succeeded").inc()
     job_duration_seconds.labels(kind=_KIND).observe(time.perf_counter() - start)

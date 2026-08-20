@@ -15,7 +15,17 @@ from app.services.report_fixed_text import (
     data_processing_text,
     data_quality_text,
     limitations_text,
+    methodology_dict,
     methodology_text,
+)
+
+_VNV_IDS = frozenset(
+    {"vnv_ndfi"} | {
+        f"vnv_{name}" for name in (
+            "ndvi", "evi", "savi", "ndwi", "mndwi", "ndmi",
+            "nbr", "bsi", "ndbi", "arvi", "gndvi", "psri",
+        )
+    }
 )
 
 
@@ -122,3 +132,84 @@ def test_data_quality_text_handles_missing_coverage_gracefully():
     text = data_quality_text(None)
     assert text.strip()
     assert "98" not in text
+
+
+# --------------------------------------------------------------------------
+# carbon-mrv-vm0047 review, M1: the cloud-masking sentence must not be gated
+# behind coverage_pct being known - vnv_ndfi's real stats dict has no
+# coverage_pct key at all, but genuinely does get SCL-based masking applied
+# upstream (cdse_ingestion.py), and METHODOLOGY_FALLBACK["vnv_ndfi"] does
+# carry a cloud_masking entry - the disclosure must still render.
+# --------------------------------------------------------------------------
+
+
+def test_data_quality_text_discloses_cloud_masking_even_with_unknown_coverage():
+    text = data_quality_text(None, has_cloud_masking=True)
+    assert "masked before computing statistics" in text
+    assert "not recorded" in text.lower() or "not determined" in text.lower()
+
+
+def test_data_quality_text_missing_coverage_no_longer_uses_the_old_dead_end_string():
+    """The old "Coverage could not be determined for this analysis." early
+    return unconditionally discarded masking/out-of-range info too - this
+    fix replaces it with a sentence that still allows the other two facts to
+    follow it."""
+    text = data_quality_text(None)
+    assert text != "Coverage could not be determined for this analysis."
+
+
+# --------------------------------------------------------------------------
+# carbon-mrv-vm0047 report-generation fix: every VNV entry in
+# METHODOLOGY_FALLBACK must disclose real SCL-based cloud masking, and
+# methodology_dict (the public wrapper report_content.py's has_cloud_masking
+# now resolves through) must actually surface it.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("analysis_id", sorted(_VNV_IDS))
+def test_every_vnv_methodology_fallback_entry_discloses_cloud_masking(analysis_id):
+    assert analysis_id in METHODOLOGY_FALLBACK
+    m = METHODOLOGY_FALLBACK[analysis_id]
+    assert "cloud_masking" in m
+    assert m["cloud_masking"].strip()
+    # Names the real excluded SCL classes (cdse_ingestion.py's
+    # _INVALID_SCL_CLASSES), not a vague restatement.
+    assert "cloud shadow" in m["cloud_masking"].lower()
+    assert "cirrus" in m["cloud_masking"].lower()
+
+
+@pytest.mark.parametrize("analysis_id", sorted(_VNV_IDS))
+def test_vnv_cloud_masking_text_names_every_excluded_and_retained_scl_class_by_id(analysis_id):
+    """carbon-mrv-vm0047 review, M2: an auditor must be able to verify
+    exactly which SCL classes are meant (names alone are ambiguous across
+    ESA product baselines) - every excluded id (0,1,3,8,9,10) and every
+    retained id (2,4,5,6,7,11) must appear by number, matching
+    cdse_ingestion.py's _INVALID_SCL_CLASSES exactly. Class 7 (unclassified)
+    in particular was previously undisclosed as retained."""
+    text = METHODOLOGY_FALLBACK[analysis_id]["cloud_masking"]
+    for excluded_id in (
+        "SCL 0", "1 (saturated", "3 (cloud shadow", "8 (cloud medium", "9 (cloud high", "10 (thin cirrus",
+    ):
+        assert excluded_id in text
+    for retained_id in (
+        "SCL 2", "4 (vegetation", "5 (bare soil", "6 (water", "7 (unclassified", "11 (snow",
+    ):
+        assert retained_id in text
+
+
+def test_methodology_dict_resolves_the_fallback_for_a_vnv_id_with_no_real_methodology():
+    m = methodology_dict("vnv_ndvi", None)
+    assert "cloud_masking" in m
+
+
+def test_methodology_dict_prefers_a_real_methodology_dict_over_the_fallback():
+    real = {"dataset": "real dataset", "cloud_masking": "real masking text"}
+    assert methodology_dict("vnv_ndvi", real) == real
+
+
+def test_data_processing_text_discloses_cloud_masking_for_every_vnv_id():
+    """Before this fix, NO vnv_* id had a `cloud_masking` fallback entry at
+    all, so this sentence never appeared for any of them."""
+    for analysis_id in sorted(_VNV_IDS):
+        text = data_processing_text(analysis_id, None)
+        assert "Cloud masking:" in text

@@ -32,6 +32,7 @@ from app.services.report_fixed_text import (
     data_processing_text,
     data_quality_text,
     limitations_text,
+    methodology_dict,
     methodology_text,
 )
 
@@ -127,6 +128,58 @@ class ReportSection:
     class_breakdown_year: str | None = None
 
 
+@dataclass(frozen=True)
+class SectionPlanItem:
+    """One of the 11 fixed-order sections every analysis type's report page
+    renders (Wave: 11-section report restructure, formalised as a shared
+    plan for the Wave: HTML report rendering). The single source of truth
+    for section NUMBER/HEADING/ORDER and which sections are optional -
+    consumed by BOTH `report_pdf.py` and `report_html.py` so the two
+    renderers cannot silently drift apart on order or gating.
+
+    Deliberately thin: it owns ONLY order + heading + which field/condition
+    gates a section's appearance - never a section's internal content SHAPE
+    (e.g. section 4/Statistics' table-vs-list layout, or which exact
+    `ReportSection` attribute backs a "fixed" section's body text). Each
+    renderer keeps its own small, renderer-specific mapping for that (see
+    `report_pdf.py`'s and `report_html.py`'s own `_FIXED_SECTION_FIELD`) -
+    this is not a second content-shaping layer on top of `ReportSection`.
+
+    `kind`: "narrative" sections gate on `section.narrative.get(narrative_key)`
+    truthiness (empty/absent -> heading omitted entirely, never rendered
+    empty); "fixed" sections always render (`always_render=True`); the one
+    "statistics" section (4) has its own compound gate
+    (`class_breakdown or stats_grid`), read directly by each renderer rather
+    than modelled as a single boolean here."""
+
+    number: int
+    heading: str
+    kind: str  # "narrative" | "fixed" | "statistics"
+    narrative_key: str | None = None
+    always_render: bool = True
+
+
+SECTION_PLAN: tuple[SectionPlanItem, ...] = (
+    SectionPlanItem(
+        1, "1. Executive Summary", "narrative", "executive_summary", always_render=False
+    ),
+    SectionPlanItem(2, "2. Methodology", "fixed"),
+    SectionPlanItem(3, "3. Data & Processing", "fixed"),
+    SectionPlanItem(4, "4. Statistics", "statistics", always_render=False),
+    SectionPlanItem(
+        5, "5. Spatial Distribution", "narrative", "spatial_distribution", always_render=False
+    ),
+    SectionPlanItem(
+        6, "6. Temporal Analysis", "narrative", "temporal_analysis", always_render=False
+    ),
+    SectionPlanItem(7, "7. Change Analysis", "narrative", "change_analysis", always_render=False),
+    SectionPlanItem(8, "8. Key Findings", "narrative", "key_findings", always_render=False),
+    SectionPlanItem(9, "9. Carbon Project Relevance", "fixed"),
+    SectionPlanItem(10, "10. Data Quality", "fixed"),
+    SectionPlanItem(11, "11. Limitations", "fixed"),
+)
+
+
 def _legend_color(legend: list[dict[str, Any]] | None, class_name: str) -> str | None:
     for entry in legend or []:
         if entry.get("name") == class_name:
@@ -189,7 +242,24 @@ def build_section_content(
     if "series" in stats:
         series = stats["series"]
 
-    if "distribution" in stats:
+    if "index" in stats:
+        # VNV Pipeline band-index result (Wave: VNV band indices, carbon-mrv
+        # -vm0047 fix). ONE rolling 90-day trailing-window composite, no year
+        # axis - `stats["distribution"]` here is keyed "latest", not a year
+        # string, so this branch reads it directly rather than falling into
+        # the `"distribution" in stats` branch below, whose
+        # `sorted(..., key=int)` would crash outright on a non-numeric key
+        # (see vnv_analysis_jobs.py's own comment on this shape). Checked
+        # BEFORE that branch for exactly that reason.
+        latest = (stats.get("distribution") or {}).get("latest") or {}
+        stats_grid_year = None
+        stats_grid = [
+            StatRow("Mean", latest.get("mean")),
+            StatRow("Variability", latest.get("std_dev")),
+            StatRow("Min", latest.get("min")),
+            StatRow("Max", latest.get("max")),
+        ]
+    elif "distribution" in stats:
         years = sorted(stats["distribution"], key=int)
         stats_grid_year = years[-1] if years else None
         year_stats = stats["distribution"].get(stats_grid_year) or {} if stats_grid_year else {}
@@ -233,7 +303,14 @@ def build_section_content(
         data_quality_text=data_quality_text(
             stats.get("coverage_pct"),
             out_of_range_pixel_count=out_of_range,
-            has_cloud_masking="cloud_masking" in (methodology or {}),
+            # Resolved through `methodology_dict` (real `stats["methodology"]`
+            # if present, else `METHODOLOGY_FALLBACK`) - NOT the raw
+            # `methodology` local above. VNV's real stats never carry a
+            # `methodology` key at all, so the raw check was always False for
+            # every VNV analysis even after `METHODOLOGY_FALLBACK` gained a
+            # `cloud_masking` entry for them - this must resolve the same
+            # fallback `methodology_text`/`data_processing_text` already do.
+            has_cloud_masking="cloud_masking" in methodology_dict(analysis_id, methodology),
         ),
         carbon_project_relevance=carbon_project_relevance(analysis_id),
         limitations_text=limitations_text(analysis_id, note),

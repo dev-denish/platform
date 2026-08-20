@@ -18,7 +18,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.domain.enums import DatasetType, LayerKind, ProjectStatus, ReportType, Role
+from app.domain.enums import DatasetType, LayerKind, ProjectStatus, ReportFormat, ReportType, Role
 
 # ---------------------------------------------------------------- auth
 
@@ -755,6 +755,14 @@ class GenerateReportRequest(BaseModel):
     # behaviour unchanged; "ai" sources every section's narrative from Gemini
     # instead (see report_service.generate_report_pdf_bytes).
     report_type: ReportType = ReportType.SYSTEM
+    # Wave: HTML report rendering. "pdf" (default) preserves 100% of every
+    # existing caller's behaviour - the fpdf2 path is untouched by this field
+    # existing at all. "html" instead renders the exact same assembled
+    # sections/maps/charts through report_html.build_report_html (see
+    # report_service.generate_report_bytes, the one place this switch is
+    # read). Orthogonal to `report_type` above and to `analysis_ids`/its
+    # max-13 cap - neither is affected by which artifact format is chosen.
+    output_format: ReportFormat = ReportFormat.PDF
 
 
 # ---------------------------------------------------------------- admin boundaries

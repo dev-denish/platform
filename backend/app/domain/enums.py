@@ -128,6 +128,23 @@ class ReportType(StrEnum):
     AI = "ai"
 
 
+class ReportFormat(StrEnum):
+    """Wave: HTML report rendering. The output ARTIFACT format for a
+    generated report - orthogonal to `ReportType` above (which decides
+    whether a section's narrative is system- or AI-sourced content, not
+    what container it's laid out into). One `generate_report` job produces
+    exactly one artifact in exactly one of these formats; the two axes are
+    independent (an AI report can be rendered as PDF or HTML, and so can a
+    system report) and are threaded through the job/download path as two
+    separate fields, never combined into one enum. Does not affect
+    `GenerateReportRequest.analysis_ids` or its max-13 cap - that limit is
+    about how many analyses one report may cover, unrelated to which file
+    format the result is written into."""
+
+    PDF = "pdf"
+    HTML = "html"
+
+
 class AuditAction(StrEnum):
     LOGIN = "login"
     INGEST_DATASET = "ingest_dataset"

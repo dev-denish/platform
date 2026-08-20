@@ -37,8 +37,9 @@ from app.api.deps import (
 )
 from app.core.config import Settings
 from app.core.errors import NotFoundError, ValidationError
+from app.core.http_headers import content_disposition_attachment
 from app.domain.dtos import CurrentUser, GenerateReportRequest, JobAccepted, ReportOptions
-from app.domain.enums import UPLOAD_ROLES
+from app.domain.enums import UPLOAD_ROLES, ReportFormat
 from app.services.ingestion.storage import Storage
 from app.services.jobs_service import JobService
 from app.services.report_service import ReportService
@@ -87,8 +88,42 @@ def download_report(
         raise ValidationError(f"This report is not ready yet (status: {job.status}).")
     result = job.result or {}
     storage_key = result.get("storage_key")
+    # Wave: HTML report rendering. Backward-compat default for a legacy job
+    # record (job.result is a JSONB/dict blob read at request time - no
+    # schema migration needed, this `.get` default is the only compat shim)
+    # persisted before this wave ever wrote a "format" key - every such row
+    # is a PDF, since PDF was the only format that ever existed.
+    output_format = result.get("format", "pdf")
     filename = result.get("filename", "report.pdf")
     if not storage_key:
         raise NotFoundError("This report's file is no longer available.")
-    response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
-    return StreamingResponse(storage.open_stream(storage_key), media_type="application/pdf")
+    # Wave: security fix pass. `filename` is ultimately derived from a
+    # user-entered project_name (app.domain.dtos, max_length=256 but no
+    # charset constraint) - appsec-reviewer found two concrete failures from
+    # interpolating it unquoted here: (1) Starlette encodes header values as
+    # latin-1, so any non-latin-1 character (Kannada script, etc.) 500'd this
+    # endpoint outright; (2) `"`/CR/LF/`;` could break Content-Disposition's
+    # own quoting, newly more consequential now that HTML is a
+    # browser-executable download format. `content_disposition_attachment`
+    # strips the injection characters and emits the RFC 5987/6266 dual form
+    # (ASCII-safe `filename=` fallback + `filename*=UTF-8''...`) so this
+    # never 500s and never lets a crafted project name break the header,
+    # regardless of whether app.workers.report_jobs already sanitised
+    # `filename` before persisting it (a legacy job row predating that fix
+    # could still hold an unsanitised one).
+    default_name = f"report.{'html' if output_format == ReportFormat.HTML else 'pdf'}"
+    response.headers["Content-Disposition"] = content_disposition_attachment(
+        filename, fallback=default_name,
+    )
+    if output_format == ReportFormat.HTML:
+        # HTML is executable in a browser - Content-Disposition: attachment
+        # (never inline, unchanged above) is the main mitigation; these two
+        # headers are defense-in-depth for a client that renders it anyway.
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'none'; style-src 'unsafe-inline'; img-src data:"
+        )
+        media_type = "text/html; charset=utf-8"
+    else:
+        media_type = "application/pdf"
+    return StreamingResponse(storage.open_stream(storage_key), media_type=media_type)

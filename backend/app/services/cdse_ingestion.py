@@ -68,6 +68,7 @@ import numpy as np
 import rasterio
 from rasterio.enums import Resampling
 from rasterio.env import Env
+from rasterio.features import geometry_mask
 from rasterio.io import MemoryFile
 from rasterio.mask import mask as rio_mask
 from rasterio.merge import merge as rio_merge
@@ -140,6 +141,19 @@ class PreparedRaster:
     crs: str
     resolution_m: float
     bounds: tuple[float, float, float, float]  # in `crs`, not necessarily 4326
+    # True count of pixels whose centre falls inside the real AOI POLYGON, on
+    # this raster's own (width x height) grid - NOT `width * height` (that's
+    # the AOI's bounding-box pixel count, `crop=True`'s grid, always >= this
+    # for any non-rectangular AOI). Added to fix a coverage_pct bug: callers
+    # were dividing valid_pixel_count (correctly polygon-aware, since both
+    # cloud-masked AND outside-polygon pixels already read as nodata=0 on the
+    # SAME grid) by `width * height` (bbox-aware only) - permanently
+    # deflating coverage_pct for any non-rectangular AOI, independent of
+    # actual cloud cover. See `_prepare`'s own computation of this field for
+    # why it's guaranteed pixel-for-pixel consistent with `_merge_and_clip`'s
+    # own masking (same `rasterio.features.geometry_mask` call `rio_mask`
+    # itself uses internally, same `all_touched=False` default).
+    aoi_pixel_count: int
 
 
 def _to_vsis3(s3_href: str) -> str:
@@ -450,6 +464,18 @@ class CDSEClient:
         # rasterio.transform.array_bounds returns a plain (left, bottom,
         # right, top) tuple - NOT a BoundingBox namedtuple like src.bounds.
         left, bottom, right, top = rasterio.transform.array_bounds(h, w, merged_transform)
+        # Recomputed here (not threaded out of `_merge_and_clip`, which stays
+        # untouched/still returns its original 3-tuple - a real, already
+        # -tested caller elsewhere unpacks exactly that shape) - transform_geom
+        # + geometry_mask on the SAME final (h, w)/merged_transform/merged_crs
+        # this function already has in hand, so it costs one cheap extra
+        # rasterization, not a second clip.
+        aoi_native = transform_geom("EPSG:4326", merged_crs, aoi_4326)
+        aoi_pixel_count = int(
+            geometry_mask(
+                [aoi_native], out_shape=(h, w), transform=merged_transform, invert=True
+            ).sum()
+        )
         return PreparedRaster(
             output_path=output_path,
             scenes=[
@@ -463,6 +489,7 @@ class CDSEClient:
             width=w, height=h, crs=merged_crs.to_string(),
             resolution_m=_band_transform_res(merged_transform),
             bounds=(left, bottom, right, top),
+            aoi_pixel_count=aoi_pixel_count,
         )
 
     def prepare_sentinel2_aoi_raster(

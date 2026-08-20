@@ -1,0 +1,52 @@
+<!--
+  Wave: HTML report rendering. HTML has no page-break primitive equivalent to
+  fpdf2's forced `pdf.add_page()` (report_pdf.py::_cover_page), so this block
+  is given deliberately distinct, high-contrast styling (its own background
+  color, a heavy accent border, larger type) rather than just being the first
+  <div> on the page - the goal is that it reads as a genuine cover, not a
+  visually subordinate preamble to section 1. `page-break-after: always`
+  also forces a real page break for anyone who prints/exports this document
+  to PDF from a browser.
+
+  Wave: security/compliance fix pass (carbon-mrv-vm0047). This div is a
+  classed `.cover` (not anonymous/inline-only) so report.html's shared
+  <style> block can target it with @media print/screen overrides - see that
+  file for why: Chrome's "Background graphics" is OFF by default in
+  print/Save-as-PDF, which would otherwise turn this into invisible white
+  text on white paper (including both AI-disclosure paragraphs) while
+  `page-break-after: always` still produces a blank page ahead of section 1
+  - the exact opposite of "equivalent prominence to the PDF's forced cover
+  page". The inline styles below remain as the on-screen/no-CSS-support
+  baseline; the print override in report.html's <style> takes precedence
+  under `@media print`.
+-->
+<div class="cover" style="
+    background: #0b3d2e;
+    color: #ffffff;
+    padding: 48px 32px;
+    page-break-after: always;
+    border-bottom: 6px solid #d4a017;
+    font-family: Helvetica, Arial, sans-serif;
+  ">
+  <h1 style="font-size: 28px; margin: 0 0 8px 0;">dMRV Analysis Report</h1>
+  <h2 style="font-size: 18px; margin: 0 0 16px 0; font-weight: normal;">{{ project_name }}</h2>
+  <div style="font-size: 12px; margin-bottom: 24px;">
+    <div>Project ID: {{ project_id }}</div>
+    <div>Generated: {{ generated_at.strftime('%Y-%m-%d %H:%M UTC') }}</div>
+  </div>
+  <div style="font-size: 13px; font-weight: bold; margin-bottom: 8px;">
+    Included analyses ({{ sections|length }}):
+  </div>
+  <ul style="font-size: 12px; line-height: 1.6; margin: 0 0 24px 0;">
+    {% for s in sections %}
+    <li>
+      {{ s.name }}{% if s.stats_grid_year %} ({{ s.stats_grid_year }}){% elif s.class_breakdown_year %} ({{ s.class_breakdown_year }}){% endif %}
+      - computed {{ s.computed_at.strftime('%Y-%m-%d') }}
+    </li>
+    {% endfor %}
+  </ul>
+  <div style="font-size: 11px; font-style: italic; line-height: 1.6;">{{ cover_text }}</div>
+  {% if is_ai %}
+  <div style="font-size: 11px; font-style: italic; line-height: 1.6; margin-top: 12px;">{{ ai_disclosure }}</div>
+  {% endif %}
+</div>
