@@ -32,6 +32,7 @@ from app.services.report_fixed_text import (
     data_processing_text,
     data_quality_text,
     limitations_text,
+    methodology_dict,
     methodology_text,
 )
 
@@ -189,7 +190,24 @@ def build_section_content(
     if "series" in stats:
         series = stats["series"]
 
-    if "distribution" in stats:
+    if "index" in stats:
+        # VNV Pipeline band-index result (Wave: VNV band indices, carbon-mrv
+        # -vm0047 fix). ONE rolling 90-day trailing-window composite, no year
+        # axis - `stats["distribution"]` here is keyed "latest", not a year
+        # string, so this branch reads it directly rather than falling into
+        # the `"distribution" in stats` branch below, whose
+        # `sorted(..., key=int)` would crash outright on a non-numeric key
+        # (see vnv_analysis_jobs.py's own comment on this shape). Checked
+        # BEFORE that branch for exactly that reason.
+        latest = (stats.get("distribution") or {}).get("latest") or {}
+        stats_grid_year = None
+        stats_grid = [
+            StatRow("Mean", latest.get("mean")),
+            StatRow("Variability", latest.get("std_dev")),
+            StatRow("Min", latest.get("min")),
+            StatRow("Max", latest.get("max")),
+        ]
+    elif "distribution" in stats:
         years = sorted(stats["distribution"], key=int)
         stats_grid_year = years[-1] if years else None
         year_stats = stats["distribution"].get(stats_grid_year) or {} if stats_grid_year else {}
@@ -233,7 +251,14 @@ def build_section_content(
         data_quality_text=data_quality_text(
             stats.get("coverage_pct"),
             out_of_range_pixel_count=out_of_range,
-            has_cloud_masking="cloud_masking" in (methodology or {}),
+            # Resolved through `methodology_dict` (real `stats["methodology"]`
+            # if present, else `METHODOLOGY_FALLBACK`) - NOT the raw
+            # `methodology` local above. VNV's real stats never carry a
+            # `methodology` key at all, so the raw check was always False for
+            # every VNV analysis even after `METHODOLOGY_FALLBACK` gained a
+            # `cloud_masking` entry for them - this must resolve the same
+            # fallback `methodology_text`/`data_processing_text` already do.
+            has_cloud_masking="cloud_masking" in methodology_dict(analysis_id, methodology),
         ),
         carbon_project_relevance=carbon_project_relevance(analysis_id),
         limitations_text=limitations_text(analysis_id, note),

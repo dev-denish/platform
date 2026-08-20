@@ -14,6 +14,7 @@ from app.services.index_summary import DESCRIPTIVE_ONLY_TRAILER
 from app.services.report_content import (
     MULTI_YEAR_INDEX_IDS,
     ClassRow,
+    StatRow,
     build_section_content,
     has_change_data,
     has_temporal_data,
@@ -240,6 +241,89 @@ def test_change_analysis_present_only_for_hansen():
     esa_section = build_section_content(esa_entry, "esa_worldcover", _NOW, esa_stats, None)
     assert "change_analysis" not in esa_section.narrative
     assert "temporal_analysis" not in esa_section.narrative
+
+
+# --------------------------------------------------------------------------
+# carbon-mrv-vm0047 report-generation fix: VNV band-index results
+# (run_vnv_band_index_analysis's real stats shape) must populate the stat
+# grid and disclose cloud masking, the same way a GEE vegetation index does.
+# --------------------------------------------------------------------------
+
+
+def _vnv_ndvi_stats(**overrides):
+    stats = {
+        "index": "vnv_ndvi",
+        "min": 0.1, "max": 0.9, "mean": 0.55, "std_dev": 0.12,
+        "valid_pixel_count": 9000, "total_pixel_count": 10000, "coverage_pct": 90.0,
+        "scene_count": 3,
+        "distribution": {"latest": {"mean": 0.55, "std_dev": 0.12, "min": 0.1, "max": 0.9}},
+        "note": "Computed from a 90-day trailing Sentinel-2 composite.",
+    }
+    stats.update(overrides)
+    return stats
+
+
+def test_vnv_band_index_stats_grid_is_populated_not_empty():
+    """Before this fix, `stats_grid` stayed [] for every VNV band-index
+    result (its stats never had a `"distribution"` key keyed by year), which
+    silently skipped the entire Statistics section in the PDF - see
+    report_pdf.py's `if section.stats_grid:` gate."""
+    entry = get_catalog_entry("vnv_ndvi")
+    stats = _vnv_ndvi_stats()
+    section = build_section_content(entry, "vnv_ndvi", _NOW, stats, None)
+    assert section.stats_grid == [
+        StatRow("Mean", 0.55), StatRow("Variability", 0.12), StatRow("Min", 0.1), StatRow("Max", 0.9),
+    ]
+    assert section.stats_grid_year is None
+
+
+def test_vnv_band_index_narrative_does_not_crash_or_mislabel_as_a_single_scene():
+    entry = get_catalog_entry("vnv_ndvi")
+    stats = _vnv_ndvi_stats()
+    section = build_section_content(entry, "vnv_ndvi", _NOW, stats, None)
+    assert "single raw scene" not in section.narrative["executive_summary"]
+    assert "0.55" in section.narrative["executive_summary"]
+
+
+def test_vnv_band_index_data_quality_text_discloses_cloud_masking():
+    """Before this fix, `has_cloud_masking` read the raw
+    `stats.get("methodology")` (always None for VNV) instead of resolving
+    through the fallback dict `METHODOLOGY_FALLBACK` now carries a
+    `cloud_masking` entry for - so this sentence never appeared for any VNV
+    analysis even after the fallback text existed."""
+    entry = get_catalog_entry("vnv_ndvi")
+    stats = _vnv_ndvi_stats()
+    section = build_section_content(entry, "vnv_ndvi", _NOW, stats, None)
+    assert "90.0%" in section.data_quality_text
+    assert "masked before computing statistics" in section.data_quality_text
+
+
+def test_vnv_band_index_data_processing_text_discloses_cloud_masking_too():
+    """`data_processing_text` already resolves through the fallback (it did
+    before this fix too) - confirms the same fallback entry backs both
+    sections consistently."""
+    entry = get_catalog_entry("vnv_evi")
+    stats = _vnv_ndvi_stats(index="vnv_evi")
+    section = build_section_content(entry, "vnv_evi", _NOW, stats, None)
+    assert "Cloud masking:" in section.data_processing_text
+    assert "SCL" in section.data_processing_text
+
+
+def test_vnv_ndfi_data_quality_text_discloses_cloud_masking_despite_no_coverage_pct():
+    """carbon-mrv-vm0047 review (M1): vnv_ndfi's real stats dict (built from
+    the R sidecar's own payload, see vnv_analysis_jobs.py) has no
+    `coverage_pct` key at all - before this fix, `data_quality_text`'s early
+    `if coverage_pct is None: return "Coverage could not be determined..."`
+    silently dropped the masking sentence too, even though `has_cloud_masking`
+    already resolves True via `METHODOLOGY_FALLBACK["vnv_ndfi"]`."""
+    entry = get_catalog_entry("vnv_ndfi")
+    stats = {
+        "min": 0.0, "max": 1.0, "mean": 0.02, "valid_pixel_count": 10,
+        "total_pixel_count": 4200, "masked_fraction": 0.9976,
+    }
+    section = build_section_content(entry, "vnv_ndfi", _NOW, stats, None)
+    assert "masked before computing statistics" in section.data_quality_text
+    assert section.data_quality_text != "Coverage could not be determined for this analysis."
 
 
 @pytest.mark.parametrize("analysis_id", sorted(REAL_ANALYSIS_IDS))

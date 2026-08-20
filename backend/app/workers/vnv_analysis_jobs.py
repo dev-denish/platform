@@ -279,17 +279,41 @@ async def run_vnv_band_index_analysis(
 
         valid = np.isfinite(index_arr)
         valid_pixel_count = int(valid.sum())
-        total_pixel_count = int(index_arr.size)
+        # `prepared.aoi_pixel_count`, NOT `index_arr.size` (the full AOI
+        # bounding-box grid `rasterio.mask.mask(..., crop=True)` produces -
+        # see `PreparedRaster.aoi_pixel_count`'s own docstring). Using
+        # `index_arr.size` here permanently deflated coverage_pct for any
+        # non-rectangular AOI: `valid_pixel_count` already correctly excludes
+        # both cloud-masked AND outside-polygon pixels (both read as the same
+        # nodata=0 in the source raster), but the old bbox-sized denominator
+        # did not - independent of actual cloud cover.
+        total_pixel_count = prepared.aoi_pixel_count
         valid_values = index_arr[valid]
+        mean = float(valid_values.mean()) if valid_pixel_count else None
+        std_dev = float(valid_values.std()) if valid_pixel_count else None
+        minimum = float(valid_values.min()) if valid_pixel_count else None
+        maximum = float(valid_values.max()) if valid_pixel_count else None
         stats: dict[str, Any] = {
             "index": analysis_id,
-            "min": float(valid_values.min()) if valid_pixel_count else None,
-            "max": float(valid_values.max()) if valid_pixel_count else None,
-            "mean": float(valid_values.mean()) if valid_pixel_count else None,
+            "min": minimum,
+            "max": maximum,
+            "mean": mean,
+            "std_dev": std_dev,
             "valid_pixel_count": valid_pixel_count,
             "total_pixel_count": total_pixel_count,
             "coverage_pct": 100.0 * valid_pixel_count / total_pixel_count if total_pixel_count else 0.0,
             "scene_count": len(prepared.scenes),
+            # Same shape (`{key: {mean, std_dev, min, max}}`) report_content.py's
+            # `"distribution" in stats` stat-grid branch already recognizes for
+            # the GEE vegetation indices - "latest" (not a year) keys it,
+            # since this is ONE rolling 90-day trailing-window composite with
+            # no year axis at all, unlike that branch's usual per-year GEE
+            # data. `report_content.py`/`report_deterministic_narrative.py`
+            # both dispatch on `"index" in stats` BEFORE they'd ever try to
+            # sort this dict's keys as years - see their own comments.
+            "distribution": {
+                "latest": {"mean": mean, "std_dev": std_dev, "min": minimum, "max": maximum},
+            },
             "note": (
                 f"Computed from a {_WINDOW_DAYS}-day trailing Sentinel-2 composite "
                 f"({date_start} to {date_end}), {len(prepared.scenes)} scene(s), "
