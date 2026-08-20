@@ -30,6 +30,7 @@ if not os.getenv("DMRV_TEST_DATABASE"):
 from app.core.config import get_settings  # noqa: E402
 from app.core.db import Database  # noqa: E402
 from app.core.errors import ForbiddenError, NotFoundError, ValidationError  # noqa: E402
+from app.domain.analysis_catalog import CATALOG  # noqa: E402
 from app.domain.dtos import AnalysisPointValue, CurrentUser  # noqa: E402
 from app.domain.enums import Role  # noqa: E402
 from app.repositories.analysis_results import AnalysisResultRepository  # noqa: E402
@@ -181,17 +182,15 @@ def _add_boundary(db: Database, project_id) -> None:
 # --------------------------------------------------------------- catalog listing
 
 
-def test_get_project_analyses_lists_all_nineteen_with_no_computed_at_before_any_refresh(
+def test_get_project_analyses_lists_all_entries_with_no_computed_at_before_any_refresh(
     db, analysis_service
 ):
-    # 16 original + 3 Raw Imagery (Wave: raw-imagery browsing:
-    # s2_browse/s1_browse/landsat_browse).
     admin = _make_user(db, Role.ADMINISTRATOR)
     pid = _make_project(db, f"Proj-{uuid.uuid4()}")
 
     result = analysis_service.get_project_analyses(pid, admin)
 
-    assert len(result.analyses) == 19
+    assert len(result.analyses) == len(CATALOG)
     assert all(a.computed_at is None for a in result.analyses)
 
 
