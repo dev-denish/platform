@@ -27,8 +27,13 @@ export default function ReportGenerator({ projectId }) {
   const [error, setError] = useState(null);
   const [selected, setSelected] = useState(() => new Set());
   const [reportType, setReportType] = useState(null); // null | "system" | "ai" - no default
+  // Unlike reportType above, outputFormat DOES default - "pdf" here matches
+  // the backend's own default (GenerateReportRequest.output_format), and
+  // there's no "steering" concern for a file-format choice the way there is
+  // for report_type's system-vs-AI wording choice.
+  const [outputFormat, setOutputFormat] = useState("pdf"); // "pdf" | "html"
   const [submitting, setSubmitting] = useState(false);
-  const [job, setJob] = useState(null); // {job_id, status, report_type, result, error}
+  const [job, setJob] = useState(null); // {job_id, status, report_type, output_format, result, error}
 
   useEffect(() => {
     let cancelled = false;
@@ -81,9 +86,18 @@ export default function ReportGenerator({ projectId }) {
     try {
       const accepted = await apiFetch(`/projects/${projectId}/report`, {
         method: "POST",
-        body: JSON.stringify({ analysis_ids: [...selected], report_type: reportType }),
+        body: JSON.stringify({
+          analysis_ids: [...selected],
+          report_type: reportType,
+          output_format: outputFormat,
+        }),
       });
-      setJob({ job_id: accepted.job_id, status: "queued", report_type: reportType });
+      setJob({
+        job_id: accepted.job_id,
+        status: "queued",
+        report_type: reportType,
+        output_format: outputFormat,
+      });
     } catch (err) {
       setError(err.message ?? "Failed to start report generation.");
     } finally {
@@ -114,7 +128,7 @@ export default function ReportGenerator({ projectId }) {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = match ? match[1] : "report.pdf";
+      a.download = match ? match[1] : `report.${job.output_format}`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -127,7 +141,7 @@ export default function ReportGenerator({ projectId }) {
   return (
     <section className="panel">
       <div className="panel-header">
-        <h2 className="panel-title">PDF report</h2>
+        <h2 className="panel-title">Generate report</h2>
       </div>
       <ErrorBanner message={error} />
       {!options ? (
@@ -214,6 +228,59 @@ export default function ReportGenerator({ projectId }) {
                     {options.ai_narrative_disclosure}
                   </span>
                 ) : null}
+              </span>
+            </label>
+          </fieldset>
+
+          <p className="field-hint">Choose the file format for your report:</p>
+          <fieldset className="report-type-picker">
+            <legend className="field-label">Output format</legend>
+
+            <label className={`report-type-option${outputFormat === "pdf" ? " selected" : ""}`}>
+              <input
+                type="radio"
+                name="output_format"
+                value="pdf"
+                checked={outputFormat === "pdf"}
+                onChange={() => setOutputFormat("pdf")}
+                disabled={!!job && !TERMINAL_STATUSES.includes(job.status)}
+              />
+              <span className="report-type-option-body">
+                <span className="report-type-option-head">
+                  <span className="report-type-option-name">PDF</span>
+                </span>
+                <span className="report-type-option-desc">
+                  A downloadable PDF document, laid out the same way as this report has always
+                  looked.
+                </span>
+                <span className="report-type-option-meta">
+                  <span className="report-type-meta-chip">Print-ready layout</span>
+                  <span className="report-type-meta-chip">Works offline</span>
+                </span>
+              </span>
+            </label>
+
+            <label className={`report-type-option${outputFormat === "html" ? " selected" : ""}`}>
+              <input
+                type="radio"
+                name="output_format"
+                value="html"
+                checked={outputFormat === "html"}
+                onChange={() => setOutputFormat("html")}
+                disabled={!!job && !TERMINAL_STATUSES.includes(job.status)}
+              />
+              <span className="report-type-option-body">
+                <span className="report-type-option-head">
+                  <span className="report-type-option-name">HTML</span>
+                </span>
+                <span className="report-type-option-desc">
+                  A downloadable HTML file — the same content and sections, viewable in any
+                  browser without a PDF reader.
+                </span>
+                <span className="report-type-option-meta">
+                  <span className="report-type-meta-chip">Viewable in any browser</span>
+                  <span className="report-type-meta-chip">No PDF reader needed</span>
+                </span>
               </span>
             </label>
           </fieldset>
