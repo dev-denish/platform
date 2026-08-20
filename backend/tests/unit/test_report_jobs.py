@@ -3,10 +3,11 @@ ai-report-narrative, Phase 3) - specifically the ONE deliberate carve-out
 from this job's usual generic-retry behaviour: `AiNarrativeError` must
 dead-letter the job immediately, never schedule a retry (see
 app/workers/report_jobs.py's own module docstring for why). No real DB/
-Storage/Redis - `generate_report_pdf_bytes` itself is monkeypatched (its own
-`report_type` branching is covered separately by tests/unit/test_report_
-service.py), so this suite isolates exactly what this job function does
-once that call raises."""
+Storage/Redis - `generate_report_bytes` (the single PDF/HTML dispatcher
+`run_generate_report_job` now calls, Wave: HTML report rendering) itself is
+monkeypatched (its own `report_type`/`output_format` branching is covered
+separately by tests/unit/test_report_service.py), so this suite isolates
+exactly what this job function does once that call raises."""
 from __future__ import annotations
 
 import asyncio
@@ -68,7 +69,7 @@ def test_ai_narrative_error_dead_letters_without_retrying(monkeypatch, _stub_job
     def _raise(*a, **k):
         raise AiNarrativeError("section 'ndvi' produced an ungrounded number")
 
-    monkeypatch.setattr(report_jobs, "generate_report_pdf_bytes", _raise)
+    monkeypatch.setattr(report_jobs, "generate_report_bytes", _raise)
 
     db = _FakeDb()
     asyncio.run(
@@ -96,7 +97,7 @@ def test_a_generic_error_still_retries_instead_of_dead_lettering_on_first_try(
     def _raise(*a, **k):
         raise RuntimeError("GEE quota exceeded")
 
-    monkeypatch.setattr(report_jobs, "generate_report_pdf_bytes", _raise)
+    monkeypatch.setattr(report_jobs, "generate_report_bytes", _raise)
 
     db = _FakeDb()
     with pytest.raises(Retry):

@@ -32,7 +32,7 @@ from app.domain import analysis_config
 from app.domain.analysis_catalog import CATALOG, get_catalog_entry
 from app.domain.authz import require_project_view
 from app.domain.dtos import CurrentUser, GenerateReportRequest, ReportAnalysisOption, ReportOptions
-from app.domain.enums import ReportType
+from app.domain.enums import ReportFormat, ReportType
 from app.repositories.analysis_results import AnalysisResultRepository
 from app.repositories.forest_definition import ForestDefinitionRepository
 from app.repositories.projects import ProjectRepository
@@ -40,7 +40,8 @@ from app.services.ai_narrative import GEMINI_MODEL, generate_ai_summaries
 from app.services.gee_analysis_service import _compute_cached
 from app.services.jobs_service import JobService
 from app.services.report_charts import render_trend_chart_png
-from app.services.report_content import build_section_content, is_multi_year_index
+from app.services.report_content import ReportSection, build_section_content, is_multi_year_index
+from app.services.report_html import build_report_html
 from app.services.report_map_image import render_boundary_map_png
 from app.services.report_pdf import AI_NARRATIVE_DISCLOSURE_TEMPLATE, build_report_pdf
 from app.workers.queue import TaskRunner
@@ -122,7 +123,8 @@ class ReportService:
                     run_generate_report_job,
                     job_id=str(job_id), project_id=str(project_id), project_name=project_name,
                     analysis_ids=list(body.analysis_ids), boundary_geojson=boundary_geojson,
-                    report_type=body.report_type.value, actor=user.model_dump(mode="json"),
+                    report_type=body.report_type.value, output_format=body.output_format.value,
+                    actor=user.model_dump(mode="json"),
                 )
             except Exception as e:
                 jobs.mark_enqueue_failed(job_id, str(e))
@@ -132,17 +134,20 @@ class ReportService:
         return job_id
 
 
-def generate_report_pdf_bytes(
+def _assemble_sections(
     db: Database,
     project_id: str,
     project_name: str,
     analysis_ids: list[str],
     boundary_geojson: dict[str, Any],
     report_type: str = ReportType.SYSTEM,
-) -> bytes:
-    """The one function that does the actual slow work - called only from
-    the `generate_report` job body (app/workers/report_jobs.py), never from
-    a request handler. All CONTENT (summary/stats/methodology text) comes
+) -> tuple[list[ReportSection], dict[str, bytes], dict[str, bytes], str | None]:
+    """The one place that does the actual slow work of assembling a report's
+    CONTENT - called only from `generate_report_pdf_bytes`/
+    `generate_report_html_bytes` below (Wave: HTML report rendering split
+    this out of what used to be `generate_report_pdf_bytes` itself, so both
+    output formats share identical sections/images/ai_model rather than each
+    re-deriving them). All CONTENT (summary/stats/methodology text) comes
     from the durable `analysis_result` row via `get_result`-equivalent reads
     below - never recomputed, so the report always describes exactly what
     the UI showed at computed_at, not a silently different re-run. Only the
@@ -229,8 +234,72 @@ def generate_report_pdf_bytes(
         # in the narrative path can spoof it.
         ai_model = GEMINI_MODEL
 
+    return sections, map_images, chart_images, ai_model
+
+
+def generate_report_pdf_bytes(
+    db: Database,
+    project_id: str,
+    project_name: str,
+    analysis_ids: list[str],
+    boundary_geojson: dict[str, Any],
+    report_type: str = ReportType.SYSTEM,
+) -> bytes:
+    """Thin wrapper around `_assemble_sections` + `report_pdf.build_report_pdf`
+    - kept with this EXACT name/signature (existing tests reference it
+    directly and monkeypatch `report_service.generate_ai_summaries`) even
+    though it no longer does the assembly work itself (see
+    `_assemble_sections`'s own docstring, Wave: HTML report rendering)."""
+    sections, map_images, chart_images, ai_model = _assemble_sections(
+        db, project_id, project_name, analysis_ids, boundary_geojson, report_type=report_type,
+    )
     return build_report_pdf(
         project_name=project_name, project_id=project_id, generated_at=datetime.now(UTC),
         sections=sections, map_images=map_images, chart_images=chart_images,
         report_type=report_type, ai_model=ai_model,
+    )
+
+
+def generate_report_html_bytes(
+    db: Database,
+    project_id: str,
+    project_name: str,
+    analysis_ids: list[str],
+    boundary_geojson: dict[str, Any],
+    report_type: str = ReportType.SYSTEM,
+) -> bytes:
+    """Wave: HTML report rendering. The HTML sibling of
+    `generate_report_pdf_bytes` above - identical assembly
+    (`_assemble_sections`), identical sections/images/ai_model, laid out via
+    `report_html.build_report_html` instead of `report_pdf.build_report_pdf`."""
+    sections, map_images, chart_images, ai_model = _assemble_sections(
+        db, project_id, project_name, analysis_ids, boundary_geojson, report_type=report_type,
+    )
+    return build_report_html(
+        project_name=project_name, project_id=project_id, generated_at=datetime.now(UTC),
+        sections=sections, map_images=map_images, chart_images=chart_images,
+        report_type=report_type, ai_model=ai_model,
+    )
+
+
+def generate_report_bytes(
+    db: Database,
+    project_id: str,
+    project_name: str,
+    analysis_ids: list[str],
+    boundary_geojson: dict[str, Any],
+    report_type: str = ReportType.SYSTEM,
+    output_format: str = ReportFormat.PDF,
+) -> bytes:
+    """Wave: HTML report rendering. The ONE place the PDF/HTML output-format
+    switch happens (see `app.domain.enums.ReportFormat`'s own docstring for
+    why this is orthogonal to `report_type`) - called from
+    `run_generate_report_job` instead of either format-specific function
+    directly, so a new output format only ever needs a new branch here."""
+    if output_format == ReportFormat.HTML:
+        return generate_report_html_bytes(
+            db, project_id, project_name, analysis_ids, boundary_geojson, report_type=report_type,
+        )
+    return generate_report_pdf_bytes(
+        db, project_id, project_name, analysis_ids, boundary_geojson, report_type=report_type,
     )

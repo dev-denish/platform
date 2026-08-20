@@ -43,6 +43,15 @@ dependencies = [
     # PDF - no charting library existed here before (Recharts is JS-only,
     # frontend-side). Agg backend (see report_charts.py) needs no display.
     "matplotlib==3.10.0",
+    # Wave: HTML report rendering. The HTML sibling of the fpdf2 report path
+    # (report_html.py) - Jinja2 with autoescaping on is pure-Python/no
+    # system libs, matching this repo's existing all-Python-wheel constraint
+    # (the same reason fpdf2 was chosen over weasyprint/pdfkit above: no
+    # Pango/Cairo/wkhtmltopdf/browser-engine dependency to add to the runtime
+    # image). markupsafe (Jinja2's own escaping dependency) is a pure
+    # transitive dep of a pinned package, not pinned separately here - same
+    # convention this list already applies to httpx/pytest above.
+    "jinja2==3.1.6",
     # Wave: ai-report-narrative. Google's own SDK for the Gemini API
     # (`from google import genai`) - the only AI report-narrative backend
     # (decision 2026-08-12; see app/services/ai_narrative.py).

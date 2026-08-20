@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>dMRV Analysis Report - {{ project_name }}</title>
+<style>
+  body {
+    font-family: Helvetica, Arial, sans-serif;
+    color: #111111;
+    margin: 0;
+    padding: 0;
+  }
+  main {
+    padding: 24px 32px;
+  }
+  .report-img {
+    max-width: 100%;
+    height: auto;
+    margin: 8px 0;
+  }
+  .chart-img {
+    max-width: 85%;
+    height: auto;
+    margin: 8px 0;
+  }
+  section.report-section {
+    page-break-before: always;
+    border-top: 2px solid #0b3d2e;
+    padding-top: 16px;
+    margin-top: 24px;
+  }
+  section.report-section:first-of-type {
+    page-break-before: auto;
+  }
+  .section-title {
+    font-size: 20px;
+    margin: 0 0 4px 0;
+  }
+  .section-meta {
+    font-size: 11px;
+    color: #5a5a5a;
+    margin-bottom: 8px;
+  }
+  .coverage {
+    font-weight: bold;
+    font-size: 13px;
+    margin-bottom: 8px;
+  }
+  h3.block-heading {
+    font-size: 14px;
+    margin: 16px 0 4px 0;
+  }
+  p.block-text {
+    font-size: 12px;
+    line-height: 1.5;
+    margin: 0 0 8px 0;
+    white-space: pre-line;
+  }
+  p.block-text.small {
+    font-size: 10.5px;
+  }
+  ul.bullets {
+    font-size: 12px;
+    line-height: 1.5;
+    margin: 0 0 8px 0;
+  }
+  .stats-label {
+    font-size: 12px;
+    font-weight: bold;
+    margin-top: 8px;
+  }
+  ul.stats-rows, ul.class-rows {
+    font-size: 12px;
+    margin: 4px 0 8px 0;
+  }
+  .disclaimer {
+    font-size: 10px;
+    font-style: italic;
+    margin-top: 16px;
+  }
+
+  /* Wave: security/compliance fix pass (carbon-mrv-vm0047). Chrome's
+     "Background graphics" is OFF by default in print/Save-as-PDF, which
+     would otherwise render _cover.html's dark background + white text as
+     invisible white-on-white while `page-break-after: always` still forces
+     a blank page ahead of section 1 - defeating the exact mechanism meant
+     to keep the AI disclosure as prominent as the PDF's own forced cover
+     page. Flipping to a light background + dark text under @media print
+     guarantees legibility regardless of whether the background itself
+     renders (`-webkit-print-color-adjust: exact` is not universally
+     honored, so it is not relied on here); the gold border is kept as a
+     visual cue that this is still a distinct cover block. The screen rule
+     restores "alone on the page" (page-break-after is print-only) for any
+     tall on-screen viewport, without touching print layout. */
+  @media print {
+    .cover { background: #fff !important; color: #111 !important; border-bottom: 6px solid #d4a017; }
+  }
+  @media screen {
+    .cover { min-height: 100vh; box-sizing: border-box; }
+  }
+</style>
+</head>
+<body>
+{% include "_cover.html" %}
+<main>
+{% for view in section_views %}
+{% include "_section.html" %}
+{% endfor %}
+</main>
+</body>
+</html>
