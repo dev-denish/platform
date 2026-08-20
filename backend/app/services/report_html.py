@@ -159,6 +159,29 @@ def _build_section_blocks(section: ReportSection, chart_png: bytes | None) -> li
     return blocks
 
 
+# carbon-mrv-vm0047 review (follow-up, HTML-only scope): the base disclosure
+# text (AI_NARRATIVE_DISCLOSURE_TEMPLATE) stays single-sourced from
+# report_pdf.py for everything else - see report_html.py's own module
+# docstring above on why both renderers must share one copy of that text.
+# This one extra sentence is deliberately NOT added to the shared constant,
+# because it describes post-download editability, a property that is true of
+# an HTML file (openable and alterable in any plain text editor, with no
+# specialized tools) and NOT true of the PDF this same constant is also used
+# for - folding it into the shared template would make it false every time
+# report_pdf.py renders it. Appending it locally, to the same string that
+# feeds the single `{{ ai_disclosure }}` template variable (see
+# report_templates/_cover.html), keeps it inside the identical styled div as
+# the rest of the disclosure - same font-size/emphasis, same paragraph - with
+# no second template variable needed.
+def _ai_disclosure_html(ai_model: str) -> str:
+    base = AI_NARRATIVE_DISCLOSURE_TEMPLATE.format(model=ai_model)
+    html_only_note = (
+        "This HTML file remains editable after download: its text can be altered using an "
+        "ordinary text editor, unlike the PDF version of this report."
+    )
+    return f"{base} {html_only_note}"
+
+
 def build_report_html(
     *,
     project_name: str,
@@ -209,7 +232,7 @@ def build_report_html(
         cover_text=_COVER_TEXT_AI if report_type == ReportType.AI else _COVER_TEXT_SYSTEM,
         is_ai=report_type == ReportType.AI,
         ai_disclosure=(
-            AI_NARRATIVE_DISCLOSURE_TEMPLATE.format(model=ai_model)
+            _ai_disclosure_html(ai_model)
             if report_type == ReportType.AI else None
         ),
     )
