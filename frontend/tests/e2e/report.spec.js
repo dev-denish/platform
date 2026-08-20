@@ -2,7 +2,7 @@ import { readFileSync } from "fs";
 import { test, expect } from "@playwright/test";
 import { login, ADMIN, API_BASE, QA_PROJECT_NAME } from "./helpers.js";
 
-test.describe("PDF report generation", () => {
+test.describe("Report generation", () => {
   test("select a computed analysis, generate, download, and get a valid PDF", async ({ page }) => {
     await login(page, ADMIN);
     await page.goto("/projects");
@@ -23,7 +23,7 @@ test.describe("PDF report generation", () => {
     expect(refreshRes.ok()).toBe(true);
 
     await page.getByRole("button", { name: "Dashboard" }).click();
-    const panel = page.locator("section.panel", { hasText: "PDF report" });
+    const panel = page.locator("section.panel", { hasText: "Generate report" });
     const hansenRow = panel.locator("label", { hasText: "Global Forest Change (Hansen)" });
     await expect(hansenRow).toBeVisible({ timeout: 15_000 });
     await hansenRow.locator('input[type="checkbox"]').check();
@@ -80,7 +80,7 @@ test.describe("PDF report generation", () => {
     expect(disclosure.length).toBeGreaterThan(20);
 
     await page.getByRole("button", { name: "Dashboard" }).click();
-    const panel = page.locator("section.panel", { hasText: "PDF report" });
+    const panel = page.locator("section.panel", { hasText: "Generate report" });
     const hansenRow = panel.locator("label", { hasText: "Global Forest Change (Hansen)" });
     await expect(hansenRow).toBeVisible({ timeout: 15_000 });
 
@@ -123,6 +123,7 @@ test.describe("PDF report generation", () => {
     expect(systemReq.postDataJSON()).toEqual({
       analysis_ids: expect.arrayContaining(["hansen_gfc"]),
       report_type: "system",
+      output_format: "pdf",
     });
 
     // Reset and re-run picking AI this time, to assert its POST body too.
@@ -140,7 +141,137 @@ test.describe("PDF report generation", () => {
     expect(aiReq.postDataJSON()).toEqual({
       analysis_ids: expect.arrayContaining(["hansen_gfc"]),
       report_type: "ai",
+      output_format: "pdf",
     });
+  });
+
+  test("output format: PDF pre-selected by default, HTML selectable, correct output_format sent", async ({ page }) => {
+    await login(page, ADMIN);
+    await page.goto("/projects");
+    await page.getByRole("link", { name: QA_PROJECT_NAME }).click();
+    await expect(page).toHaveURL(/\/projects\/[\w-]+/);
+    const projectId = page.url().match(/\/projects\/([\w-]+)/)[1];
+    const token = await page.evaluate(() => sessionStorage.getItem("dmrv.access_token"));
+
+    const refreshRes = await page.request.post(
+      `${API_BASE}/projects/${projectId}/analyses/hansen_gfc/refresh`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    expect(refreshRes.ok()).toBe(true);
+
+    await page.getByRole("button", { name: "Dashboard" }).click();
+    const panel = page.locator("section.panel", { hasText: "Generate report" });
+    const hansenRow = panel.locator("label", { hasText: "Global Forest Change (Hansen)" });
+    await expect(hansenRow).toBeVisible({ timeout: 15_000 });
+
+    const pdfRadio = panel.locator('input[type="radio"][name="output_format"][value="pdf"]');
+    const htmlRadio = panel.locator('input[type="radio"][name="output_format"][value="html"]');
+    const systemRadio = panel.locator('input[type="radio"][value="system"]');
+    const generateBtn = panel.getByRole("button", { name: /generate report/i });
+
+    // Unlike report_type, output_format DOES default - PDF is pre-selected
+    // on first render, matching the backend's own default.
+    await expect(pdfRadio).toBeChecked();
+    await expect(htmlRadio).not.toBeChecked();
+
+    // Output format is never the reason Generate is disabled - with no
+    // analysis selected and no report_type picked yet, it stays disabled
+    // for those reasons alone, not because of the (already-valid) format.
+    await expect(generateBtn).toBeDisabled();
+
+    await hansenRow.locator('input[type="checkbox"]').check();
+    await systemRadio.check();
+    await htmlRadio.check();
+    await expect(generateBtn).toBeEnabled();
+
+    const htmlPost = page.waitForRequest(
+      (req) => req.url().endsWith(`/projects/${projectId}/report`) && req.method() === "POST"
+    );
+    await generateBtn.click();
+    const htmlReq = await htmlPost;
+    expect(htmlReq.postDataJSON()).toEqual({
+      analysis_ids: expect.arrayContaining(["hansen_gfc"]),
+      report_type: "system",
+      output_format: "html",
+    });
+  });
+
+  test("output format radios disable while a report job is in flight, re-enable once the job reaches a terminal status", async ({ page }) => {
+    // The implementer flagged that the output-format radios' disabled-during-
+    // job behaviour (disabled={!!job && !TERMINAL_STATUSES.includes(job.status)},
+    // the same expression report_type's own radios already use) was only
+    // implied by fixtures/snapshots, never asserted directly. This test does
+    // that explicitly, for both the new PDF/HTML radios and, for good
+    // measure, the pre-existing report_type radio + checklist checkbox that
+    // share the identical expression.
+    await login(page, ADMIN);
+    await page.goto("/projects");
+    await page.getByRole("link", { name: QA_PROJECT_NAME }).click();
+    await expect(page).toHaveURL(/\/projects\/[\w-]+/);
+    const projectId = page.url().match(/\/projects\/([\w-]+)/)[1];
+    const token = await page.evaluate(() => sessionStorage.getItem("dmrv.access_token"));
+
+    const refreshRes = await page.request.post(
+      `${API_BASE}/projects/${projectId}/analyses/hansen_gfc/refresh`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    expect(refreshRes.ok()).toBe(true);
+
+    await page.getByRole("button", { name: "Dashboard" }).click();
+    const panel = page.locator("section.panel", { hasText: "Generate report" });
+    const hansenRow = panel.locator("label", { hasText: "Global Forest Change (Hansen)" });
+    await expect(hansenRow).toBeVisible({ timeout: 15_000 });
+
+    const checkbox = hansenRow.locator('input[type="checkbox"]');
+    const systemRadio = panel.locator('input[type="radio"][value="system"]');
+    const pdfRadio = panel.locator('input[type="radio"][name="output_format"][value="pdf"]');
+    const htmlRadio = panel.locator('input[type="radio"][name="output_format"][value="html"]');
+    const generateBtn = panel.getByRole("button", { name: /generate report/i });
+
+    await checkbox.check();
+    await systemRadio.check();
+
+    // Baseline: nothing is disabled before a job exists at all.
+    await expect(checkbox).toBeEnabled();
+    await expect(systemRadio).toBeEnabled();
+    await expect(pdfRadio).toBeEnabled();
+    await expect(htmlRadio).toBeEnabled();
+
+    await generateBtn.click();
+
+    // Don't race real backend timing - key off the panel's OWN visible
+    // status (the queued/running Spinner label), which comes from the exact
+    // same `job` state object, in the exact same render, as every field's
+    // disabled={!!job && !TERMINAL_STATUSES.includes(job.status)} expression
+    // below. By the time this text is on the page, disabled is already true
+    // in that same render pass - no additional wait required.
+    await expect(panel.getByText(/queued for generation|generating report/i)).toBeVisible();
+
+    // The actual assertion this test exists for: both new output-format
+    // radios (and, sharing the identical expression, the report_type radio
+    // and checklist checkbox) are genuinely disabled in the DOM while the
+    // job is non-terminal.
+    await expect(pdfRadio).toBeDisabled();
+    await expect(htmlRadio).toBeDisabled();
+    await expect(systemRadio).toBeDisabled();
+    await expect(checkbox).toBeDisabled();
+
+    // Real GEE-backed generation, same generous budget the other real-job
+    // tests in this file already use.
+    await expect(panel.getByRole("button", { name: /download report|try again/i })).toBeVisible({
+      timeout: 90_000,
+    });
+
+    // Confirmed behaviour (not assumed): on success the checklist and both
+    // radio pickers stay MOUNTED - they render unconditionally whenever
+    // `options` has loaded, regardless of job state, sitting right alongside
+    // the Download/Generate-another buttons - they just go back to enabled,
+    // since disabled={!!job && !TERMINAL_STATUSES.includes(job.status)}
+    // evaluates false once job.status is terminal ("succeeded" here).
+    await expect(pdfRadio).toBeEnabled();
+    await expect(htmlRadio).toBeEnabled();
+    await expect(systemRadio).toBeEnabled();
+    await expect(checkbox).toBeEnabled();
   });
 
   test("a project with no computed analyses shows an honest empty state, never a fake option", async ({ page }) => {
@@ -186,7 +317,7 @@ test.describe("PDF report generation", () => {
 
     await page.goto(`/projects/${projectId}`);
     await page.getByRole("button", { name: "Dashboard" }).click();
-    const panel = page.locator("section.panel", { hasText: "PDF report" });
+    const panel = page.locator("section.panel", { hasText: "Generate report" });
     await expect(panel.getByText("No computed analyses yet")).toBeVisible({ timeout: 15_000 });
     await expect(panel.getByRole("button", { name: /generate report/i })).toHaveCount(0);
   });
