@@ -23,7 +23,7 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
 from app.api.deps import (
@@ -79,7 +79,6 @@ def download_report(
     user: CurrentUserDep,
     jobs: Annotated[JobService, Depends(get_job_service)],
     storage: Annotated[Storage, Depends(get_storage)],
-    response: Response,
 ) -> StreamingResponse:
     job = jobs.get_for_user(job_id, user.user_id)
     if job.kind != "generate_report":
@@ -112,18 +111,31 @@ def download_report(
     # `filename` before persisting it (a legacy job row predating that fix
     # could still hold an unsanitised one).
     default_name = f"report.{'html' if output_format == ReportFormat.HTML else 'pdf'}"
-    response.headers["Content-Disposition"] = content_disposition_attachment(
-        filename, fallback=default_name,
-    )
+    # Wave: headers-dropped fix. FastAPI does NOT merge headers set on an
+    # injected `response: Response` param into an endpoint's own returned
+    # Response subclass (StreamingResponse here) - only `background` tasks
+    # get merged across the two (see fastapi/routing.py's
+    # `isinstance(raw_response, Response)` branch). Mutating `response.headers`
+    # here was therefore a silent no-op in production: Content-Disposition,
+    # X-Content-Type-Options and the CSP header never reached a real client.
+    # Fix: build the headers dict up front and pass it to StreamingResponse's
+    # constructor instead.
+    headers = {
+        "Content-Disposition": content_disposition_attachment(
+            filename, fallback=default_name,
+        ),
+    }
     if output_format == ReportFormat.HTML:
         # HTML is executable in a browser - Content-Disposition: attachment
         # (never inline, unchanged above) is the main mitigation; these two
         # headers are defense-in-depth for a client that renders it anyway.
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["Content-Security-Policy"] = (
+        headers["X-Content-Type-Options"] = "nosniff"
+        headers["Content-Security-Policy"] = (
             "default-src 'none'; style-src 'unsafe-inline'; img-src data:"
         )
         media_type = "text/html; charset=utf-8"
     else:
         media_type = "application/pdf"
-    return StreamingResponse(storage.open_stream(storage_key), media_type=media_type)
+    return StreamingResponse(
+        storage.open_stream(storage_key), media_type=media_type, headers=headers,
+    )
